@@ -13,6 +13,21 @@ work performed from this workspace.
 GitHub authentication uses HTTPS with a personal access token (stored in
 `~/.git-credentials`, helper: `store`). Never print or commit the token.
 
+SSH URLs are rewritten to authenticated HTTPS, so either form works for clones:
+
+```bash
+git clone git@github.com:yasmramos/<repo>.git        # rewritten to HTTPS + token
+git clone https://github.com/yasmramos/<repo>.git
+```
+
+To attach this workspace to a repository:
+
+```bash
+git remote add origin https://github.com/yasmramos/<repo>.git
+git fetch origin && git checkout -b develop --track origin/develop   # if it exists
+git push -u origin develop                                            # if it does not
+```
+
 ## 2. Branching model
 
 * `main` / `master` — production-ready code only, never committed to directly.
