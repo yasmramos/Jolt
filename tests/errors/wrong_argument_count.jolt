@@ -1,0 +1,6 @@
+// expect-exit: 70
+fn sumar(a, b) {
+  return a + b;
+}
+
+sumar(1);

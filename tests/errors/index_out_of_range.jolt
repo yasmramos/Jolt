@@ -1,0 +1,3 @@
+// expect-exit: 70
+let datos = [1, 2];
+print(datos[5]);
