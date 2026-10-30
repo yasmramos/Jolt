@@ -1,0 +1,6 @@
+// El clasico saludo.
+// Ejecuta: build\jolt.exe examples\hello.jolt
+
+let name = "mundo";
+print("Hola, ${name}!");
+print("Jolt esta escrito en C++.");

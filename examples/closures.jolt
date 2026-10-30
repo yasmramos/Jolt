@@ -1,0 +1,26 @@
+// Closures: funciones que recuerdan su entorno.
+
+fn make_counter(start) {
+  let count = start;
+  return {
+    next: fn() {
+      count += 1;
+      return count;
+    },
+    current: fn() => count,
+    reset: fn() {
+      count = start;
+    },
+  };
+}
+
+let a = make_counter(0);
+let b = make_counter(100);
+
+print("a.next() = ${a.next()}");
+print("a.next() = ${a.next()}");
+print("b.next() = ${b.next()}");
+print("a.current() = ${a.current()}");
+
+a.reset();
+print("tras reset, a.current() = ${a.current()}");

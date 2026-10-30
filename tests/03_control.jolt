@@ -1,0 +1,177 @@
+// Control flow: conditionals, loops and branches.
+
+let result = "";
+if (true) {
+  result = "a";
+}
+assert_eq(result, "a");
+
+if (false) {
+  result = "b";
+} else {
+  result = "c";
+}
+assert_eq(result, "c");
+
+let grade = 75;
+let label = "";
+if (grade >= 90) {
+  label = "A";
+} else if (grade >= 70) {
+  label = "B";
+} else {
+  label = "C";
+}
+assert_eq(label, "B");
+
+assert_eq(true ? 1 : 2, 1);
+assert_eq(false ? 1 : 2, 2);
+assert_eq(1 == 1 ? "yes" : "no", "yes");
+
+let n = 7;
+assert_eq(n > 5 ? n > 10 ? "big" : "medium" : "small", "medium");
+
+// Truthiness: only false and nil are falsey.
+let truthy = 0;
+if (0) { truthy += 1; }
+if ("") { truthy += 1; }
+if ([]) { truthy += 1; }
+if (nil) { truthy += 100; }
+if (false) { truthy += 100; }
+assert_eq(truthy, 3);
+
+let sum = 0;
+let i = 1;
+while (i <= 10) {
+  sum += i;
+  i += 1;
+}
+assert_eq(sum, 55);
+
+sum = 0;
+for (let j = 0; j < 10; j += 1) {
+  if (j % 2 == 0) {
+    continue;
+  }
+  if (j > 7) {
+    break;
+  }
+  sum += j;
+}
+assert_eq(sum, 16);
+
+// An empty C-style for-loop needs an explicit break.
+let guard = 0;
+for (;;) {
+  guard += 1;
+  if (guard == 3) {
+    break;
+  }
+}
+assert_eq(guard, 3);
+
+let evens = 0;
+let k = 0;
+while (true) {
+  k += 1;
+  if (k > 10) {
+    break;
+  }
+  if (k % 2 != 0) {
+    continue;
+  }
+  evens += 1;
+}
+assert_eq(evens, 5);
+assert_eq(k, 11);
+
+let items = [];
+for x in [10, 20, 30] {
+  items.push(x);
+}
+assert_eq(items, [10, 20, 30]);
+
+let word = "";
+for ch in "abc" {
+  word += ch.upper();
+}
+assert_eq(word, "ABC");
+
+let keys = [];
+for key in {a: 1, b: 2} {
+  keys.push(key);
+}
+assert_eq(keys, ["a", "b"]);
+
+let total = 0;
+for v in 1..=5 {
+  total += v;
+}
+assert_eq(total, 15);
+
+let down = [];
+for v in 5..0 {
+  down.push(v);
+}
+assert_eq(down, [5, 4, 3, 2, 1]);
+
+// Nested loops and the scope of break/continue.
+let pairs = [];
+for a in 0..2 {
+  for b in 0..2 {
+    if (b == 1) {
+      continue;
+    }
+    pairs.push(str(a) + ":" + str(b));
+  }
+}
+assert_eq(["0:0", "1:0"], pairs);
+
+let count = 0;
+for a in 0..3 {
+  for b in 0..3 {
+    if (b == 1) {
+      break;
+    }
+    count += 1;
+  }
+}
+assert_eq(count, 3);
+
+// Assignment is an expression that yields the assigned value.
+let x = 0;
+let y = (x = 5);
+assert_eq(x, 5);
+assert_eq(y, 5);
+
+let data = [0, 0];
+let old = (data[0] = 9);
+assert_eq(data[0], 9);
+assert_eq(old, 9);
+
+let rec = {value: 1};
+let prev = (rec.value = 7);
+assert_eq(rec.value, 7);
+assert_eq(prev, 7);
+
+// Logical operators short-circuit and return one of their operands.
+let calls = 0;
+fn bump() {
+  calls += 1;
+  return true;
+}
+assert_eq(false && bump(), false);
+assert_eq(calls, 0);
+assert_eq(true || bump(), true);
+assert_eq(calls, 0);
+assert_eq(true && bump(), true);
+assert_eq(calls, 1);
+assert_eq(false || bump(), true);
+assert_eq(calls, 2);
+
+assert_eq(nil || "fallback", "fallback");
+assert_eq("value" || "fallback", "value");
+assert_eq(nil && 1, nil);
+assert_eq(0 || 5, 0);
+
+print("control ok");

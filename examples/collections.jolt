@@ -1,0 +1,36 @@
+// Arrays, mapas y funciones de orden superior.
+
+let people = [
+  {name: "Ada", age: 36},
+  {name: "Grace", age: 45},
+  {name: "Alan", age: 41},
+];
+
+let names = people.map(fn(p) => p.name);
+print("Nombres: " + names.join(", "));
+
+let older = people.filter(fn(p) => p.age >= 40);
+for person in older {
+  print("${person.name} tiene ${person.age} anos");
+}
+
+let total = people.reduce(fn(acc, p) => acc + p.age, 0);
+let average = float(total) / len(people);
+print("Edad media: ${average}");
+
+// Contar palabras con un mapa.
+let text = "uno dos dos tres tres tres";
+let counts = {};
+for word in text.split(" ") {
+  counts[word] = counts.get(word, 0) + 1;
+}
+
+for entry in counts.entries() {
+  print("${entry[0]}: ${entry[1]}");
+}
+
+// Ordenar sin modificar el original.
+let scores = [42, 7, 99, 13];
+print("original: ${scores}");
+print("ordenado: ${scores.sorted()}");
+print("invertido: ${scores.reversed()}");

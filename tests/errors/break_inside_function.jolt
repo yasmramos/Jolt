@@ -1,0 +1,8 @@
+// expect-exit: 70
+fn salir() {
+  break;
+}
+
+for i in 0..3 {
+  salir();
+}
