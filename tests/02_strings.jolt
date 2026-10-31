@@ -1,7 +1,7 @@
 // String literals, interpolation and methods.
 
 let name = "Jolt";
-assert_eq("Hola, ${name}!", "Hola, Jolt!");
+assert_eq("Hello, ${name}!", "Hello, Jolt!");
 assert_eq("1+2=${1 + 2}", "1+2=3");
 assert_eq("len=${"abc".length}", "len=3");
 assert_eq("nested ${"inner ${name}"}", "nested inner Jolt");
@@ -16,8 +16,8 @@ assert_eq(len("áé"), 2);
 assert_eq("áé"[1], "é");
 assert_eq("áé"[-1], "é");
 
-assert_eq("Hola".upper(), "HOLA");
-assert_eq("Hola".lower(), "hola");
+assert_eq("Hello".upper(), "HELLO");
+assert_eq("Hello".lower(), "hello");
 assert_eq("  x  ".trim(), "x");
 assert_eq("  x  ".trim_start(), "x  ");
 assert_eq("  x  ".trim_end(), "  x");
@@ -38,7 +38,7 @@ assert_eq("abc".reversed(), "cba");
 assert_eq("5".pad_start(3, "0"), "005");
 assert_eq("5".pad_end(3, "0"), "500");
 assert_eq("a\nb".lines(), ["a", "b"]);
-assert_eq("hola" + " " + "mundo", "hola mundo");
+assert_eq("hello" + " " + "world", "hello world");
 assert_eq("abc"[1], "b");
 assert_eq("abc"[-1], "c");
 assert_eq("multi

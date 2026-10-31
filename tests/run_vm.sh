@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Compila y ejecuta las pruebas de la maquina virtual.
-# Uso: ./tests/run_vm.sh
+# Builds and runs the virtual machine tests.
+# Usage: ./tests/run_vm.sh
 
 set -eu
 

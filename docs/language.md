@@ -1,193 +1,193 @@
-# Referencia del lenguaje Jolt
+# Jolt Language Reference
 
-Versión del lenguaje: **0.1.0**
+Language version: **0.1.0**
 
-Esta guía describe la sintaxis y la semántica de Jolt tal como las implementa el intérprete incluido en este repositorio.
+This guide describes the syntax and semantics of Jolt as implemented by the interpreter included in this repository.
 
-## Índice
+## Table of contents
 
-1. [Modelo de ejecución](#1-modelo-de-ejecución)
-2. [Estructura léxica](#2-estructura-léxica)
-3. [Tipos de datos](#3-tipos-de-datos)
-4. [Variables y ámbito](#4-variables-y-ámbito)
-5. [Operadores](#5-operadores)
-6. [Sentencias](#6-sentencias)
-7. [Funciones y closures](#7-funciones-y-closures)
+1. [Execution model](#1-execution-model)
+2. [Lexical structure](#2-lexical-structure)
+3. [Data types](#3-data-types)
+4. [Variables and scope](#4-variables-and-scope)
+5. [Operators](#5-operators)
+6. [Statements](#6-statements)
+7. [Functions and closures](#7-functions-and-closures)
 8. [Arrays](#8-arrays)
-9. [Cadenas](#9-cadenas)
-10. [Mapas](#10-mapas)
-11. [Rangos](#11-rangos)
-12. [Biblioteca estándar](#12-biblioteca-estándar)
-13. [Errores y diagnóstico](#13-errores-y-diagnóstico)
+9. [Strings](#9-strings)
+10. [Maps](#10-maps)
+11. [Ranges](#11-ranges)
+12. [Standard library](#12-standard-library)
+13. [Errors and diagnostics](#13-errors-and-diagnostics)
 14. [REPL](#14-repl)
-15. [Línea de comandos](#15-línea-de-comandos)
-16. [Limitaciones conocidas](#16-limitaciones-conocidas)
-17. [Ejemplo completo](#17-ejemplo-completo)
+15. [Command line](#15-command-line)
+16. [Known limitations](#16-known-limitations)
+17. [Complete example](#17-complete-example)
 
 ---
 
-## 1. Modelo de ejecución
+## 1. Execution model
 
-Un programa Jolt es un archivo de texto UTF-8 (extensión `.jolt`). El intérprete lo procesa en tres fases:
+A Jolt program is a UTF-8 text file (extension `.jolt`). The interpreter processes it in three stages:
 
-1. **Lexer**: convierte el texto en tokens.
-2. **Parser**: construye un AST con un parser recursivo y precedencia de operadores.
-3. **Intérprete**: recorre el AST y evalúa las sentencias en un entorno léxico.
+1. **Lexer**: turns the text into tokens.
+2. **Parser**: builds an AST with a recursive-descent parser and operator precedence.
+3. **Interpreter**: walks the AST and evaluates the statements in a lexical environment.
 
-El programa se ejecuta de arriba abajo en el ámbito global. Las sentencias simples terminan en `;`. Las sentencias con bloque (`if`, `while`, `for`, `fn`) cierran con `}` y aceptan opcionalmente un `;` después.
+The program runs from top to bottom in the global scope. Simple statements end with `;`. Statements with a block (`if`, `while`, `for`, `fn`) close with `}` and optionally accept a `;` after it.
 
 ```jolt
 let a = 1;
 if (a == 1) {
-  print("uno");
-}; // el ';' es opcional después del bloque
+  print("one");
+}; // the ';' is optional after the block
 ```
 
-Un archivo puede empezar con una línea `#!...` (shebang); el lexer la ignora.
+A file may start with a `#!...` line (shebang); the lexer ignores it.
 
 ---
 
-## 2. Estructura léxica
+## 2. Lexical structure
 
-### 2.1 Comentarios
+### 2.1 Comments
 
 ```jolt
-// Comentario de línea
+// Line comment
 
-/* Comentario de bloque.
-   /* Los comentarios de bloque se pueden anidar. */
+/* Block comment.
+   /* Block comments can be nested. */
 */
 ```
 
-`//` siempre inicia un comentario; no existe un operador de división entera.
+`//` always starts a comment; there is no integer division operator.
 
-### 2.2 Identificadores y palabras reservadas
+### 2.2 Identifiers and reserved words
 
-Los identificadores empiezan por una letra ASCII o `_`, y continúan con letras ASCII, dígitos o `_`. Distinguen mayúsculas y minúsculas.
+Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, digits or `_`. They are case-sensitive.
 
-Palabras reservadas:
+Reserved words:
 
 ```text
 break  const  continue  else  false  fn  for  if  in  let
 nil    return true      while
 ```
 
-No se pueden usar como nombres de variables, parámetros ni claves de mapa sin comillas.
+They cannot be used as names of variables, parameters or unquoted map keys.
 
-### 2.3 Números
+### 2.3 Numbers
 
-| Forma | Ejemplo | Valor |
+| Form | Example | Value |
 | --- | --- | --- |
 | Decimal | `123` | `123` |
-| Separadores | `1_000_000` | `1000000` |
+| Separators | `1_000_000` | `1000000` |
 | Hexadecimal | `0x2A` | `42` |
-| Binario | `0b101010` | `42` |
+| Binary | `0b101010` | `42` |
 | Octal | `0o52` | `42` |
-| Flotante | `1.5`, `0.25` | `1.5`, `0.25` |
-| Notación científica | `1.5e3`, `2E-2` | `1500.0`, `0.02` |
+| Float | `1.5`, `0.25` | `1.5`, `0.25` |
+| Scientific notation | `1.5e3`, `2E-2` | `1500.0`, `0.02` |
 
-- Los enteros son de 64 bits con signo. Un literal fuera de rango es un error de compilación.
-- El signo `-` es un operador unario, no parte del literal.
-- Un punto solo forma parte de un flotante si va seguido de un dígito: `1.` no es válido como flotante; escribe `1.0`.
-- Los guiones bajos se ignoran dentro de los dígitos: `1_0` equivale a `10`.
+- Integers are 64-bit signed. An out-of-range literal is a compile error.
+- The `-` sign is a unary operator, not part of the literal.
+- A dot is only part of a float when followed by a digit: `1.` is not a valid float; write `1.0`.
+- Underscores are ignored inside digits: `1_0` is equivalent to `10`.
 
-### 2.4 Cadenas
+### 2.4 Strings
 
-Las cadenas se escriben entre comillas dobles. No hay comillas simples ni cadenas crudas. Pueden ocupar varias líneas:
+Strings are written between double quotes. There are no single quotes or raw strings. They may span several lines:
 
 ```jolt
-let saludo = "Hola";
-let texto = "primera línea
-segunda línea";
+let greeting = "Hello";
+let text = "first line
+second line";
 ```
 
-Secuencias de escape:
+Escape sequences:
 
-| Escape | Significado |
+| Escape | Meaning |
 | --- | --- |
-| `\n` | Nueva línea |
-| `\t` | Tabulador |
-| `\r` | Retorno de carro |
-| `\0` | Byte nulo |
-| `\\` | Barra invertida |
-| `\"` | Comilla doble |
-| `\$` | Signo de dólar literal |
-| `\xNN` | Byte hexadecimal (dos dígitos) |
-| `\uXXXX` | Punto de código Unicode (cuatro dígitos) |
+| `\n` | Newline |
+| `\t` | Tab |
+| `\r` | Carriage return |
+| `\0` | Null byte |
+| `\\` | Backslash |
+| `\"` | Double quote |
+| `\$` | Literal dollar sign |
+| `\xNN` | Hexadecimal byte (two digits) |
+| `\uXXXX` | Unicode code point (four digits) |
 
-### 2.5 Interpolación
+### 2.5 Interpolation
 
-Dentro de una cadena, `${expresión}` evalúa una expresión y la convierte a texto:
+Inside a string, `${expression}` evaluates an expression and converts it to text:
 
 ```jolt
-let nombre = "Ada";
-let edad = 36;
-print("${nombre} tiene ${edad} años");
+let name = "Ada";
+let age = 36;
+print("${name} is ${age} years old");
 print("2 + 3 = ${2 + 3}");
-print("resultado: ${ {a: 1}.a }");
+print("result: ${ {a: 1}.a }");
 ```
 
-Las expresiones interpoladas pueden contener cadenas y llaves anidadas:
+Interpolated expressions may contain strings and nested braces:
 
 ```jolt
-print("anidado: ${"interior ${1 + 1}"}");
+print("nested: ${"inner ${1 + 1}"}");
 ```
 
-Para escribir literalmente `${`, escapa el dólar:
+To write a literal `${`, escape the dollar sign:
 
 ```jolt
-print("\${no evaluado}"); // ${no evaluado}
+print("\${not evaluated}"); // ${not evaluated}
 ```
 
-Las cadenas son UTF-8 y **inmutables**. Las operaciones de longitud e índice trabajan con puntos de código, no con bytes.
+Strings are UTF-8 and **immutable**. Length and index operations work on code points, not bytes.
 
 ---
 
-## 3. Tipos de datos
+## 3. Data types
 
-| Tipo | Valores | Notas |
+| Type | Values | Notes |
 | --- | --- | --- |
-| `nil` | `nil` | Ausencia de valor. |
-| `bool` | `true`, `false` | Valores lógicos. |
-| `int` | Enteros de 64 bits con signo. | Aritmética con desbordamiento envolvente. |
-| `float` | Números de coma flotante IEEE 754 de doble precisión. | Puede ser `inf`, `-inf` o `nan` como resultado de operaciones. |
-| `string` | Texto UTF-8. | Inmutable. |
-| `array` | Secuencia ordenada de valores. | Mutable y por referencia. |
-| `map` | Colección de claves de cadena. | Conserva el orden de inserción. Mutable y por referencia. |
-| `function` | Funciones nativas o definidas por el usuario. | Ciudadanas de primera clase. |
-| `range` | Intervalo de enteros. | Inmutable. |
+| `nil` | `nil` | Absence of a value. |
+| `bool` | `true`, `false` | Logical values. |
+| `int` | 64-bit signed integers. | Arithmetic wraps around on overflow. |
+| `float` | IEEE 754 double-precision floating-point numbers. | Can be `inf`, `-inf` or `nan` as the result of operations. |
+| `string` | UTF-8 text. | Immutable. |
+| `array` | Ordered sequence of values. | Mutable and by reference. |
+| `map` | Collection of string keys. | Preserves insertion order. Mutable and by reference. |
+| `function` | Native or user-defined functions. | First-class citizens. |
+| `range` | Interval of integers. | Immutable. |
 
-La función `type(valor)` devuelve el nombre del tipo como cadena.
+The `type(value)` function returns the name of the type as a string.
 
-### 3.1 Verdad
+### 3.1 Truthiness
 
-Solo dos valores son falsos:
+Only two values are falsy:
 
 ```jolt
 false
 nil
 ```
 
-Todo lo demás es verdadero, incluidos `0`, `0.0`, `""`, `[]` y `{}`.
+Everything else is truthy, including `0`, `0.0`, `""`, `[]` and `{}`.
 
 ```jolt
 if (0) {
-  print("0 es verdadero en Jolt");
+  print("0 is truthy in Jolt");
 }
 ```
 
-### 3.2 Igualdad
+### 3.2 Equality
 
-- `int` y `float` se comparan numéricamente: `1 == 1.0` es `true`.
-- Las cadenas se comparan por contenido.
-- Los arrays y mapas se comparan **estructuralmente**, en profundidad.
-- Los rangos comparan inicio, fin e inclusividad.
-- Las funciones se comparan por identidad (la misma función).
-- Valores de tipos distintos (salvo `int`/`float`) no son iguales: `0 == false` es `false`.
+- `int` and `float` are compared numerically: `1 == 1.0` is `true`.
+- Strings are compared by content.
+- Arrays and maps are compared **structurally**, in depth.
+- Ranges compare start, end and inclusiveness.
+- Functions are compared by identity (the very same function).
+- Values of different types (except `int`/`float`) are not equal: `0 == false` is `false`.
 
-### 3.3 Mutabilidad y referencias
+### 3.3 Mutability and references
 
-Asignar un array o un mapa a otra variable **no lo copia**: ambas variables apuntan al mismo valor.
+Assigning an array or a map to another variable **does not copy it**: both variables point to the same value.
 
 ```jolt
 let a = [1];
@@ -196,112 +196,113 @@ b.push(2);
 print(a); // [1, 2]
 ```
 
-Para una copia superficial usa `.clone()`. Las cadenas son inmutables, por lo que se comportan como valores.
+For a shallow copy use `.clone()`. Strings are immutable, so they behave like values.
+
 
 ---
 
-## 4. Variables y ámbito
+## 4. Variables and scope
 
-### 4.1 Declaración
+### 4.1 Declaration
 
 ```jolt
-let contador;          // se inicializa a nil
-let nombre = "Jolt";
-const LIMITE = 10;     // requiere un valor
+let counter;           // initialized to nil
+let name = "Jolt";
+const LIMIT = 10;      // requires a value
 ```
 
-`let` declara una variable reasignable. `const` declara una constante: asignarle otro valor es un error en tiempo de ejecución.
+`let` declares a reassignable variable. `const` declares a constant: assigning another value to it is a runtime error.
 
-### 4.2 Ámbito de bloque
+### 4.2 Block scope
 
-Cada bloque `{ ... }` crea un ámbito nuevo. Las variables se resuelven desde el ámbito actual hacia los padres.
+Every block `{ ... }` creates a new scope. Variables are resolved from the current scope up through the parents.
 
 ```jolt
 let x = 1;
 {
-  let x = 2;   // sombrea la x exterior
+  let x = 2;   // shadows the outer x
   print(x);    // 2
 }
 print(x);      // 1
 ```
 
-La redeclaración de un nombre en el mismo bloque sustituye la definición anterior.
+Redeclaring a name in the same block replaces the previous definition.
 
-### 4.3 Asignación
+### 4.3 Assignment
 
-La asignación busca la variable en el ámbito actual y, si no existe, en los ámbitos padres. No crea variables nuevas:
+Assignment looks the variable up in the current scope and, if it does not exist, in the parent scopes. It does not create new variables:
 
 ```jolt
 let x = 1;
 {
-  x = 2; // modifica la x exterior
+  x = 2; // modifies the outer x
 }
 print(x); // 2
 
 y = 3; // error: undefined variable 'y'
 ```
 
-### 4.4 Declaraciones de función
+### 4.4 Function declarations
 
-Las declaraciones `fn nombre(...) { ... }` se elevan (*hoisting*) dentro de su bloque, de modo que se pueden llamar antes de la línea donde aparecen. Esto permite la recursión y la recursión mutua.
+`fn name(...) { ... }` declarations are hoisted within their block, so they can be called before the line where they appear. This allows recursion and mutual recursion.
 
-Las declaraciones `let` y `const` **no** se elevan: usar una variable antes de su declaración produce un error.
+`let` and `const` declarations are **not** hoisted: using a variable before its declaration produces an error.
 
 ---
 
-## 5. Operadores
+## 5. Operators
 
-### 5.1 Precedencia
+### 5.1 Precedence
 
-De mayor a menor precedencia:
+From highest to lowest precedence:
 
-| Precedencia | Operadores | Asociatividad |
+| Precedence | Operators | Associativity |
 | --- | --- | --- |
-| 1 | `()` `[]` `.` | izquierda |
-| 2 | `**` | derecha |
-| 3 | `!` `-` `+` `~` (unarios) | derecha |
-| 4 | `*` `/` `%` | izquierda |
-| 5 | `+` `-` | izquierda |
-| 6 | `..` `..=` | izquierda |
-| 7 | `<<` `>>` | izquierda |
-| 8 | `<` `<=` `>` `>=` `in` | izquierda |
-| 9 | `==` `!=` | izquierda |
-| 10 | `&` | izquierda |
-| 11 | `^` | izquierda |
-| 12 | `\|` | izquierda |
-| 13 | `&&` | izquierda |
-| 14 | `\|\|` | izquierda |
-| 15 | `?:` | derecha |
-| 16 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | derecha |
+| 1 | `()` `[]` `.` | left |
+| 2 | `**` | right |
+| 3 | `!` `-` `+` `~` (unary) | right |
+| 4 | `*` `/` `%` | left |
+| 5 | `+` `-` | left |
+| 6 | `..` `..=` | left |
+| 7 | `<<` `>>` | left |
+| 8 | `<` `<=` `>` `>=` `in` | left |
+| 9 | `==` `!=` | left |
+| 10 | `&` | left |
+| 11 | `^` | left |
+| 12 | `\|` | left |
+| 13 | `&&` | left |
+| 14 | `\|\|` | left |
+| 15 | `?:` | right |
+| 16 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
 
-Observaciones:
+Notes:
 
-- `**` se asocia a la derecha: `2 ** 3 ** 2` es `2 ** (3 ** 2) = 512`.
-- El menos unario tiene menos precedencia que `**`: `-2 ** 2` es `-(2 ** 2) = -4`.
-- Los rangos tienen más precedencia que los desplazamientos y las comparaciones: `2 in 1..5` equivale a `2 in (1..5)`.
-- Las comparaciones no se encadenan: `1 < 2 < 3` intenta comparar un booleano con un entero y produce un error.
+- `**` is right-associative: `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512`.
+- Unary minus has lower precedence than `**`: `-2 ** 2` is `-(2 ** 2) = -4`.
+- Ranges have higher precedence than shifts and comparisons: `2 in 1..5` is equivalent to `2 in (1..5)`.
+- Comparisons do not chain: `1 < 2 < 3` tries to compare a boolean with an integer and produces an error.
 
-### 5.2 Aritméticos
+### 5.2 Arithmetic
 
-| Operador | Descripción |
+| Operator | Description |
 | --- | --- |
-| `+` | Suma de números, concatenación de cadenas o de arrays. |
-| `-` | Resta. |
-| `*` | Multiplicación. |
-| `/` | División. |
-| `%` | Resto. |
-| `**` | Potencia. |
+| `+` | Addition of numbers, concatenation of strings or arrays. |
+| `-` | Subtraction. |
+| `*` | Multiplication. |
+| `/` | Division. |
+| `%` | Remainder. |
+| `**` | Power. |
 
-Reglas:
+Rules:
 
-- Si ambos operandos son `int`, `+ - * / %` producen `int`.
-- La división entera trunca hacia cero: `7 / 2 == 3`, `-7 / 2 == -3`.
-- El resto entero sigue el signo del dividendo: `-7 % 3 == -1`.
-- Si al menos un operando es `float`, el resultado es `float`.
-- Dividir o calcular el resto con divisor cero es un error en tiempo de ejecución, también para flotantes.
-- `**` devuelve `int` si base y exponente son enteros y el exponente no es negativo; en caso contrario usa `std::pow` y devuelve `float`.
-- El desbordamiento de `int` es envolvente (complemento a dos).
-- `+` concatena dos cadenas y también dos arrays (creando un array nuevo).
+- If both operands are `int`, `+ - * / %` produce `int`.
+- Integer division truncates toward zero: `7 / 2 == 3`, `-7 / 2 == -3`.
+- The integer remainder takes the sign of the dividend: `-7 % 3 == -1`.
+- If at least one operand is `float`, the result is `float`.
+- Dividing or taking the remainder with a zero divisor is a runtime error, for floats too.
+- `**` returns `int` if base and exponent are integers and the exponent is not negative; otherwise it uses `std::pow` and returns `float`.
+- `int` overflow wraps around (two's complement).
+- `+` concatenates two strings and also two arrays (creating a new array).
 
 ```jolt
 assert_eq(7 / 2, 3);
@@ -311,52 +312,52 @@ assert_eq("a" + "b", "ab");
 assert_eq([1] + [2], [1, 2]);
 ```
 
-### 5.3 Comparación
+### 5.3 Comparison
 
-`<`, `<=`, `>`, `>=` funcionan con:
+`<`, `<=`, `>`, `>=` work with:
 
-- dos números (`int` o `float` mezclados);
-- dos cadenas (orden lexicográfico por bytes UTF-8);
-- dos booleanos (`false < true`).
+- two numbers (`int` or `float`, mixed);
+- two strings (lexicographic order by UTF-8 bytes);
+- two booleans (`false < true`).
 
-Comparar tipos incompatibles es un error.
+Comparing incompatible types is an error.
 
-### 5.4 Igualdad
+### 5.4 Equality
 
-`==` y `!=` usan la igualdad estructural descrita en la sección 3.2.
+`==` and `!=` use the structural equality described in section 3.2.
 
-### 5.5 Lógicos
+### 5.5 Logical
 
-| Operador | Descripción |
+| Operator | Description |
 | --- | --- |
-| `!` | Negación lógica; siempre devuelve `bool`. |
-| `&&` | Y lógico con cortocircuito. |
-| `\|\|` | O lógico con cortocircuito. |
+| `!` | Logical negation; always returns `bool`. |
+| `&&` | Logical AND with short-circuiting. |
+| `\|\|` | Logical OR with short-circuiting. |
 
-`&&` y `||` **devuelven uno de sus operandos**, no un booleano:
+`&&` and `||` **return one of their operands**, not a boolean:
 
 ```jolt
-assert_eq(nil || "por defecto", "por defecto");
-assert_eq("valor" || "por defecto", "valor");
+assert_eq(nil || "default", "default");
+assert_eq("value" || "default", "value");
 assert_eq(false && 123, false);
 assert_eq(true && 123, 123);
 assert_eq(nil && 123, nil);
 ```
 
-El operando derecho solo se evalúa si es necesario.
+The right operand is only evaluated if needed.
 
-### 5.6 Bit a bit
+### 5.6 Bitwise
 
-| Operador | Descripción |
+| Operator | Description |
 | --- | --- |
-| `&` | Y bit a bit. |
-| `\|` | O bit a bit. |
-| `^` | O exclusivo bit a bit. |
-| `~` | Complemento a uno (unario). |
-| `<<` | Desplazamiento a la izquierda. |
-| `>>` | Desplazamiento a la derecha con signo. |
+| `&` | Bitwise AND. |
+| `\|` | Bitwise OR. |
+| `^` | Bitwise XOR. |
+| `~` | One's complement (unary). |
+| `<<` | Left shift. |
+| `>>` | Arithmetic (signed) right shift. |
 
-Solo aceptan `int`. El desplazamiento requiere un contador entre 0 y 63.
+They only accept `int`. Shifting requires a count between 0 and 63.
 
 ```jolt
 assert_eq(6 & 3, 2);
@@ -366,16 +367,16 @@ assert_eq(256 >> 3, 32);
 assert_eq(~0, -1);
 ```
 
-### 5.7 Pertenencia
+### 5.7 Membership
 
-El operador `in` comprueba pertenencia:
+The `in` operator tests membership:
 
-| Derecha | Comportamiento |
+| Right side | Behavior |
 | --- | --- |
-| array | Igualdad estructural con algún elemento. |
-| mapa | El izquierdo debe ser cadena; comprueba si existe la clave. |
-| cadena | El izquierdo debe ser cadena; comprueba si es una subcadena. |
-| rango | El izquierdo debe ser entero; comprueba si está dentro del rango. |
+| array | Structural equality with some element. |
+| map | The left side must be a string; checks whether the key exists. |
+| string | The left side must be a string; checks whether it is a substring. |
+| range | The left side must be an integer; checks whether it lies within the range. |
 
 ```jolt
 assert_eq(2 in [1, 2, 3], true);
@@ -384,21 +385,21 @@ assert_eq("ell" in "hello", true);
 assert_eq(5 in 1..10, true);
 ```
 
-### 5.8 Ternario
+### 5.8 Ternary
 
 ```jolt
-let etiqueta = edad >= 18 ? "adulto" : "menor";
+let label = age >= 18 ? "adult" : "minor";
 ```
 
-Solo se evalúa la rama elegida. Se puede anidar:
+Only the chosen branch is evaluated. It can be nested:
 
 ```jolt
-let tamano = n > 100 ? "grande" : n > 10 ? "mediano" : "pequeño";
+let size = n > 100 ? "large" : n > 10 ? "medium" : "small";
 ```
 
-### 5.9 Asignación
+### 5.9 Assignment
 
-La asignación es una expresión y devuelve el valor asignado:
+Assignment is an expression and returns the assigned value:
 
 ```jolt
 let x = 0;
@@ -408,10 +409,10 @@ assert_eq(y, 5);
 
 let a = 0;
 let b = 0;
-let c = (a = b = 3); // asociativa a la derecha
+let c = (a = b = 3); // right-associative
 ```
 
-Operadores compuestos:
+Compound operators:
 
 ```jolt
 x += 1;
@@ -422,59 +423,59 @@ x %= 3;
 x **= 2;
 ```
 
-También funcionan sobre índices y miembros:
+They also work on indexes and members:
 
 ```jolt
-let datos = [1, 2];
-datos[0] += 10;
-datos[0] *= 2;
+let data = [1, 2];
+data[0] += 10;
+data[0] *= 2;
 
-let persona = {edad: 36};
-persona.edad += 1;
-persona["edad"] *= 2;
+let person = {age: 36};
+person.age += 1;
+person["age"] *= 2;
 ```
 
-No existen `++` ni `--`; usa `+= 1` y `-= 1`.
+There are no `++` or `--`; use `+= 1` and `-= 1`.
 
 ---
 
-## 6. Sentencias
+## 6. Statements
 
-### 6.1 Sentencias de expresión
+### 6.1 Expression statements
 
-Una expresión seguida de `;` se evalúa y su resultado se descarta:
+An expression followed by `;` is evaluated and its result is discarded:
 
 ```jolt
 1 + 2;
-print("hola");
+print("hello");
 ```
 
-### 6.2 Bloques
+### 6.2 Blocks
 
 ```jolt
 {
-  let temporal = 1;
-  print(temporal);
+  let temporary = 1;
+  print(temporary);
 }
 ```
 
-Los bloques crean un ámbito nuevo. Una sentencia `;` vacía también es válida.
+Blocks create a new scope. An empty `;` statement is also valid.
 
 ### 6.3 `if` / `else`
 
-La condición va entre paréntesis y el cuerpo **debe** ir entre llaves:
+The condition goes in parentheses and the body **must** be in braces:
 
 ```jolt
-if (edad >= 18) {
-  print("adulto");
-} else if (edad >= 13) {
-  print("adolescente");
+if (age >= 18) {
+  print("adult");
+} else if (age >= 13) {
+  print("teenager");
 } else {
-  print("menor");
+  print("minor");
 }
 ```
 
-No se admite la forma sin llaves (`if (x) print(x);`).
+The brace-less form (`if (x) print(x);`) is not supported.
 
 ### 6.4 `while`
 
@@ -486,7 +487,7 @@ while (i < 5) {
 }
 ```
 
-### 6.5 `for` clásico
+### 6.5 Classic `for`
 
 ```jolt
 for (let i = 0; i < 5; i += 1) {
@@ -494,7 +495,7 @@ for (let i = 0; i < 5; i += 1) {
 }
 ```
 
-Cualquiera de las tres cláusulas puede omitirse:
+Any of the three clauses may be omitted:
 
 ```jolt
 for (;;) {
@@ -502,32 +503,32 @@ for (;;) {
 }
 ```
 
-La variable declarada en el inicializador vive en un ámbito propio del bucle. El cuerpo crea además un ámbito nuevo en cada iteración.
+The variable declared in the initializer lives in a scope of its own for the loop. The body additionally creates a new scope on every iteration.
 
 ### 6.6 `for ... in`
 
-Sintaxis, sin paréntesis:
+Syntax, without parentheses:
 
 ```jolt
-for valor in [10, 20, 30] {
-  print(valor);
+for value in [10, 20, 30] {
+  print(value);
 }
 ```
 
-Se puede iterar sobre:
+You can iterate over:
 
-- **arrays**: en orden, por valor;
-- **cadenas**: por puntos de código, cada uno como cadena de un carácter;
-- **mapas**: por claves, en orden de inserción;
-- **rangos**: ascendente o descendente según los límites.
+- **arrays**: in order, by value;
+- **strings**: by code point, each one as a one-character string;
+- **maps**: by key, in insertion order;
+- **ranges**: ascending or descending depending on the bounds.
 
 ```jolt
 for c in "abc" {
   print(c.upper());
 }
 
-for clave in {a: 1, b: 2} {
-  print(clave);
+for key in {a: 1, b: 2} {
+  print(key);
 }
 
 for n in 1..=3 {
@@ -535,9 +536,9 @@ for n in 1..=3 {
 }
 ```
 
-El iterable se evalúa una sola vez. Para arrays y mapas se toma una instantánea de sus elementos o claves al comenzar el bucle. La variable de iteración tiene un enlace nuevo en cada vuelta, por lo que los closures creados dentro del cuerpo capturan valores distintos.
+The iterable is evaluated only once. For arrays and maps, a snapshot of their elements or keys is taken when the loop starts. The iteration variable gets a fresh binding on every turn, so closures created inside the body capture different values.
 
-### 6.7 `break` y `continue`
+### 6.7 `break` and `continue`
 
 ```jolt
 for n in 0..10 {
@@ -551,12 +552,12 @@ for n in 0..10 {
 }
 ```
 
-Afectan solo al bucle más interno. No pueden cruzar el límite de una función: un `break` dentro de una función que no está en un bucle es un error, aunque la función se llame desde dentro de un bucle.
+They only affect the innermost loop. They cannot cross a function boundary: a `break` inside a function that is not in a loop is an error, even if the function is called from inside a loop.
 
 ### 6.8 `return`
 
 ```jolt
-fn maximo(a, b) {
+fn maximum(a, b) {
   if (a > b) {
     return a;
   }
@@ -564,92 +565,92 @@ fn maximo(a, b) {
 }
 ```
 
-`return;` devuelve `nil`. Usar `return` fuera de una función es un error.
+`return;` returns `nil`. Using `return` outside a function is an error.
 
-### 6.9 Declaraciones de función
+### 6.9 Function declarations
 
 ```jolt
-fn nombre(parametro1, parametro2) {
-  // cuerpo
-  return valor;
+fn name(parameter1, parameter2) {
+  // body
+  return value;
 }
 ```
 
-Se pueden declarar en el ámbito global o dentro de un bloque. Se elevan dentro de su bloque. Consulta la sección 7.
+They can be declared in the global scope or inside a block. They are hoisted within their block. See section 7.
 
 ---
 
-## 7. Funciones y closures
+## 7. Functions and closures
 
-### 7.1 Declaraciones y llamadas
+### 7.1 Declarations and calls
 
 ```jolt
-fn sumar(a, b) {
+fn add(a, b) {
   return a + b;
 }
 
-print(sumar(2, 3)); // 5
+print(add(2, 3)); // 5
 ```
 
-El número de argumentos debe coincidir exactamente con el de parámetros. No hay parámetros por defecto ni argumentos variables en funciones de usuario (las funciones nativas como `print` sí son variádicas).
+The number of arguments must match the number of parameters exactly. There are no default parameters or variadic arguments in user functions (native functions such as `print` are variadic).
 
-Los parámetros son locales. Los arrays y mapas se pasan por referencia; reasignar el parámetro dentro de la función no cambia la variable del llamador.
+Parameters are local. Arrays and maps are passed by reference; reassigning the parameter inside the function does not change the caller's variable.
 
 ```jolt
-fn agregar(arr) {
-  arr.push(1); // visible fuera
+fn append(arr) {
+  arr.push(1); // visible outside
 }
 
-fn reemplazar(arr) {
-  arr = [9];   // solo cambia el parámetro local
+fn replace(arr) {
+  arr = [9];   // only changes the local parameter
 }
 ```
 
-### 7.2 Funciones anónimas y lambdas
+### 7.2 Anonymous functions and lambdas
 
-Una función es un valor:
+A function is a value:
 
 ```jolt
-let doble = fn(x) {
+let double = fn(x) {
   return x * 2;
 };
 
 let triple = fn(x) => x * 3;
 
-let sin_nombre = fn() {
-  print("hola");
+let anonymous = fn() {
+  print("hello");
 };
 ```
 
-La forma `fn(params) => expresión` es azúcar para una función que devuelve esa expresión.
+The `fn(params) => expression` form is sugar for a function that returns that expression.
 
-También se pueden pasar como argumentos:
+They can also be passed as arguments:
 
 ```jolt
-let cuadrados = [1, 2, 3].map(fn(x) => x * x);
+let squares = [1, 2, 3].map(fn(x) => x * x);
 ```
 
-### 7.3 Funciones con nombre propio
+### 7.3 Self-named functions
 
-Una lambda puede tener nombre para llamarse recursivamente:
+A lambda can have a name so that it can call itself recursively:
 
 ```jolt
-let potencia = fn potencia_de(base, exp) {
+let power = fn power_of(base, exp) {
   if (exp == 0) {
     return 1;
   }
-  return base * potencia_de(base, exp - 1);
+  return base * power_of(base, exp - 1);
 };
 ```
 
-El nombre solo existe dentro del cuerpo de la función, no en el ámbito exterior.
+The name only exists inside the function body, not in the outer scope.
 
 ### 7.4 Closures
 
-Las funciones capturan el entorno donde se crean y lo mantienen vivo:
+Functions capture the environment where they are created and keep it alive:
 
 ```jolt
-fn crear_contador() {
+fn make_counter() {
   let n = 0;
   return fn() {
     n += 1;
@@ -657,27 +658,27 @@ fn crear_contador() {
   };
 }
 
-let contador = crear_contador();
-print(contador()); // 1
-print(contador()); // 2
+let counter = make_counter();
+print(counter()); // 1
+print(counter()); // 2
 ```
 
-La captura es por referencia: si la variable capturada cambia después de crear la función, la función ve el valor nuevo.
+Capture is by reference: if the captured variable changes after the function is created, the function sees the new value.
 
 ```jolt
-fn ejemplo() {
-  let estado = 1;
-  let leer = fn() => estado;
-  estado = 2;
-  return leer;
+fn example() {
+  let state = 1;
+  let read = fn() => state;
+  state = 2;
+  return read;
 }
 
-print(ejemplo()()); // 2
+print(example()()); // 2
 ```
 
-### 7.5 Recursión y profundidad
+### 7.5 Recursion and depth
 
-La recursión funciona tanto en funciones declaradas como en lambdas con nombre. El intérprete limita la profundidad de llamadas a **2000**; superarla produce un error de tiempo de ejecución.
+Recursion works both in declared functions and in named lambdas. The interpreter limits the call depth to **2000**; exceeding it produces a runtime error.
 
 ```jolt
 fn factorial(n) {
@@ -692,67 +693,67 @@ fn factorial(n) {
 
 ## 8. Arrays
 
-### 8.1 Literales e índices
+### 8.1 Literals and indexes
 
 ```jolt
-let vacio = [];
-let numeros = [1, 2, 3,];
+let empty = [];
+let numbers = [1, 2, 3,];
 ```
 
-Se permite una coma final. Los índices son enteros; los negativos cuentan desde el final:
+A trailing comma is allowed. Indexes are integers; negative ones count from the end:
 
 ```jolt
-assert_eq(numeros[0], 1);
-assert_eq(numeros[-1], 3);
+assert_eq(numbers[0], 1);
+assert_eq(numbers[-1], 3);
 ```
 
-Un índice fuera de rango es un error de tiempo de ejecución. Los arrays son mutables:
+An out-of-range index is a runtime error. Arrays are mutable:
 
 ```jolt
-numeros[0] = 10;
-numeros.push(4);
+numbers[0] = 10;
+numbers.push(4);
 ```
 
-### 8.2 Miembros
+### 8.2 Members
 
-`array.length` devuelve el número de elementos. `len(array)` hace lo mismo.
+`array.length` returns the number of elements. `len(array)` does the same.
 
-### 8.3 Métodos de array
+### 8.3 Array methods
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `push(valor, ...)` | Añade uno o más valores al final y devuelve el array. |
-| `pop()` | Quita y devuelve el último elemento; `nil` si está vacío. |
-| `shift()` | Quita y devuelve el primer elemento; `nil` si está vacío. |
-| `unshift(valor)` | Inserta un valor al principio y devuelve el array. |
-| `insert(indice, valor)` | Inserta en `indice` (admite negativos) y devuelve el array. |
-| `remove_at(indice)` | Quita y devuelve el elemento en `indice`. |
-| `slice(inicio?, fin?)` | Devuelve un array nuevo con el rango `[inicio, fin)`. |
-| `concat(otro)` | Devuelve un array nuevo con ambos arrays. |
-| `join(separador?)` | Une los elementos en una cadena. |
-| `sort(comparador?)` | Ordena el array en su lugar y lo devuelve. |
-| `sorted(comparador?)` | Devuelve una copia ordenada. |
-| `reversed()` | Devuelve una copia invertida. |
-| `contains(valor)` | Comprueba igualdad estructural. |
-| `index_of(valor)` | Devuelve el primer índice o `-1`. |
-| `map(fn)` | Devuelve un array con los resultados de `fn(elemento)`. |
-| `filter(fn)` | Devuelve los elementos para los que `fn` es verdadero. |
-| `reduce(fn, inicial?)` | Acumula con `fn(acumulador, elemento)`. |
-| `each(fn)` | Llama a `fn(elemento)` por cada elemento y devuelve el array. |
-| `find(fn)` | Devuelve el primer elemento que cumple `fn`, o `nil`. |
-| `any(fn)` | `true` si algún elemento cumple `fn`. |
-| `all(fn)` | `true` si todos los elementos cumplen `fn`. |
-| `sum()` | Suma de un array de números. |
-| `clear()` | Vacía el array y lo devuelve. |
-| `clone()` | Copia superficial. |
+| `push(value, ...)` | Appends one or more values at the end and returns the array. |
+| `pop()` | Removes and returns the last element; `nil` if empty. |
+| `shift()` | Removes and returns the first element; `nil` if empty. |
+| `unshift(value)` | Inserts a value at the start and returns the array. |
+| `insert(index, value)` | Inserts at `index` (negatives allowed) and returns the array. |
+| `remove_at(index)` | Removes and returns the element at `index`. |
+| `slice(start?, end?)` | Returns a new array with the range `[start, end)`. |
+| `concat(other)` | Returns a new array with both arrays. |
+| `join(separator?)` | Joins the elements into a string. |
+| `sort(comparator?)` | Sorts the array in place and returns it. |
+| `sorted(comparator?)` | Returns a sorted copy. |
+| `reversed()` | Returns a reversed copy. |
+| `contains(value)` | Checks structural equality. |
+| `index_of(value)` | Returns the first index or `-1`. |
+| `map(fn)` | Returns an array with the results of `fn(element)`. |
+| `filter(fn)` | Returns the elements for which `fn` is truthy. |
+| `reduce(fn, initial?)` | Accumulates with `fn(accumulator, element)`. |
+| `each(fn)` | Calls `fn(element)` for each element and returns the array. |
+| `find(fn)` | Returns the first element that satisfies `fn`, or `nil`. |
+| `any(fn)` | `true` if any element satisfies `fn`. |
+| `all(fn)` | `true` if all elements satisfy `fn`. |
+| `sum()` | Sum of an array of numbers. |
+| `clear()` | Empties the array and returns it. |
+| `clone()` | Shallow copy. |
 
-Detalles:
+Details:
 
-- `slice` ajusta los índices al tamaño del array y admite negativos. Si `fin < inicio`, devuelve un array vacío.
-- `sort` y `sorted` usan orden ascendente por defecto. El comparador recibe `(a, b)` y debe devolver `true` si `a` debe ir antes que `b`; la ordenación es estable.
-- `reduce` sin valor inicial usa el primer elemento como acumulador y falla si el array está vacío.
-- `sum` exige que todos los elementos sean números; devuelve `int` si todos son enteros y `float` en caso contrario.
-- `clone` es superficial: los arrays y mapas anidados se comparten.
+- `slice` clamps the indexes to the size of the array and accepts negatives. If `end < start`, it returns an empty array.
+- `sort` and `sorted` use ascending order by default. The comparator receives `(a, b)` and must return `true` if `a` should come before `b`; the sort is stable.
+- `reduce` without an initial value uses the first element as the accumulator and fails if the array is empty.
+- `sum` requires all elements to be numbers; it returns `int` if all are integers and `float` otherwise.
+- `clone` is shallow: nested arrays and maps are shared.
 
 ```jolt
 let nums = [3, 1, 2];
@@ -764,9 +765,9 @@ assert_eq(nums.reduce(fn(a, n) => a + n, 0), 6);
 
 ---
 
-## 9. Cadenas
+## 9. Strings
 
-Las cadenas son inmutables y se indexan por puntos de código:
+Strings are immutable and indexed by code point:
 
 ```jolt
 let s = "áé";
@@ -775,46 +776,46 @@ assert_eq(s[0], "á");
 assert_eq(s[-1], "é");
 ```
 
-Un índice fuera de rango es un error. No se puede asignar a un índice de cadena.
+An out-of-range index is an error. You cannot assign to a string index.
 
-No hay sintaxis de rebanado (`s[1:3]`); usa `substr`, `split`, etc.
+There is no slicing syntax (`s[1:3]`); use `substr`, `split`, etc.
 
-### 9.1 Métodos de cadena
+### 9.1 String methods
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `upper()` | Convierte letras ASCII a mayúsculas. |
-| `lower()` | Convierte letras ASCII a minúsculas. |
-| `trim()` | Quita espacios ASCII al inicio y al final. |
-| `trim_start()` | Quita espacios ASCII al inicio. |
-| `trim_end()` | Quita espacios ASCII al final. |
-| `split(separador?)` | Sin argumento divide por espacios; con `""` divide en caracteres. |
-| `lines()` | Divide por saltos de línea `\n`. |
-| `replace(buscar, reemplazo)` | Reemplaza todas las apariciones no solapadas. |
-| `replace_first(buscar, reemplazo)` | Reemplaza la primera aparición. |
-| `starts_with(prefijo)` | Comprueba el prefijo. |
-| `ends_with(sufijo)` | Comprueba el sufijo. |
-| `contains(texto)` | Comprueba si contiene la subcadena. |
-| `index_of(texto)` | Índice en puntos de código de la primera aparición, o `-1`. |
-| `substr(inicio, longitud?)` | Subcadena desde `inicio` (admite negativos). |
-| `chars()` | Array de cadenas de un carácter. |
-| `repeat(n)` | Repite la cadena `n` veces. |
-| `reversed()` | Invierte los puntos de código. |
-| `pad_start(ancho, relleno?)` | Rellena por la izquierda hasta `ancho`. |
-| `pad_end(ancho, relleno?)` | Rellena por la derecha hasta `ancho`. |
+| `upper()` | Converts ASCII letters to uppercase. |
+| `lower()` | Converts ASCII letters to lowercase. |
+| `trim()` | Removes ASCII whitespace at the start and end. |
+| `trim_start()` | Removes ASCII whitespace at the start. |
+| `trim_end()` | Removes ASCII whitespace at the end. |
+| `split(separator?)` | With no argument splits on whitespace; with `""` splits into characters. |
+| `lines()` | Splits on `\n` line breaks. |
+| `replace(search, replacement)` | Replaces all non-overlapping occurrences. |
+| `replace_first(search, replacement)` | Replaces the first occurrence. |
+| `starts_with(prefix)` | Checks the prefix. |
+| `ends_with(suffix)` | Checks the suffix. |
+| `contains(text)` | Checks whether it contains the substring. |
+| `index_of(text)` | Code-point index of the first occurrence, or `-1`. |
+| `substr(start, length?)` | Substring from `start` (negatives allowed). |
+| `chars()` | Array of one-character strings. |
+| `repeat(n)` | Repeats the string `n` times. |
+| `reversed()` | Reverses the code points. |
+| `pad_start(width, fill?)` | Pads on the left up to `width`. |
+| `pad_end(width, fill?)` | Pads on the right up to `width`. |
 
-Detalles:
+Details:
 
-- `upper` y `lower` solo transforman `A-Z` y `a-z`; el resto de Unicode no cambia.
-- `trim*` considera espacios ASCII (`std::isspace`), no todos los espacios Unicode.
-- `lines` no añade una línea vacía al final si la cadena termina en `\n`.
-- `index_of` busca bytes pero devuelve el índice en puntos de código.
-- `substr` cuenta puntos de código; `longitud` negativa produce una cadena vacía.
-- `pad_start` y `pad_end` rellenan por puntos de código y recortan el relleno al ancho exacto.
-- `repeat` tiene un límite de 64 MB de resultado.
+- `upper` and `lower` only transform `A-Z` and `a-z`; the rest of Unicode is unchanged.
+- `trim*` considers ASCII whitespace (`std::isspace`), not every Unicode space.
+- `lines` does not add an empty trailing line if the string ends with `\n`.
+- `index_of` searches bytes but returns the index in code points.
+- `substr` counts code points; a negative `length` produces an empty string.
+- `pad_start` and `pad_end` pad by code points and trim the fill to the exact width.
+- `repeat` has a 64 MB limit on the result.
 
 ```jolt
-assert_eq("  hola  ".trim(), "hola");
+assert_eq("  hello  ".trim(), "hello");
 assert_eq("a,b,c".split(","), ["a", "b", "c"]);
 assert_eq("abc".substr(1, 2), "bc");
 assert_eq("5".pad_start(3, "0"), "005");
@@ -822,54 +823,54 @@ assert_eq("5".pad_start(3, "0"), "005");
 
 ---
 
-## 10. Mapas
+## 10. Maps
 
-### 10.1 Literales
+### 10.1 Literals
 
-Las claves de un literal deben ser cadenas simples o identificadores:
+The keys of a literal must be plain strings or identifiers:
 
 ```jolt
-let persona = {
-  nombre: "Ada",
-  edad: 36,
-  "clave con espacios": true,
+let person = {
+  name: "Ada",
+  age: 36,
+  "key with spaces": true,
 };
 ```
 
-No se admiten claves calculadas ni interpoladas en el literal. Si una clave se repite, prevalece el último valor, pero se conserva la posición de la primera aparición.
+Computed or interpolated keys are not accepted in the literal. If a key is repeated, the last value wins, but the position of its first appearance is kept.
 
-### 10.2 Acceso y asignación
+### 10.2 Access and assignment
 
 ```jolt
-assert_eq(persona.nombre, "Ada");
-assert_eq(persona["edad"], 36);
+assert_eq(person.name, "Ada");
+assert_eq(person["age"], 36);
 
-persona.edad = 37;
-persona["ciudad"] = "Londres";
+person.age = 37;
+person["city"] = "London";
 ```
 
-Acceder a una clave inexistente devuelve `nil` (tanto con `.` como con `[]`). Las claves deben ser cadenas; usar otro tipo como índice es un error.
+Accessing a missing key returns `nil` (both with `.` and with `[]`). Keys must be strings; using another type as an index is an error.
 
-Los mapas conservan el orden de inserción. Volver a asignar una clave existente no la mueve.
+Maps preserve insertion order. Reassigning an existing key does not move it.
 
-### 10.3 Miembros y colisión con métodos
+### 10.3 Members and collisions with methods
 
-`mapa.length` devuelve el número de claves, salvo que exista una clave `"length"`, en cuyo caso se devuelve su valor. Del mismo modo, una clave con el nombre de un método (por ejemplo `"keys"`) tiene prioridad sobre el método.
+`map.length` returns the number of keys, unless a `"length"` key exists, in which case its value is returned. Likewise, a key named like a method (for example `"keys"`) takes priority over the method.
 
-### 10.4 Métodos de mapa
+### 10.4 Map methods
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `keys()` | Array de claves en orden de inserción. |
-| `values()` | Array de valores en orden de inserción. |
-| `entries()` | Array de pares `[clave, valor]`. |
-| `has(clave)` | `true` si existe la clave. |
-| `get(clave, defecto?)` | Valor de la clave o `defecto`/`nil`. |
-| `set(clave, valor)` | Asigna y devuelve el mapa. |
-| `delete(clave)` | Elimina la clave; devuelve `true` si existía. |
-| `clear()` | Vacía el mapa y lo devuelve. |
-| `merge(otro)` | Copia las claves de `otro` en este mapa y lo devuelve. |
-| `clone()` | Copia superficial. |
+| `keys()` | Array of keys in insertion order. |
+| `values()` | Array of values in insertion order. |
+| `entries()` | Array of `[key, value]` pairs. |
+| `has(key)` | `true` if the key exists. |
+| `get(key, default?)` | Value of the key, or `default`/`nil`. |
+| `set(key, value)` | Assigns and returns the map. |
+| `delete(key)` | Removes the key; returns `true` if it existed. |
+| `clear()` | Empties the map and returns it. |
+| `merge(other)` | Copies the keys of `other` into this map and returns it. |
+| `clone()` | Shallow copy. |
 
 ```jolt
 let m = {a: 1};
@@ -881,28 +882,28 @@ assert_eq(m.delete("a"), true);
 assert_eq(m, {b: 2});
 ```
 
-La igualdad de mapas no depende del orden: dos mapas con las mismas claves y valores son iguales.
+Map equality does not depend on order: two maps with the same keys and values are equal.
 
-Iterar un mapa produce sus claves:
+Iterating a map produces its keys:
 
 ```jolt
-for clave in {a: 1, b: 2} {
-  print(clave);
+for key in {a: 1, b: 2} {
+  print(key);
 }
 ```
 
 ---
 
-## 11. Rangos
+## 11. Ranges
 
-### 11.1 Sintaxis
+### 11.1 Syntax
 
-| Expresión | Significado |
+| Expression | Meaning |
 | --- | --- |
-| `a..b` | Desde `a` hasta `b`, sin incluir `b`. |
-| `a..=b` | Desde `a` hasta `b`, incluyendo `b`. |
+| `a..b` | From `a` up to `b`, excluding `b`. |
+| `a..=b` | From `a` up to `b`, including `b`. |
 
-Los límites deben ser enteros. Un rango puede ser ascendente o descendente:
+The bounds must be integers. A range can be ascending or descending:
 
 ```jolt
 assert_eq((1..4).to_array(), [1, 2, 3]);
@@ -911,16 +912,16 @@ assert_eq((3..0).to_array(), [3, 2, 1]);
 assert_eq((3..=0).to_array(), [3, 2, 1, 0]);
 ```
 
-`5..5` está vacío; `5..=5` contiene un elemento.
+`5..5` is empty; `5..=5` contains one element.
 
-### 11.2 Operaciones
+### 11.2 Operations
 
-- `.length` / `len(rango)`: número de elementos.
-- `.to_array()`: convierte a array (límite de 10 000 000 de elementos).
-- `.contains(valor)`: igual que `valor in rango`.
-- La igualdad compara inicio, fin e inclusividad: `1..3 != 1..=3`.
+- `.length` / `len(range)`: number of elements.
+- `.to_array()`: converts to an array (limit of 10,000,000 elements).
+- `.contains(value)`: same as `value in range`.
+- Equality compares start, end and inclusiveness: `1..3 != 1..=3`.
 
-La función `range(fin)` produce `0..fin`, y `range(inicio, fin)` produce `inicio..fin` (siempre exclusivo).
+The `range(end)` function produces `0..end`, and `range(start, end)` produces `start..end` (always exclusive).
 
 ```jolt
 assert_eq(2 in 1..5, true);
@@ -931,31 +932,31 @@ assert_eq(len(5..0), 5);
 
 ---
 
-## 12. Biblioteca estándar
+## 12. Standard library
 
-### 12.1 Consola y entrada
+### 12.1 Console and input
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `print(valor, ...)` | Imprime los valores separados por espacio y añade `\n`. |
-| `write(valor, ...)` | Como `print`, pero sin salto de línea final. |
-| `eprint(valor, ...)` | Como `print`, pero en la salida de error. |
-| `input(prompt?)` | Lee una línea; devuelve `nil` al final de la entrada. |
+| `print(value, ...)` | Prints the values separated by spaces and appends `\n`. |
+| `write(value, ...)` | Like `print`, but without the trailing newline. |
+| `eprint(value, ...)` | Like `print`, but to the error output. |
+| `input(prompt?)` | Reads a line; returns `nil` at the end of the input. |
 
-### 12.2 Tipos y conversión
+### 12.2 Types and conversion
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `type(valor)` | Nombre del tipo como cadena. |
-| `str(valor)` | Representación textual. |
-| `repr(valor)` | Representación con cadenas entre comillas. |
-| `int(valor)` | Convierte a entero (trunca flotantes). |
-| `float(valor)` | Convierte a flotante. |
-| `bool(valor)` | Aplica la verdad de Jolt. |
+| `type(value)` | Name of the type as a string. |
+| `str(value)` | Text representation. |
+| `repr(value)` | Representation with strings in quotes. |
+| `int(value)` | Converts to integer (truncates floats). |
+| `float(value)` | Converts to float. |
+| `bool(value)` | Applies Jolt's truthiness. |
 
-`int(cadena)` acepta el formato de `strtoll` con base 0 (decimal, `0x...`, `0...` octal) y recorta espacios. `float(cadena)` usa `strtod`. Convertir una cadena vacía o con formato inválido es un error.
+`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` uses `strtod`. Converting an empty or badly formatted string is an error.
 
-`str` de un array o mapa usa la representación de sus elementos, con las cadenas internas entre comillas:
+`str` of an array or map uses the representation of its elements, with inner strings in quotes:
 
 ```jolt
 assert_eq(str(42), "42");
@@ -963,72 +964,72 @@ assert_eq(str([1, "a"]), "[1, \"a\"]");
 assert_eq(repr("a"), "\"a\"");
 ```
 
-### 12.3 Matemáticas
+### 12.3 Math
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `abs(n)` | Valor absoluto. |
-| `floor(n)` | Redondeo hacia abajo. |
-| `ceil(n)` | Redondeo hacia arriba. |
-| `round(n)` | Redondeo al entero más cercano (mitades hacia fuera de cero). |
-| `sqrt(n)` | Raíz cuadrada; error si `n < 0`. |
-| `pow(base, exp)` | Potencia como `float`. |
-| `min(a, ...)` | Mínimo de al menos un argumento. |
-| `max(a, ...)` | Máximo de al menos un argumento. |
-| `clamp(n, mínimo, máximo)` | Limita `n` al intervalo. |
+| `abs(n)` | Absolute value. |
+| `floor(n)` | Rounds down. |
+| `ceil(n)` | Rounds up. |
+| `round(n)` | Rounds to the nearest integer (halves away from zero). |
+| `sqrt(n)` | Square root; error if `n < 0`. |
+| `pow(base, exp)` | Power as `float`. |
+| `min(a, ...)` | Minimum of at least one argument. |
+| `max(a, ...)` | Maximum of at least one argument. |
+| `clamp(n, minimum, maximum)` | Limits `n` to the interval. |
 
-`floor`, `ceil` y `round` devuelven el mismo `int` si reciben un `int`, y un `float` si reciben un `float`.
+`floor`, `ceil` and `round` return the same `int` if they receive an `int`, and a `float` if they receive a `float`.
 
-### 12.4 Aleatoriedad y tiempo
+### 12.4 Randomness and time
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `random()` | `float` en `[0, 1)`. |
-| `random(alto)` | `int` en `[0, alto)`. |
-| `random(bajo, alto)` | `int` en `[bajo, alto)`. |
-| `seed(n)` | Reinicia el generador con una semilla. |
-| `clock()` | Segundos transcurridos desde el inicio del proceso. |
+| `random()` | `float` in `[0, 1)`. |
+| `random(high)` | `int` in `[0, high)`. |
+| `random(low, high)` | `int` in `[low, high)`. |
+| `seed(n)` | Reseeds the generator. |
+| `clock()` | Seconds elapsed since the process started. |
 
-### 12.5 Utilidades
+### 12.5 Utilities
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `len(valor)` | Longitud de cadena, array, mapa o rango. |
-| `chr(código)` | Carácter Unicode a partir de un punto de código. |
-| `ord(carácter)` | Punto de código de una cadena de un carácter. |
-| `range(fin)` | Rango `0..fin`. |
-| `range(inicio, fin)` | Rango `inicio..fin`. |
-| `args()` | Argumentos del script como array de cadenas. |
+| `len(value)` | Length of a string, array, map or range. |
+| `chr(code)` | Unicode character from a code point. |
+| `ord(character)` | Code point of a one-character string. |
+| `range(end)` | Range `0..end`. |
+| `range(start, end)` | Range `start..end`. |
+| `args()` | Script arguments as an array of strings. |
 
-### 12.6 Archivos
+### 12.6 Files
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `read_file(ruta)` | Devuelve el contenido de un archivo como cadena. |
-| `write_file(ruta, contenido)` | Escribe el contenido (binario exacto). |
-| `file_exists(ruta)` | Comprueba si el archivo se puede abrir. |
+| `read_file(path)` | Returns the contents of a file as a string. |
+| `write_file(path, contents)` | Writes the contents (exact binary). |
+| `file_exists(path)` | Checks whether the file can be opened. |
 
-### 12.7 Aserciones y control
+### 12.7 Assertions and control
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `assert(condición, mensaje?)` | Falla si la condición es falsa. |
-| `assert_eq(esperado, real, mensaje?)` | Falla si no son iguales. |
-| `panic(mensaje?)` | Provoca un error de tiempo de ejecución. |
-| `exit(código?)` | Termina el proceso con el código indicado (0 por defecto). |
+| `assert(condition, message?)` | Fails if the condition is falsy. |
+| `assert_eq(expected, actual, message?)` | Fails if they are not equal. |
+| `panic(message?)` | Raises a runtime error. |
+| `exit(code?)` | Ends the process with the given code (0 by default). |
 
-`assert_eq` sigue el orden `esperado, real` y añade ambos valores al mensaje de error.
+`assert_eq` follows the order `expected, actual` and adds both values to the error message.
 
 ---
 
-## 13. Errores y diagnóstico
+## 13. Errors and diagnostics
 
-Jolt distingue dos clases de errores:
+Jolt distinguishes two kinds of errors:
 
-- **Error de compilación**: lo detectan el lexer o el parser (por ejemplo, un `;` ausente o un literal mal formado).
-- **Error de tiempo de ejecución**: lo detecta el intérprete (por ejemplo, una variable indefinida, una división por cero o un índice fuera de rango).
+- **Compile error**: detected by the lexer or the parser (for example, a missing `;` or a malformed literal).
+- **Runtime error**: detected by the interpreter (for example, an undefined variable, a division by zero or an out-of-range index).
 
-Ambos se muestran con la ubicación y un fragmento de código:
+Both are shown with the location and a code snippet:
 
 ```text
 script.jolt:3:9: runtime error: division by zero
@@ -1037,137 +1038,138 @@ script.jolt:3:9: runtime error: division by zero
     |         ^
 ```
 
-Los errores de tiempo de ejecución incluyen además una traza de pila con las funciones activas.
+Runtime errors also include a stack trace with the active functions.
 
-Códigos de salida del proceso:
+Process exit codes:
 
-| Código | Significado |
+| Code | Meaning |
 | --- | --- |
-| `0` | Correcto. |
-| `64` | Uso incorrecto de la línea de comandos. |
-| `65` | Error de compilación. |
-| `66` | No se pudo leer el archivo. |
-| `70` | Error de tiempo de ejecución. |
-| otro | Código indicado por `exit(n)`. |
+| `0` | Success. |
+| `64` | Incorrect command-line usage. |
+| `65` | Compile error. |
+| `66` | The file could not be read. |
+| `70` | Runtime error. |
+| other | Code given to `exit(n)`. |
 
-`jolt -c archivo.jolt` comprueba solo el lexer y el parser; no ejecuta el programa.
+`jolt -c file.jolt` only checks the lexer and the parser; it does not run the program.
 
 ---
 
 ## 14. REPL
 
-Ejecutar `jolt` sin argumentos inicia el REPL. Características:
+Running `jolt` with no arguments starts the REPL. Features:
 
-- Las expresiones se evalúan y se muestran con `repr`; `nil` no se imprime.
-- `_` guarda el último valor evaluado.
-- El prompt `...>` indica continuación; una línea en blanco cancela la entrada incompleta.
-- Se puede omitir el `;` final de cada entrada.
-- Las definiciones persisten hasta `:clear`.
+- Expressions are evaluated and shown with `repr`; `nil` is not printed.
+- `_` holds the last evaluated value.
+- The `...>` prompt means continuation; a blank line cancels the incomplete input.
+- The trailing `;` of each entry may be omitted.
+- Definitions persist until `:clear`.
 
-Comandos:
+Commands:
 
-| Comando | Descripción |
+| Command | Description |
 | --- | --- |
-| `:help`, `:?` | Ayuda. |
-| `:quit`, `:q`, `:exit` | Salir. |
-| `:clear` | Borrar las definiciones del usuario. |
-| `:load <archivo>` | Ejecutar un script en la sesión actual. |
-| `:vars` | Listar variables globales del usuario. |
+| `:help`, `:?` | Help. |
+| `:quit`, `:q`, `:exit` | Quit. |
+| `:clear` | Delete the user definitions. |
+| `:load <file>` | Run a script in the current session. |
+| `:vars` | List the user's global variables. |
 
-Ejemplo:
+Example:
 
 ```text
 jolt> let x = 10
-jolt> fn doble(n) => n * 2
-jolt> doble(x)
+jolt> let double = fn(n) => n * 2
+jolt> double(x)
 20
 jolt> _
 20
 jolt> :vars
-  doble: function
+  _: int
+  double: function
   x: int
 ```
 
 ---
 
-## 15. Línea de comandos
+## 15. Command line
 
 ```text
-jolt                      inicia el REPL
-jolt <archivo.jolt>       ejecuta un script
-jolt -e "<código>"        ejecuta código desde la línea de comandos
-jolt -c <archivo.jolt>    comprueba la sintaxis sin ejecutar
+jolt                      starts the REPL
+jolt <file.jolt>          runs a script
+jolt -e "<code>"          runs code from the command line
+jolt -c <file.jolt>       checks the syntax without running
 ```
 
-| Opción | Descripción |
+| Option | Description |
 | --- | --- |
-| `-h`, `--help` | Ayuda. |
-| `-v`, `--version` | Versión. |
-| `-e`, `--eval <código>` | Código a ejecutar. El resto de argumentos pasa al script. |
-| `-c`, `--check` | Solo comprobación sintáctica. |
-| `--` | Fin de opciones; el siguiente argumento es el archivo. |
+| `-h`, `--help` | Help. |
+| `-v`, `--version` | Version. |
+| `-e`, `--eval <code>` | Code to run. The remaining arguments go to the script. |
+| `-c`, `--check` | Syntax check only. |
+| `--` | End of options; the next argument is the file. |
 
-Las opciones deben ir antes del archivo. Todo lo que sigue al archivo se considera argumento del script y se obtiene con `args()`.
+Options must come before the file. Everything after the file is considered an argument of the script and is obtained with `args()`.
 
 ```sh
-jolt programa.jolt uno dos
+jolt program.jolt one two
 ```
 
 ```jolt
-for argumento in args() {
-  print(argumento);
+for argument in args() {
+  print(argument);
 }
 ```
 
 ---
 
-## 16. Limitaciones conocidas
+## 16. Known limitations
 
-- Tipado dinámico y ejecución por recorrido del AST; no hay bytecode ni compilación JIT.
-- Sin clases, structs, interfaces ni herencia.
-- Sin `try`/`catch` ni excepciones capturables desde el lenguaje.
-- Sin módulos ni `import`. En el REPL se puede usar `:load`.
-- Sin `switch`, `do`/`while`, `++`, `--`, parámetros por defecto ni argumentos variables en funciones de usuario.
-- Las claves de mapa son siempre cadenas y los literales solo admiten claves simples.
-- Los cuerpos de `if`, `while` y `for` requieren llaves.
-- El `for ... in` no admite paréntesis alrededor de la variable y el iterable.
-- Sin sintaxis de rebanado para cadenas o arrays; se usan métodos como `substr` y `slice`.
-- `upper` y `lower` solo funcionan con ASCII.
-- Profundidad máxima de llamadas: 2000.
-- Memoria gestionada con recuento de referencias; las referencias cíclicas no se liberan.
-- La ordenación con comparadores personalizados confía en que el comparador defina un orden estricto.
+- Dynamic typing. The `jolt` executable currently runs programs by walking the AST; the bytecode compiler and the VM do not cover the whole language yet (PHASE 6). There is no JIT.
+- No classes, structs, interfaces or inheritance.
+- No `try`/`catch` or exceptions that can be caught from the language.
+- No modules or `import`. In the REPL you can use `:load`.
+- No `switch`, `do`/`while`, `++`, `--`, default parameters or variadic arguments in user functions.
+- Map keys are always strings and literals only accept simple keys.
+- The bodies of `if`, `while` and `for` require braces.
+- `for ... in` does not accept parentheses around the variable and the iterable.
+- No slicing syntax for strings or arrays; methods such as `substr` and `slice` are used.
+- `upper` and `lower` only work with ASCII.
+- Maximum call depth: 2000.
+- Memory is managed with reference counting; cyclic references are not freed.
+- Sorting with custom comparators relies on the comparator defining a strict order.
 
 ---
 
-## 17. Ejemplo completo
+## 17. Complete example
 
 ```jolt
-// Cuenta palabras y muestra las más frecuentes.
+// Counts words and shows the most frequent ones.
 
-fn contar_palabras(texto) {
-  let conteo = {};
-  for palabra in texto.lower().split() {
-    conteo[palabra] = conteo.get(palabra, 0) + 1;
+fn count_words(text) {
+  let counts = {};
+  for word in text.lower().split() {
+    counts[word] = counts.get(word, 0) + 1;
   }
-  return conteo;
+  return counts;
 }
 
-let texto = "uno dos dos tres tres tres cuatro cuatro cuatro cuatro";
-let conteo = contar_palabras(texto);
+let text = "one two two three three three four four four four";
+let counts = count_words(text);
 
-let pares = conteo.entries();
-pares.sort(fn(a, b) => a[1] > b[1]);
+let pairs = counts.entries();
+pairs.sort(fn(a, b) => a[1] > b[1]);
 
-for par in pares {
-  print("${par[0]}: ${par[1]}");
+for pair in pairs {
+  print("${pair[0]}: ${pair[1]}");
 }
 ```
 
-Salida:
+Output:
 
 ```text
-cuatro: 4
-tres: 3
-dos: 2
-uno: 1
+four: 4
+three: 3
+two: 2
+one: 1
 ```

@@ -1,5 +1,5 @@
-# Compila y ejecuta las pruebas de la maquina virtual.
-# Uso: powershell -ExecutionPolicy Bypass -File tests\run_vm.ps1
+# Builds and runs the virtual machine tests.
+# Usage: powershell -ExecutionPolicy Bypass -File tests\run_vm.ps1
 
 $ErrorActionPreference = "Stop"
 

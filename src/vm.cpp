@@ -35,7 +35,7 @@ const std::string& stringAt(const Bytecode& bytecode, int index) {
   return bytecode.strings[static_cast<size_t>(index)];
 }
 
-// Potencia entera con desbordamiento modular, igual que `intPow` del interprete.
+// Integer power with modular overflow, same as the interpreter's `intPow`.
 int64_t intPow(int64_t base, int64_t exponent) {
   uint64_t result = 1;
   uint64_t factor = static_cast<uint64_t>(base);
@@ -48,9 +48,9 @@ int64_t intPow(int64_t base, int64_t exponent) {
   return static_cast<int64_t>(result);
 }
 
-// Las siguientes funciones replican la semantica aritmetica del interprete.
-// La ruta de enteros evita convertir a double y conserva el desbordamiento
-// definido de 64 bits; la ruta de flotantes solo se usa si hay un float.
+// The following functions replicate the interpreter's arithmetic semantics.
+// The integer path avoids converting to double and keeps the defined 64-bit
+// overflow behavior; the float path is only used when a float is involved.
 
 Value addValues(const Value& left, const Value& right) {
   if (left.isInt() && right.isInt()) {
@@ -173,7 +173,7 @@ Value shrValues(const Value& left, const Value& right) {
   failRuntime("unsupported operand types for '>>': " + typePair(left, right));
 }
 
-// Misma relacion de orden que `Interpreter::lessThan`.
+// Same ordering relation as `Interpreter::lessThan`.
 bool lessThan(const Value& left, const Value& right) {
   if (left.isNumber() && right.isNumber()) {
     if (left.isInt() && right.isInt()) return left.asInt() < right.asInt();
@@ -192,7 +192,7 @@ Value gteValues(const Value& left, const Value& right) { return Value(!lessThan(
 
 }  // namespace
 
-// ------------------------------------------------------------------ registros
+// ------------------------------------------------------------------ registers
 
 Value& VM::getReg(int index) {
   if (index < 0 || static_cast<size_t>(index) >= registers_.size()) {
@@ -210,7 +210,7 @@ CellPtr& VM::localAt(int index) {
   return locals_[static_cast<size_t>(index)];
 }
 
-// ------------------------------------------------------------------ ejecucion
+// ------------------------------------------------------------------ execution
 
 void VM::run(const Bytecode& bytecode) {
   const int registerCount = bytecode.num_registers > 0 ? bytecode.num_registers : 0;

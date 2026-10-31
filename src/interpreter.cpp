@@ -791,14 +791,6 @@ Value Interpreter::call(const Value& callee, std::vector<Value> args, int line, 
     currentLine = line;
     currentCol = col;
     try {
-      // Pin the receiver for the duration of the native call. The guard saves
-      // and restores `activeReceiver_` around the native, so nested calls
-      // inside a native keep their own receiver. Bound methods capture their
-      // container weakly (see Interpreter::receiverOf), and locking the
-      // handle here keeps the container strongly alive even when the last
-      // external owner dies mid-call (e.g. the temporary bound method of
-      // `items.push(1)` releasing its receiver before the native finishes).
-      ActiveReceiverGuard receiverGuard(*this, fn.boundReceiver.lock());
       Value result = fn.native(*this, args);
       currentLine = savedLine;
       currentCol = savedCol;

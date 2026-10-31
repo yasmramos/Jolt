@@ -1,5 +1,5 @@
-# Compila y ejecuta las pruebas del compilador AST -> bytecode.
-# Uso: powershell -ExecutionPolicy Bypass -File tests\run_compiler.ps1
+# Builds and runs the AST -> bytecode compiler tests.
+# Usage: powershell -ExecutionPolicy Bypass -File tests\run_compiler.ps1
 
 $ErrorActionPreference = "Stop"
 

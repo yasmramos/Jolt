@@ -9,28 +9,28 @@
 #include "bytecode.h"
 #include "errors.h"
 
-// Compilador de AST a bytecode (FASE 2-5).
+// AST to bytecode compiler (PHASE 2-5).
 //
-// Traduce el lenguaje a las instrucciones register-based de
-// `include/bytecode.h`. Cuando encuentra un nodo que todavia no pertenece a
-// esta fase lanza `CompileError` con linea/columna, de modo que el pipeline
-// pueda reportarlo con el mismo formato que el parser.
+// Translates the language into the register-based instructions of
+// `include/bytecode.h`. When it meets a node that does not belong to the
+// current phase yet, it throws `CompileError` with line/column, so the
+// pipeline can report it in the same format as the parser.
 //
-// Alcance actual:
-//   - literales nil, booleanos, numericos y de cadena
-//   - variables globales y locales de bloque
-//   - asignacion simple y compuesta
-//   - aritmetica (+ - * / % **), comparaciones, unarios y bits
-//   - if/else, while, for clasico, break y continue
-//   - operadores cortocircuitados && y ||, y ternario
-//   - print(expr) con un argumento
+// Current scope:
+//   - nil, boolean, numeric and string literals
+//   - global variables and block-local variables
+//   - simple and compound assignment
+//   - arithmetic (+ - * / % **), comparisons, unary operators and bitwise ops
+//   - if/else, while, classic for, break and continue
+//   - short-circuit operators && and ||, and the ternary operator
+//   - print(expr) with a single argument
 //
-// FASE 6: funciones, closures, llamadas, colecciones y for-in.
+// PHASE 6: functions, closures, calls, collections and for-in.
 class Compiler {
  public:
   Compiler() = default;
 
-  // Compila un programa completo. El bytecode resultante termina en HALT.
+  // Compiles a whole program. The resulting bytecode ends with HALT.
   Bytecode compile(const StmtPtr& program);
 
  private:
@@ -50,8 +50,8 @@ class Compiler {
   };
 
   Bytecode bc_;
-  int next_reg_ = 0;  // siguiente registro temporal libre
-  int max_reg_ = 0;   // maximo numero de registros usados a la vez
+  int next_reg_ = 0;  // next free temporary register
+  int max_reg_ = 0;   // maximum number of registers in use at once
   int next_local_ = 0;
   int max_local_ = 0;
 
@@ -70,7 +70,7 @@ class Compiler {
   void patchJump(int index, int target);
   int currentOffset() const;
 
-  // Scopes y variables.
+  // Scopes and variables.
   bool inGlobalScope() const { return scopes_.size() <= 1; }
   void pushScope();
   void popScope();
@@ -96,5 +96,5 @@ class Compiler {
   bool isPrintCall(const Expr& expr) const;
 };
 
-// Atajo equivalente a `Compiler{}.compile(program)`.
+// Shortcut equivalent to `Compiler{}.compile(program)`.
 Bytecode compileProgram(const StmtPtr& program);

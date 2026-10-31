@@ -17,9 +17,6 @@ struct Stmt;
 template <typename T>
 class Ref;
 
-template <typename T>
-class WeakRef;
-
 struct Value;
 struct Array;
 struct Map;
@@ -37,47 +34,10 @@ struct Range;
 struct RefCounted {
   using DestroyFn = void (*)(void*);
 
+  // Strong reference count. `makeRef` seeds it with the single reference
+  // owned by the handle it returns. Objects are not polymorphic: cleanup
+  // runs through `destroy` below, so there is no virtual destructor.
   mutable std::uint32_t refs = 0;
-
-  // Control block for weak handles. `alive` flips to false exactly when the
-  // last strong reference drops, before the object memory is released, so a
-  // handle can detect expiration without dereferencing freed memory. The
-  // block outlives the object whenever handles remain and is deleted by
-  // whoever drops the final one. (The previous "weak pin" scheme deferred
-  // destruction until the last handle died and double-freed whenever two or
-  // more bound methods shared the same receiver.)
-  struct WeakBlock {
-    std::uint32_t weakCount = 0;
-    bool alive = true;
-  };
-
-  mutable WeakBlock* weak = nullptr;
-
-  // Detaches every weak handle from the control block right before this
-  // object's storage is recycled. A handle may legitimately outlive its object
-  // (e.g. the temporary bound method in `items.push(1)` releasing after the
-  // container dies), so leaving a dangling `object->weak` pointer behind would
-  // let a later allocation reuse the block and resurrect a dead handle as
-  // "alive". Marking the block dead and clearing the back-pointer makes such
-  // handles observe expiration permanently, matching `std::weak_ptr`
-  // semantics. The block itself is deleted by whoever drops the last weak
-  // count. Idempotent: safe to call again from the destructor.
-  void detachWeakHandles() const noexcept {
-    if (weak) {
-      weak->alive = false;
-      weak = nullptr;
-    }
-  }
-
-  // Not virtual on purpose: cleanup runs through `destroy` below. Adding a
-  // virtual destructor here would silently break cycle-safe deletion because
-  // `delete` on a `RefCounted*` without a vtable is undefined behavior.
-  ~RefCounted() {
-    // Safety net for destruction paths that bypass `Ref::release()` (which
-    // already detaches handles): never leave a live-looking block pointing at
-    // memory about to be recycled.
-    detachWeakHandles();
-  }
 
  private:
   template <typename>
@@ -88,131 +48,6 @@ struct RefCounted {
   DestroyFn destroy = nullptr;
 };
 
-// A non-owning handle to a reference-counted object. Used to break ownership
-// cycles (e.g. a container whose bound methods would otherwise retain the
-// container itself). `lock()` returns an owning Ref while the object is still
-// reachable through at least one strong reference; it returns an empty Ref
-// once every strong reference has been dropped.
-//
-// The handle stores the raw object pointer plus a pointer to the shared weak
-// control block. It never dereferences the object itself: expiration is
-// detected through the block, which outlives the object whenever handles
-// remain and is deleted by whoever drops the final one.
-template <typename T>
-class WeakRef {
- public:
-  WeakRef() noexcept = default;
-
-  WeakRef(const Ref<T>& ref) noexcept : ptr_(ref.get()) { bind(); }
-
-  // Converting constructor from a weak handle to any derived (or related)
-  // pointee. `RefCounted` is the common base for every VM object, so bound
-  // methods can store a single `WeakRef<RefCounted>` regardless of whether
-  // their receiver is an array or a map. The conversion shares the control
-  // block, keeping expiration observation intact.
-  //
-  // A sibling overload accepts a strong `Ref<U>` where `U*` converts to `T*`:
-  // containers bind their methods through `WeakRef<RefCounted>` while call
-  // sites hold `Ref<Array>`/`Ref<Map>` handles, and that conversion is what
-  // lets those typed refs seed the common weak handle.
-  template <typename U, typename = typename std::enable_if<std::is_convertible<
-                            U*, T*>::value>::type>
-  WeakRef(const Ref<U>& ref) noexcept : ptr_(ref.get()) { bind(); }
-
-  template <typename U>
-  WeakRef(const WeakRef<U>& other) noexcept : ptr_(other.raw()), block_(other.block()) {
-    if (block_) ++block_->weakCount;
-  }
-
-  ~WeakRef() { reset(); }
-
-  // Explicit copy constructor: declaring the move operations above would
-  // otherwise delete the copy implicitly, and `Function` (which stores a
-  // `WeakRef`) must remain copy-constructible so `bindMethod` can stamp a
-  // private copy of a shared native closure per binding.
-  WeakRef(const WeakRef& other) noexcept : ptr_(other.ptr_), block_(other.block_) {
-    if (block_) ++block_->weakCount;
-  }
-
-  WeakRef(WeakRef&& other) noexcept : ptr_(other.ptr_), block_(other.block_) {
-    other.ptr_ = nullptr;
-    other.block_ = nullptr;
-  }
-
-  WeakRef& operator=(const WeakRef& other) noexcept {
-    if (this != &other) {
-      reset();
-      ptr_ = other.ptr_;
-      block_ = other.block_;
-      if (block_) ++block_->weakCount;
-    }
-    return *this;
-  }
-
-  WeakRef& operator=(WeakRef&& other) noexcept {
-    if (this != &other) {
-      reset();
-      ptr_ = other.ptr_;
-      block_ = other.block_;
-      other.ptr_ = nullptr;
-      other.block_ = nullptr;
-    }
-    return *this;
-  }
-
-  bool expired() const noexcept { return !isLive(); }
-
-  // True when this handle observes exactly the given live object. Used by
-  // `Interpreter::receiverOf` to check that the transient active receiver is
-  // the one this method was bound to before adopting it.
-  bool matches(const void* candidate) const noexcept {
-    return isLive() && ptr_ == candidate;
-  }
-
-  // Returns an owning reference, or an empty Ref when the object is no longer
-  // strongly reachable. Expiration is observed strictly through the control
-  // block: a dead object's memory is never dereferenced here, and the strong
-  // count can only be incremented while `alive` holds, so a handle can never
-  // resurrect an object whose last owner already released it.
-  Ref<T> lock() const noexcept;
-
- private:
-  template <typename>
-  friend class WeakRef;
-  template <typename>
-  friend class Ref;
-
-  // Accessors used by the converting constructor above.
-  const void* raw() const noexcept { return ptr_; }
-  const RefCounted::WeakBlock* block() const noexcept { return block_; }
-
-  // Attaches this handle to the object's weak control block, creating the
-  // block lazily. Only called while the object is strongly alive (a `Ref`
-  // exists), so dereferencing `ptr_` here is safe.
-  void bind() noexcept {
-    if (!ptr_) return;
-    auto* object = static_cast<RefCounted*>(ptr_);
-    if (!object->weak) object->weak = new RefCounted::WeakBlock();
-    block_ = object->weak;
-    ++block_->weakCount;
-  }
-
-  bool isLive() const noexcept {
-    return ptr_ != nullptr && block_ != nullptr && block_->alive;
-  }
-
-  void reset() noexcept {
-    if (block_) {
-      if (--block_->weakCount == 0) delete block_;
-    }
-    ptr_ = nullptr;
-    block_ = nullptr;
-  }
-
-  T* ptr_ = nullptr;
-  mutable RefCounted::WeakBlock* block_ = nullptr;
-};
-
 template <typename T>
 class Ref {
  public:
@@ -220,16 +55,11 @@ class Ref {
 
  private:
   // Adopts `ptr` *without* incrementing its count (used by `makeRef`, which
-  // creates an object with refs == 0, and by `WeakRef::lock()`, which reserves
-  // the final strong slot before constructing the handle). Callers must have
-  // established the count themselves. The tag type is private on purpose: a
-  // public tag would let any caller reach the adopting constructor through
-  // implicit pointer-to-member conversions, silently skipping the retain.
+  // seeds the count itself). The tag type is private on purpose: a public tag
+  // would let any caller reach the adopting constructor through implicit
+  // pointer-to-member conversions, silently skipping the retain.
   struct Adopt {};
   explicit Ref(Adopt, T* ptr) noexcept : ptr_(ptr) {}
-
-  template <typename>
-  friend class WeakRef;  // needs `Adopt` for `lock()`
 
   // Grants `makeRef` access to the adopting constructor without relying on
   // template-argument deduction in the friend declaration.
@@ -237,27 +67,8 @@ class Ref {
   friend Ref<U> makeRef(Args&&... args);
 
  public:
-  // Retaining constructor from a raw pointer: increments the object's strong
-  // count. Used to derive typed owning references from an already-owned base
-  // handle (see `Interpreter::receiverOf`).
-  static Ref retaining(T* ptr) noexcept {
-    Ref ref;
-    ref.ptr_ = ptr;
-    ref.retain();
-    return ref;
-  }
-
   Ref(const Ref& other) noexcept : ptr_(other.ptr_) { retain(); }
   Ref(Ref&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
-
-  // Only declared (not defined): a copy constructor from WeakRef would bypass
-  // the reachability check. Use `WeakRef::lock()` instead.
-  Ref(const WeakRef<T>&);
-
-  // Accessors used by `WeakRef::lock()`, which must bump the strong count and
-  // adopt the raw pointer atomically through the private `Adopt` constructor.
-  RefCounted* object() const noexcept { return ptr_; }
-  void retainObject() noexcept { retain(); }
 
   ~Ref() { release(); }
 
@@ -294,15 +105,11 @@ class Ref {
 
   void release() noexcept {
     if (ptr_ && --ptr_->refs == 0) {
-      // Last strong reference: detach every weak handle from the control
-      // block *before* releasing memory, so outstanding handles observe
-      // expiration instead of dereferencing freed memory. The block itself
-      // survives until its own weak count reaches zero. Destruction goes
-      // through the per-type hook installed by `makeRef`: `delete` through a
-      // base (`RefCounted*`) pointer would be undefined behavior without a
-      // vtable, and objects reachable only as `RefCounted` (such as the inner
-      // Value of a self-referencing container) must still die correctly.
-      ptr_->detachWeakHandles();
+      // Last strong reference: destroy through the per-type hook installed by
+      // `makeRef`. `delete` through a base (`RefCounted*`) pointer would be
+      // undefined behavior without a vtable, and objects reachable only as
+      // `RefCounted` (such as the inner Value of a self-referencing
+      // container) must still die correctly.
       ptr_->destroy(ptr_);
     }
   }
@@ -319,20 +126,12 @@ Ref<T> makeRef(Args&&... args) {
   // type, so members are destroyed correctly regardless of how the object is
   // later referenced. Marked non-capturing: stored as a plain function ptr.
   object->destroy = [](void* p) { delete static_cast<T*>(p); };
+  // The adopting constructor does not retain, so seed the count with the
+  // single strong reference owned by the returned handle. Without this the
+  // first copy of the handle brings the count to 1 and the original's
+  // destructor drops it to 0, freeing an object that is still referenced.
+  object->refs = 1;
   return Ref<T>(typename Ref<T>::Adopt{}, object);
-}
-
-// Defined after `Ref` is complete: locking a handle bumps the strong count
-// through the friend-only accessors and adopts the raw pointer without a
-// second increment (the reserved slot *is* this handle's reference).
-template <typename T>
-Ref<T> WeakRef<T>::lock() const noexcept {
-  if (!isLive()) return Ref<T>();
-  // Bump the count first, then adopt it: the new strong reference exists from
-  // here on, so even a hypothetical re-entrant release could not recycle the
-  // object before the handle is constructed.
-  static_cast<RefCounted*>(const_cast<T*>(ptr_))->refs++;
-  return Ref<T>(typename Ref<T>::Adopt{}, const_cast<T*>(ptr_));
 }
 
 struct StringObj : RefCounted {
@@ -561,9 +360,9 @@ struct Value {
   }
 };
 
-// Celda de una variable local. Las variables locales viven en celdas para que
-// una closure pueda capturar la variable (no solo su valor) y compartir sus
-// mutaciones. Se usara en FASE 6; en FASE 5 ya fija el modelo.
+// Cell holding a local variable. Locals live in cells so a closure can capture
+// the variable itself (not just its value) and share its mutations. It will be
+// used in PHASE 6; in PHASE 5 it already fixes the model.
 struct Cell : RefCounted {
   Value value;
 };
@@ -603,13 +402,6 @@ struct Function : RefCounted {
   // see the full `Env` type destroys the chain correctly.
   std::shared_ptr<Env> closure;
   NativeFn native;
-  // For bound methods created by `bindMethod`: the weakly-captured receiver
-  // object (never owning!). Interpreter::call hands its live identity over to
-  // the interpreter's transient field right before running the native, and
-  // the callback re-adopts it through `Interpreter::receiverOf`, so stored
-  // methods do not keep their receiver alive (`a.push(a)` stays collectable).
-  WeakRef<RefCounted> boundReceiver;
-
   bool isNative() const { return static_cast<bool>(native); }
 };
 

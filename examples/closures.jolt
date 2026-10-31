@@ -1,4 +1,4 @@
-// Closures: funciones que recuerdan su entorno.
+// Closures: functions that remember their environment.
 
 fn make_counter(start) {
   let count = start;
@@ -23,4 +23,4 @@ print("b.next() = ${b.next()}");
 print("a.current() = ${a.current()}");
 
 a.reset();
-print("tras reset, a.current() = ${a.current()}");
+print("after reset, a.current() = ${a.current()}");
