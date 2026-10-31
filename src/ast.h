@@ -47,7 +47,14 @@ struct ArrayExpr {
 };
 
 struct MapEntry {
-  std::string key;
+  // Scalar map keys are stored directly in `literalKey` (the common case:
+  // identifiers, string literals and numeric literals). Any other key shape
+  // (variables, expressions) is stored in `keyExpr` and evaluated at runtime;
+  // its Value is then normalized to its canonical toString() form, because
+  // the runtime Map is a string-keyed container. Exactly one of the two is
+  // set: keyExpr == nullptr <=> literalKey holds the key.
+  std::string literalKey;
+  ExprPtr keyExpr;  // may be null
   ExprPtr value;
 };
 
@@ -104,6 +111,11 @@ struct MemberExpr {
 };
 
 struct RangeExpr {
+  // A range is a lazy Value (Range{start, end, inclusive}); it never
+  // materializes its elements. Iteration cost depends on the consumer:
+  // `for (i in 0..10)` steps through the bounds without allocating an array
+  // (see ForInStmt in the interpreter); builtins that must realize a sequence
+  // (map/filter/reduce/...) expand it eagerly and are documented as such.
   ExprPtr start;
   ExprPtr end;
   bool inclusive = false;
@@ -115,6 +127,12 @@ struct LambdaExpr {
   // single ReturnStmt, so evaluators only ever see statement bodies and an
   // implicit "no return" yields nil. `name` may be empty for anonymous
   // lambdas; it is only used for diagnostics and function values.
+  //
+  // First-class functions: LambdaExpr fulfills both roles -- anonymous lambda
+  // and named function expression. There is no separate FnExpr node: a bare
+  // `fn(x) {...}` produces a callable Function value exactly like a named
+  // `fn add(x, y) {...}` would; FnDeclStmt is only syntactic sugar for
+  // "LambdaExpr with a non-empty name bound in the enclosing scope".
   std::string name;
   std::vector<std::string> params;
   StmtPtr body;
@@ -173,13 +191,20 @@ struct WhileStmt {
 };
 
 struct ForStmt {
+  // Classic C-style loop, a distinct node from ForInStmt on purpose: the
+  // three optional parts are nullable by design -- `init` may be null (or any
+  // statement, typically LetStmt), and a null `condition`/`step` means
+  // "always true" / "no step" (e.g. `for (;;)`, while-style loops).
   StmtPtr init;  // may be null
-  ExprPtr condition;
-  ExprPtr step;
+  ExprPtr condition;  // may be null: loop runs until break/return
+  ExprPtr step;       // may be null
   StmtPtr body;
 };
 
 struct ForInStmt {
+  // Iterates arrays, strings (by UTF-8 char), maps (by key) and ranges.
+  // Ranges are consumed lazily from their bounds instead of being expanded
+  // into a temporary vector, so `for i in 0..1_000_000 {}` stays O(1) memory.
   std::string var;
   ExprPtr iterable;
   StmtPtr body;

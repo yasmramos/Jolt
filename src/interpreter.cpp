@@ -262,6 +262,11 @@ void Interpreter::exec(const Stmt& stmt) {
           },
           [&](const ForInStmt& s) {
             Value iterable = eval(*s.iterable);
+            // Non-range iterables are realized eagerly (arrays/strings/maps
+            // already store their elements, so this is just a view/copy of
+            // existing data). Ranges are the exception: they are stepped
+            // lazily from their bounds so `for i in 0..N {}` stays O(1) in
+            // memory regardless of N.
             std::vector<Value> sequence;
             if (iterable.isArray()) {
               sequence = iterable.arr().items;
@@ -269,23 +274,12 @@ void Interpreter::exec(const Stmt& stmt) {
               for (auto& ch : utf8Chars(iterable.asStr())) sequence.emplace_back(std::move(ch));
             } else if (iterable.isMap()) {
               for (auto& entry : iterable.map().entries) sequence.push_back(Value(entry.first));
-            } else if (iterable.isRange()) {
-              const Range& range = iterable.range();
-              if (range.start <= range.end) {
-                for (int64_t i = range.start; range.inclusive ? i <= range.end : i < range.end; ++i) {
-                  sequence.push_back(Value(i));
-                }
-              } else {
-                for (int64_t i = range.start; range.inclusive ? i >= range.end : i > range.end; --i) {
-                  sequence.push_back(Value(i));
-                }
-              }
-            } else {
+            } else if (!iterable.isRange()) {
               fail(std::string("cannot iterate over a value of type '") + iterable.typeName() + "'",
                    s.iterable->line, s.iterable->col);
             }
 
-            for (auto& item : sequence) {
+            auto runIteration = [&](const Value& item) {
               // Each iteration gets its own binding of the loop variable, and
               // closures created inside must keep resolving it after the loop
               // ends, so the iteration scope pins the whole visible chain.
@@ -299,9 +293,29 @@ void Interpreter::exec(const Stmt& stmt) {
               try {
                 execBlock(*s.body, env, false);
               } catch (const ContinueSignal&) {
-                continue;
+                // continue to the next item
               } catch (const BreakSignal&) {
-                break;
+                return false;
+              }
+              return true;
+            };
+
+            if (iterable.isRange()) {
+              const Range& range = iterable.range();
+              if (range.start <= range.end) {
+                for (int64_t i = range.start; range.inclusive ? i <= range.end : i < range.end;
+                     ++i) {
+                  if (!runIteration(Value(i))) break;
+                }
+              } else {
+                for (int64_t i = range.start; range.inclusive ? i >= range.end : i > range.end;
+                     --i) {
+                  if (!runIteration(Value(i))) break;
+                }
+              }
+            } else {
+              for (auto& item : sequence) {
+                if (!runIteration(item)) break;
               }
             }
           },
@@ -412,7 +426,13 @@ Value Interpreter::eval(const Expr& expr) {
           },
           [&](const MapExpr& e) {
             auto map = makeMap();
-            for (const auto& entry : e.entries) map->set(entry.key, eval(*entry.value));
+            for (const auto& entry : e.entries) {
+              // Literal keys are already normalized strings; computed keys
+              // evaluate to a Value that is canonicalized via toString() so
+              // it matches the runtime's string-keyed map representation.
+              std::string key = entry.keyExpr ? eval(*entry.keyExpr).toString() : entry.literalKey;
+              map->set(key, eval(*entry.value));
+            }
             return Value(std::move(map));
           },
           [&](const UnaryExpr& e) { return unary(e.op, eval(*e.operand), expr.line, expr.col); },
