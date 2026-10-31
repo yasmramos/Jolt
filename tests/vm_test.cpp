@@ -1,5 +1,5 @@
-// Pruebas de la maquina virtual register-based (FASE 3-5).
-// Compila fragmentos de Jolt y ejecuta el bytecode resultante.
+// Tests for the register-based virtual machine (PHASE 3-5).
+// Compiles Jolt snippets and runs the resulting bytecode.
 
 #include <cassert>
 #include <cmath>
@@ -24,7 +24,7 @@ Bytecode compileSource(const std::string& source) {
   return compileProgram(program);
 }
 
-// Redirige std::cout mientras vive el objeto.
+// Redirects std::cout for as long as the object lives.
 struct CoutCapture {
   std::ostringstream stream;
   std::streambuf* previous;
@@ -49,7 +49,7 @@ const Value& requireGlobal(const VM& vm, const std::string& name) {
   return *value;
 }
 
-// Ejecuta y devuelve el mensaje del RuntimeError, o "" si no hubo error.
+// Runs and returns the RuntimeError message, or "" if there was no error.
 std::string runtimeError(const std::string& source) {
   Bytecode bytecode = compileSource(source);
   VM vm;
@@ -69,7 +69,7 @@ void testIntegerArithmetic() {
   const Value& x = requireGlobal(vm, "x");
   assert(x.isInt() && x.asInt() == 14);
 
-  // La division entre enteros es entera, igual que en el interprete.
+  // Integer division is integral, same as in the interpreter.
   const Value& y = requireGlobal(vm, "y");
   assert(y.isInt() && y.asInt() == 2);
 }
@@ -127,7 +127,7 @@ void testPower() {
   const Value& b = requireGlobal(vm, "b");
   assert(b.isFloat() && b.asFloat() == 8.0);
 
-  // Exponente negativo: cae en la ruta double, igual que el interprete.
+  // Negative exponent: falls into the double path, same as the interpreter.
   const Value& c = requireGlobal(vm, "c");
   assert(c.isFloat() && c.asFloat() == 0.5);
 }
@@ -205,7 +205,7 @@ void testUnaryOperators() {
 
   assert(requireGlobal(vm, "c").isBool() && !requireGlobal(vm, "c").asBool());
   assert(requireGlobal(vm, "d").isBool() && requireGlobal(vm, "d").asBool());
-  // `0` es truthy en Jolt (solo nil y false son falsy).
+  // `0` is truthy in Jolt (only nil and false are falsy).
   assert(requireGlobal(vm, "e").isBool() && !requireGlobal(vm, "e").asBool());
 
   const Value& f = requireGlobal(vm, "f");
@@ -277,7 +277,7 @@ void testRegisterCount() {
   assert(vm.registerCount() == 3);
 }
 
-// --------------------------------------------------------- FASE 5: control
+// --------------------------------------------------------- PHASE 5: control
 
 void testIfElseExecution() {
   Bytecode bytecode = compileSource(
@@ -314,7 +314,7 @@ void testIfBranchIsSkipped() {
 }
 
 void testTruthinessInConditions() {
-  // Solo nil y false son falsy; 0 y "" son truthy.
+  // Only nil and false are falsy; 0 and "" are truthy.
   std::string output = runAndCapture(
       "if (0) { print(\"zero\"); }\n"
       "if (\"\") { print(\"empty\"); }\n"
@@ -344,7 +344,7 @@ void testForLoop() {
 
   assert(requireGlobal(vm, "sum").asInt() == 10);
 
-  // La variable del `for` es local: no queda registrada como global.
+  // The `for` variable is local: it is not registered as a global.
   assert(vm.findGlobal("i") == nullptr);
 }
 
@@ -380,7 +380,7 @@ void testContinueInWhile() {
   VM vm;
   vm.run(bytecode);
 
-  // Suma de los impares 1, 3, 5.
+  // Sum of the odd numbers 1, 3, 5.
   assert(requireGlobal(vm, "sum").asInt() == 9);
   assert(requireGlobal(vm, "i").asInt() == 5);
 }
@@ -395,7 +395,7 @@ void testContinueInForRunsStep() {
   VM vm;
   vm.run(bytecode);
 
-  // Si `continue` no ejecutara el paso, el bucle no terminaria.
+  // If `continue` did not run the step, the loop would never end.
   assert(requireGlobal(vm, "sum").asInt() == 4);
 }
 
@@ -412,7 +412,7 @@ void testNestedLoops() {
   VM vm;
   vm.run(bytecode);
 
-  // i = 0: j = 0 y j = 2 suman; i = 1: igual; i = 2: break en j = 0.
+  // i = 0: j = 0 and j = 2 add up; i = 1: same; i = 2: break at j = 0.
   assert(requireGlobal(vm, "total").asInt() == 4);
 }
 
@@ -463,7 +463,7 @@ void testLocalCount() {
   VM vm;
   vm.run(bytecode);
 
-  // Los slots se reutilizan al cerrar cada scope.
+  // Slots are reused when each scope closes.
   assert(vm.localCount() == 2);
 }
 
@@ -496,7 +496,7 @@ void testShiftErrors() {
 }
 
 void testLogicalShortCircuit() {
-  // El lado derecho no debe evaluarse: 1 / 0 lanzaria un RuntimeError.
+  // The right-hand side must not be evaluated: 1 / 0 would throw a RuntimeError.
   Bytecode bytecode = compileSource(
       "let a = false && (1 / 0);\n"
       "let b = true || (1 / 0);\n"
@@ -512,13 +512,13 @@ void testLogicalShortCircuit() {
 }
 
 void testLogicalOperandValues() {
-  // `&&` y `||` devuelven un operando, no un booleano forzado.
+  // `&&` and `||` return an operand, not a forced boolean.
   Bytecode bytecode = compileSource(
       "let a = nil || 7;\n"
       "let b = false || \"x\";\n"
-      "let c = 0 && 5;\n"   // 0 es truthy: se devuelve el derecho
+      "let c = 0 && 5;\n"   // 0 is truthy: the right operand is returned
       "let d = false && 9;\n"
-      "let e = \"\" || \"fallback\";\n"  // "" tambien es truthy: se devuelve el izquierdo
+      "let e = \"\" || \"fallback\";\n"  // "" is also truthy: the left operand is returned
       "let f = nil || \"fallback\";\n");
   VM vm;
   vm.run(bytecode);

@@ -1,4 +1,4 @@
-// Fibonacci: recursion y version iterativa.
+// Fibonacci: recursive and iterative versions.
 
 fn fib(n) {
   if (n < 2) {
@@ -11,7 +11,7 @@ for n in 0..=10 {
   print("fib(${n}) = ${fib(n)}");
 }
 
-// La version iterativa no sufre por la profundidad de recursion.
+// The iterative version does not suffer from recursion depth.
 fn fib_fast(n) {
   let a = 0;
   let b = 1;

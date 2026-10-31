@@ -9,12 +9,12 @@
 
 namespace {
 
-// Lanza un error de compilacion con la posicion del nodo actual.
+// Throws a compile error with the position of the current node.
 [[noreturn]] void fail(const std::string& message, int line, int col) {
   throw CompileError{message, line, col};
 }
 
-// Nombre legible de un operador, solo para los diagnosticos.
+// Human-readable operator name, used only for diagnostics.
 std::string opName(Tok op) {
   switch (op) {
     case Tok::Plus:
@@ -62,7 +62,7 @@ std::string opName(Tok op) {
   }
 }
 
-// Operadores binarios que ya tienen un opcode propio.
+// Binary operators that already have a dedicated opcode.
 bool binaryOpCode(Tok op, OpCode& out) {
   switch (op) {
     case Tok::Plus:
@@ -121,7 +121,7 @@ bool binaryOpCode(Tok op, OpCode& out) {
   }
 }
 
-// Operadores de asignacion compuesta: `x op= y`.
+// Compound assignment operators: `x op= y`.
 bool compoundOpCode(Tok op, OpCode& out) {
   switch (op) {
     case Tok::PlusEq:
@@ -149,7 +149,7 @@ bool compoundOpCode(Tok op, OpCode& out) {
 
 }  // namespace
 
-// ------------------------------------------------------------ registros y pools
+// ------------------------------------------------------------ registers and pools
 
 int Compiler::allocReg() {
   int reg = next_reg_++;
@@ -165,8 +165,8 @@ void Compiler::freeReg(int count) {
 int Compiler::addConstant(const Value& value) {
   for (size_t i = 0; i < bc_.numbers.size(); ++i) {
     const Value& existing = bc_.numbers[i];
-    // El tipo forma parte de la identidad: `1` (int) y `1.0` (float) no son
-    // la misma constante aunque numericamente coincidan.
+    // The type is part of the identity: `1` (int) and `1.0` (float) are not
+    // the same constant even though they are numerically equal.
     if (existing.type() == value.type() && existing.equals(value)) {
       return static_cast<int>(i);
     }
@@ -196,7 +196,7 @@ int Compiler::emitJump(OpCode op, int a) {
   Instruction instruction;
   instruction.op = op;
   instruction.a = a;
-  instruction.jump = -1;  // pendiente de backpatching
+  instruction.jump = -1;  // pending backpatching
   return bytecode_emit(bc_, instruction);
 }
 
@@ -232,7 +232,7 @@ int Compiler::declareLocal(const std::string& name, bool isConst) {
 }
 
 bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
-  // Del scope mas interno al mas externo: el primero gana (shadowing).
+  // From the innermost scope to the outermost: the first match wins (shadowing).
   for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
     auto found = it->vars.find(name);
     if (found != it->vars.end()) {
@@ -251,7 +251,7 @@ void Compiler::declareGlobal(const std::string& name, bool isConst) {
   }
 }
 
-// -------------------------------------------------------------------- programa
+// -------------------------------------------------------------------- program
 
 Bytecode Compiler::compile(const StmtPtr& program) {
   bytecode_init(bc_);
@@ -265,8 +265,8 @@ Bytecode Compiler::compile(const StmtPtr& program) {
 
   if (!program) fail("empty program", 1, 1);
 
-  // El chunk principal usa el scope global: sus `let` son globales, como en
-  // el interprete (y para que el REPL conserve definiciones entre entradas).
+  // The main chunk uses the global scope: its `let`s are globals, as in the
+  // interpreter (and so the REPL keeps definitions between entries).
   scopes_.push_back(Scope{});
   if (const auto* block = std::get_if<BlockStmt>(&program->node)) {
     compileBlockBody(*block);
@@ -283,7 +283,7 @@ Bytecode Compiler::compile(const StmtPtr& program) {
 
 Bytecode compileProgram(const StmtPtr& program) { return Compiler{}.compile(program); }
 
-// ----------------------------------------------------------------- sentencias
+// ----------------------------------------------------------------- statements
 
 void Compiler::compileBlockBody(const BlockStmt& block) {
   for (const auto& child : block.stmts) {
@@ -342,12 +342,12 @@ void Compiler::compileLet(const LetStmt& s) {
   }
 
   if (inGlobalScope()) {
-    // Nivel superior: variable global (persiste en el REPL).
+    // Top level: global variable (persists in the REPL).
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.isConst);
   } else {
-    // Bloque anidado: variable local del frame. La declaracion se hace
-    // despues de compilar el inicializador, igual que `Env::define`.
+    // Nested block: frame-local variable. The declaration happens after the
+    // initializer is compiled, exactly like `Env::define`.
     int slot = declareLocal(s.name, s.isConst);
     emit(OpCode::DECLLOCAL, reg, slot);
   }
@@ -359,14 +359,14 @@ void Compiler::compileIf(const IfStmt& s) {
   int elseJump = emitJump(OpCode::JMP_IF_FALSE, condition);
   freeReg();
 
-  // La rama `then` siempre crea scope, como `execBlock(..., true)`.
+  // The `then` branch always creates a scope, like `execBlock(..., true)`.
   compileScopedBlock(*s.thenBranch);
 
   if (s.elseBranch) {
     int endJump = emitJump(OpCode::JMP);
     patchJump(elseJump, currentOffset());
-    // `else { ... }` crea scope al ser BlockStmt; `else if` se compila en el
-    // scope actual, igual que `exec` en el interprete.
+    // `else { ... }` creates a scope because it is a BlockStmt; `else if` is
+    // compiled in the current scope, exactly like `exec` in the interpreter.
     compileStmt(*s.elseBranch);
     patchJump(endJump, currentOffset());
   } else {
@@ -391,11 +391,11 @@ void Compiler::compileWhile(const WhileStmt& s) {
   int after = currentOffset();
   patchJump(exitJump, after);
   for (int index : loop.breaks) patchJump(index, after);
-  for (int index : loop.continues) patchJump(index, loopStart);  // reevalua condicion
+  for (int index : loop.continues) patchJump(index, loopStart);  // re-evaluates the condition
 }
 
 void Compiler::compileFor(const ForStmt& s) {
-  // `for` crea un scope propio para el inicializador; el cuerpo crea otro.
+  // `for` creates its own scope for the initializer; the body creates another.
   pushScope();
   if (s.init) compileStmt(*s.init);
 
@@ -412,7 +412,7 @@ void Compiler::compileFor(const ForStmt& s) {
   Loop loop = std::move(loops_.back());
   loops_.pop_back();
 
-  // `continue` salta al paso, no a la condicion.
+  // `continue` jumps to the step, not to the condition.
   int stepStart = currentOffset();
   if (s.step) {
     compileExpr(*s.step);
@@ -442,7 +442,7 @@ void Compiler::compileContinue(const Stmt& stmt) {
   loops_.back().continues.push_back(jump);
 }
 
-// ---------------------------------------------------------------- expresiones
+// ---------------------------------------------------------------- expressions
 
 int Compiler::compileVariable(const std::string& name) {
   LocalVar local;
@@ -560,7 +560,7 @@ int Compiler::compileExpr(const Expr& expr) {
                 emit(OpCode::NEG, operand, operand);
                 break;
               case Tok::Plus:
-                break;  // +x es x
+                break;  // +x is x
               case Tok::Bang:
                 emit(OpCode::NOT, operand, operand);
                 break;
@@ -573,7 +573,7 @@ int Compiler::compileExpr(const Expr& expr) {
             return operand;
           },
           [&](const BinaryExpr& binary) -> int {
-            // Cortocircuito: no se evalua el lado derecho si no hace falta.
+            // Short circuit: the right-hand side is not evaluated unless needed.
             if (binary.op == Tok::AmpAmp || binary.op == Tok::PipePipe) {
               int left = compileExpr(*binary.lhs);
               int endJump = emitJump(binary.op == Tok::AmpAmp ? OpCode::JMP_IF_FALSE
@@ -593,8 +593,8 @@ int Compiler::compileExpr(const Expr& expr) {
                    binary.opLine, binary.opCol);
             }
 
-            // Se compila el operando izquierdo y se reutiliza su registro como
-            // destino; el derecho es un temporal que se libera al terminar.
+            // The left operand is compiled and its register is reused as the
+            // destination; the right one is a temporary freed afterwards.
             int left = compileExpr(*binary.lhs);
             int right = compileExpr(*binary.rhs);
             emit(op, left, left, right);

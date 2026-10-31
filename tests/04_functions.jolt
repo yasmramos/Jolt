@@ -9,9 +9,9 @@ fn noop() {}
 assert_eq(noop(), nil);
 
 fn greet(name) {
-  return "Hola, " + name;
+  return "Hello, " + name;
 }
-assert_eq(greet("Jolt"), "Hola, Jolt");
+assert_eq(greet("Jolt"), "Hello, Jolt");
 
 // return exits the function early.
 fn sign(n) {

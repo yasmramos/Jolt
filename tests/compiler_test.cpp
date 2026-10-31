@@ -1,5 +1,5 @@
-// Pruebas del compilador AST -> bytecode (FASE 2-5).
-// No usa ningun framework externo: solo assert y un contador de fallos.
+// Tests for the AST -> bytecode compiler (PHASE 2-5).
+// Uses no external framework: only assert and a failure counter.
 
 #include <cassert>
 #include <cstdio>
@@ -60,7 +60,7 @@ void testArithmeticAndPrint() {
 void testNumericConstantTypes() {
   Bytecode bc = compileSource("let a = 1;\nlet b = 1.0;\n");
 
-  // int y float no deben fusionarse en el pool de constantes.
+  // int and float must not be merged in the constant pool.
   assert(bc.numbers.size() == 2);
   assert(bc.numbers[0].isInt() && bc.numbers[0].asInt() == 1);
   assert(bc.numbers[1].isFloat() && bc.numbers[1].asFloat() == 1.0);
@@ -115,7 +115,7 @@ void testBoolAndNilLiterals() {
 void testLetWithoutInitializer() {
   Bytecode bc = compileSource("let x;\n");
 
-  // `let x;` debe emitir LOADNIL explicitamente, no dejar el registro a medias.
+  // `let x;` must emit LOADNIL explicitly, not leave the register undefined.
   assert(bc.code.size() == 3);
   assert(bc.code[0].op == OpCode::LOADNIL);
   assert(bc.code[0].a == 0);
@@ -126,7 +126,7 @@ void testLetWithoutInitializer() {
 void testModuloAndPower() {
   Bytecode bc = compileSource("let a = 5 % 2;\nlet b = 2 ** 8;\n");
 
-  // Cada `let` usa LOADK, LOADK, operador y SETGLOBAL.
+  // Each `let` uses LOADK, LOADK, operator and SETGLOBAL.
   assert(bc.code.size() == 9);
   assert(bc.code[2].op == OpCode::MOD);
   assert(bc.code[6].op == OpCode::POW);
@@ -141,7 +141,7 @@ void testComparisons() {
       "let e = 1 > 2;\n"
       "let f = 1 >= 2;\n");
 
-  // Cada comparacion ocupa 4 instrucciones: LOADK, LOADK, op, SETGLOBAL.
+  // Each comparison takes 4 instructions: LOADK, LOADK, op, SETGLOBAL.
   assert(bc.code[2].op == OpCode::EQ);
   assert(bc.code[6].op == OpCode::NEQ);
   assert(bc.code[10].op == OpCode::LT);
@@ -161,7 +161,7 @@ void testUnaryOperators() {
   assert(notBc.code.size() == 4);
   assert(notBc.code[1].op == OpCode::NOT);
 
-  // `+x` no genera instruccion.
+  // `+x` emits no instruction.
   Bytecode plus = compileSource("let y = +5;\n");
   assert(plus.code.size() == 3);
   assert(plus.code[0].op == OpCode::LOADK);
@@ -187,7 +187,7 @@ void testConstReassignment() {
   expectCompileError("const x = 10;\nx = 20;\n", "const reassignment");
   expectCompileError("const x = 10;\nx += 1;\n", "const compound assignment");
 
-  // Redeclarar como `let` elimina la restriccion, igual que `Env::define`.
+  // Redeclaring with `let` lifts the restriction, exactly like `Env::define`.
   Bytecode bc = compileSource("const x = 10;\nlet x = 20;\nx = 30;\n");
   assert(!bc.code.empty());
 }
@@ -210,7 +210,7 @@ void testConstantDeduplication() {
   assert(bc.strings.empty());
 }
 
-// --------------------------------------------------------- FASE 5: control
+// --------------------------------------------------------- PHASE 5: control
 
 void testIfElseJumps() {
   Bytecode bc = compileSource("if (true) { print(1); } else { print(2); }\n");
@@ -220,11 +220,11 @@ void testIfElseJumps() {
   assert(bc.code.size() == 8);
   assert(bc.code[0].op == OpCode::LOADBOOL);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].a == 0 && bc.code[1].jump == 5);  // salta al `else`
+  assert(bc.code[1].a == 0 && bc.code[1].jump == 5);  // jumps to the `else`
   assert(bc.code[2].op == OpCode::LOADK);
   assert(bc.code[3].op == OpCode::PRINT);
   assert(bc.code[4].op == OpCode::JMP);
-  assert(bc.code[4].jump == 7);  // fin del if/else, antes de HALT
+  assert(bc.code[4].jump == 7);  // end of the if/else, before HALT
   assert(bc.code[5].op == OpCode::LOADK);
   assert(bc.code[6].op == OpCode::PRINT);
   assert(bc.code[7].op == OpCode::HALT);
@@ -236,7 +236,7 @@ void testIfWithoutElse() {
 
   assert(bc.code.size() == 5);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].jump == 4);  // al HALT
+  assert(bc.code[1].jump == 4);  // to HALT
   assert(bc.code[4].op == OpCode::HALT);
 }
 
@@ -247,11 +247,11 @@ void testWhileBackpatch() {
   assert(bc.code.size() == 6);
   assert(bc.code[0].op == OpCode::LOADBOOL);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].jump == 5);  // sale del bucle
+  assert(bc.code[1].jump == 5);  // leaves the loop
   assert(bc.code[2].op == OpCode::LOADK);
   assert(bc.code[3].op == OpCode::PRINT);
   assert(bc.code[4].op == OpCode::JMP);
-  assert(bc.code[4].jump == 0);  // vuelve a evaluar la condicion
+  assert(bc.code[4].jump == 0);  // goes back to re-evaluate the condition
   assert(bc.code[5].op == OpCode::HALT);
 }
 
@@ -267,23 +267,23 @@ void testForBackpatch() {
   assert(bc.code[2].op == OpCode::GETLOCAL);
   assert(bc.code[4].op == OpCode::LT);
   assert(bc.code[5].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[5].jump == 13);  // sale al HALT
+  assert(bc.code[5].jump == 13);  // leaves to HALT
   assert(bc.code[6].op == OpCode::GETLOCAL);
   assert(bc.code[7].op == OpCode::PRINT);
   assert(bc.code[8].op == OpCode::GETLOCAL);
   assert(bc.code[11].op == OpCode::SETLOCAL);
   assert(bc.code[11].b == 0);
   assert(bc.code[12].op == OpCode::JMP);
-  assert(bc.code[12].jump == 2);  // vuelve a la condicion
+  assert(bc.code[12].jump == 2);  // goes back to the condition
 
-  // El inicializador del `for` es local, no global.
+  // The `for` initializer is local, not global.
   assert(bc.num_locals == 1);
   assert(bc.num_registers == 2);
 }
 
 void testBreakAndContinueBackpatch() {
   Bytecode brk = compileSource("while (true) { break; }\n");
-  // 0 LOADBOOL, 1 JMP_IF_FALSE, 2 JMP (break), 3 JMP (vuelta), 4 HALT
+  // 0 LOADBOOL, 1 JMP_IF_FALSE, 2 JMP (break), 3 JMP (back), 4 HALT
   assert(brk.code.size() == 5);
   assert(brk.code[2].op == OpCode::JMP && brk.code[2].jump == 4);
   assert(brk.code[3].op == OpCode::JMP && brk.code[3].jump == 0);
@@ -292,9 +292,9 @@ void testBreakAndContinueBackpatch() {
   assert(cont.code.size() == 5);
   assert(cont.code[2].op == OpCode::JMP && cont.code[2].jump == 0);
 
-  // En un `for`, `continue` salta al paso, no a la condicion.
+  // In a `for`, `continue` jumps to the step, not to the condition.
   Bytecode forCont = compileSource("for (;;) { continue; }\n");
-  // 0 JMP (continue -> paso), 1 JMP (vuelta), 2 HALT
+  // 0 JMP (continue -> step), 1 JMP (back), 2 HALT
   assert(forCont.code.size() == 3);
   assert(forCont.code[0].op == OpCode::JMP && forCont.code[0].jump == 1);
   assert(forCont.code[1].op == OpCode::JMP && forCont.code[1].jump == 0);
@@ -330,7 +330,7 @@ void testShadowingSlots() {
       "  print(x);\n"
       "}\n");
 
-  // El bloque interno usa un slot distinto para su `x`.
+  // The inner block uses a different slot for its `x`.
   assert(bc.code[3].op == OpCode::DECLLOCAL && bc.code[3].b == 1);
   assert(bc.code[4].op == OpCode::GETLOCAL && bc.code[4].b == 1);
   assert(bc.code[6].op == OpCode::GETLOCAL && bc.code[6].b == 0);
@@ -347,7 +347,7 @@ void testLogicalShortCircuit() {
   // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 MOVE, 4 SETGLOBAL, 5 HALT
   assert(andBc.code.size() == 6);
   assert(andBc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(andBc.code[1].jump == 4);  // si el izquierdo es falsy, no evalua la derecha
+  assert(andBc.code[1].jump == 4);  // if the left side is falsy, the right side is not evaluated
   assert(andBc.code[2].op == OpCode::LOADK && andBc.code[2].b == 1);
   assert(andBc.code[3].op == OpCode::MOVE);
   assert(andBc.code[3].a == 0 && andBc.code[3].b == 1);
@@ -393,7 +393,7 @@ void testBitwiseOps() {
 }
 
 void testUnsupportedConstructs() {
-  // FASE 6: funciones, llamadas, colecciones e iteracion.
+  // PHASE 6: functions, calls, collections and iteration.
   expectCompileError("fn f() { return 1; }\n", "function declaration");
   expectCompileError("print(1, 2);\n", "multiple print arguments");
   expectCompileError("foo(1);\n", "arbitrary call");

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Compila y ejecuta las pruebas del compilador AST -> bytecode.
-# Uso: ./tests/run_compiler.sh
+# Builds and runs the AST -> bytecode compiler tests.
+# Usage: ./tests/run_compiler.sh
 
 set -eu
 

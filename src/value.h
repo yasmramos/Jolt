@@ -360,9 +360,9 @@ struct Value {
   }
 };
 
-// Celda de una variable local. Las variables locales viven en celdas para que
-// una closure pueda capturar la variable (no solo su valor) y compartir sus
-// mutaciones. Se usara en FASE 6; en FASE 5 ya fija el modelo.
+// Cell holding a local variable. Locals live in cells so a closure can capture
+// the variable itself (not just its value) and share its mutations. It will be
+// used in PHASE 6; in PHASE 5 it already fixes the model.
 struct Cell : RefCounted {
   Value value;
 };

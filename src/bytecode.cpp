@@ -1,6 +1,6 @@
 #include "bytecode.h"
 
-// Implementacion de las operaciones basicas del bytecode (FASE 1).
+// Implementation of the basic bytecode operations (PHASE 1).
 
 void bytecode_init(Bytecode& bc) {
   bc.code.clear();

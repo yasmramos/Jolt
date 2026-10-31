@@ -1,6 +1,6 @@
-// El clasico saludo.
-// Ejecuta: build\jolt.exe examples\hello.jolt
+// The classic greeting.
+// Run: build\jolt.exe examples\hello.jolt
 
-let name = "mundo";
-print("Hola, ${name}!");
-print("Jolt esta escrito en C++.");
+let name = "world";
+print("Hello, ${name}!");
+print("Jolt is written in C++.");

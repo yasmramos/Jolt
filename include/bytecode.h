@@ -7,13 +7,13 @@
 
 #include "value.h"
 
-// Bytecode de bajo nivel para la VM register-based de Jolt.
-// Cada instruccion opera sobre registros y se disena para mapear a una
-// instruccion nativa en la futura FASE 7.
+// Low-level bytecode for Jolt's register-based VM.
+// Each instruction operates on registers and is designed to map to a single
+// native instruction in the future PHASE 7.
 
 enum class OpCode : std::uint8_t {
-  LOADK,      // R[a] = numbers[b]  (constante numerica: int o float)
-  LOADKS,     // R[a] = strings[b]  (constante de cadena)
+  LOADK,      // R[a] = numbers[b]  (numeric constant: int or float)
+  LOADKS,     // R[a] = strings[b]  (string constant)
   LOADNIL,    // R[a] = nil
   LOADBOOL,   // R[a] = (b != 0)
   MOVE,       // R[a] = R[b]
@@ -41,21 +41,21 @@ enum class OpCode : std::uint8_t {
   GT,         // R[a] = R[b] >  R[c]
   GTE,        // R[a] = R[b] >= R[c]
 
-  // Control de flujo. `jump` es un indice absoluto dentro de `code`.
+  // Control flow. `jump` is an absolute index into `code`.
   JMP,          // pc = jump
-  JMP_IF_FALSE, // si !R[a] entonces pc = jump
-  JMP_IF_TRUE,  // si R[a] entonces pc = jump
+  JMP_IF_FALSE, // if !R[a] then pc = jump
+  JMP_IF_TRUE,  // if R[a] then pc = jump
 
-  // Variables. Los globales se resuelven por nombre (pool de cadenas); los
-  // locales por indice de celda en el frame actual.
-  SETGLOBAL,  // globales[strings[b]] = R[a]
-  GETGLOBAL,  // R[a] = globales[strings[b]]
-  DECLLOCAL,  // locals[b] = nueva celda con R[a]
+  // Variables. Globals are resolved by name (string pool); locals by cell
+  // index in the current frame.
+  SETGLOBAL,  // globals[strings[b]] = R[a]
+  GETGLOBAL,  // R[a] = globals[strings[b]]
+  DECLLOCAL,  // locals[b] = new cell holding R[a]
   SETLOCAL,   // locals[b]->value = R[a]
   GETLOCAL,   // R[a] = locals[b]->value
 
-  PRINT,      // imprime R[a]
-  HALT,       // termina la ejecucion
+  PRINT,      // print R[a]
+  HALT,       // stop execution
 };
 
 struct Instruction {
@@ -68,21 +68,21 @@ struct Instruction {
 
 struct Bytecode {
   std::vector<Instruction> code;
-  // Pool de constantes numericas. Usa `Value` para conservar la diferencia
-  // entre enteros y flotantes (un `double` convertiria todo a float).
+  // Numeric constant pool. Uses `Value` to preserve the difference between
+  // integers and floats (a `double` would turn everything into a float).
   std::vector<Value> numbers;
   std::vector<std::string> strings;
   int num_registers = 0;
-  // Numero de celdas locales que necesita el frame.
+  // Number of local cells the frame needs.
   int num_locals = 0;
 };
 
-// Reinicia el bytecode conservando la capacidad de sus contenedores.
+// Resets the bytecode while keeping the capacity of its containers.
 void bytecode_init(Bytecode& bc);
 
-// Anade una instruccion y devuelve su indice.
+// Appends an instruction and returns its index.
 int bytecode_emit(Bytecode& bc, const Instruction& instruction);
 
-// Libera el contenido del bytecode. En C++ los contenedores gestionan su
-// memoria, pero se mantiene la funcion para simetria con el diseno original.
+// Releases the bytecode contents. In C++ the containers manage their own
+// memory, but the function is kept for symmetry with the original design.
 void bytecode_free(Bytecode& bc);
