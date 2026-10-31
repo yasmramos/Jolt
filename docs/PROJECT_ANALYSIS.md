@@ -81,7 +81,7 @@ Maps expose method syntax `m.keys() / m.get(k) / m.set(k,v)` but have **no** `m.
 ## 3. Medium-priority improvements
 
 ### 3.1 Finish phase 6 before anything else (per AGENT.md ordering)
-Scope already defined in AGENT.md §FASE 6: protos per function, `CALL/RETURN/CLOSURE/
+Scope already defined in AGENT.md §PHASE 6: protos per function, `CALL/RETURN/CLOSURE/
 GETUPVAL/SETUPVAL`, per-frame registers, upvalue lists with open→closed migration (Lua 5.4
 model), `Runtime` interface so builtins can call VM functions without re-entering the AST.
 Design notes worth adopting from Lua now, while cheap:

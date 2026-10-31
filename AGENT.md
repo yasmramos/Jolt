@@ -1,84 +1,85 @@
-# AGENT.md — Proyecto Jolt
+# AGENT.md — Jolt Project
 
-Instrucciones para agentes de IA que asisten en el desarrollo de **Jolt**,
-un lenguaje de programación compilado con arquitectura interna estilo Lua.
+Instructions for AI agents assisting in the development of **Jolt**, a compiled
+programming language with a Lua-style internal architecture.
 
 ---
 
-## 1. Identidad del proyecto
+## 1. Project identity
 
-| Campo | Valor |
+| Field | Value |
 |-------|-------|
-| **Nombre** | Jolt |
-| **Extensión** | `.jolt` |
-| **Filosofía** | Simple como Python, estructurado como Java, rápido como Lua |
-| **Implementación** | C++17 (sin dependencias externas) |
-| **Plataforma inicial** | Windows (g++/MinGW), luego multiplataforma |
-| **Arquitectura** | Bytecode register-based + VM (estilo Lua 5.4) |
+| **Name** | Jolt |
+| **Extension** | `.jolt` |
+| **Philosophy** | Simple like Python, structured like Java, fast like Lua |
+| **Implementation** | C++17 (no external dependencies) |
+| **Initial platform** | Windows (g++/MinGW), then cross-platform |
+| **Architecture** | Register-based bytecode + VM (Lua 5.4 style) |
 
 ---
 
-## 2. Arquitectura obligatoria
-.jolt → LEXER → PARSER → AST → COMPILADOR → BYTECODE → VM
-↓
-(futuro) COMPILADOR NATIVO
+## 2. Mandatory architecture
 
+```text
+.jolt → LEXER → PARSER → AST → COMPILER → BYTECODE → VM
+                                                  ↓
+                                   (future) NATIVE COMPILER
+```
 
-### Módulos y responsabilidades
+### Modules and responsibilities
 
-| Módulo | Entrada | Salida | Estado |
-|--------|---------|--------|--------|
-| `lexer.cpp` | texto fuente | `Token[]` | ✅ existente |
-| `parser.cpp` | `Token[]` | `Node*` (AST) | ✅ existente |
-| `bytecode.cpp` | `Bytecode` | operaciones básicas | ✅ FASE 1 |
-| `compiler.cpp` | `Node*` | `Bytecode*` | ✅ FASE 5 |
-| `vm.cpp` | `Bytecode*` | ejecución | ✅ FASE 5 |
-| `main.cpp` | CLI | pipeline completo | ⬜ FASE 4 (VM como motor) |
-| `interpreter.cpp` | `Node*` | ejecución de referencia | ⚠️ solo oráculo de pruebas |
+| Module | Input | Output | Status |
+|--------|-------|--------|--------|
+| `lexer.cpp` | source text | `Token[]` | ✅ existing |
+| `parser.cpp` | `Token[]` | `Node*` (AST) | ✅ existing |
+| `bytecode.cpp` | `Bytecode` | basic operations | ✅ PHASE 1 |
+| `compiler.cpp` | `Node*` | `Bytecode*` | ✅ PHASE 5 |
+| `vm.cpp` | `Bytecode*` | execution | ✅ PHASE 5 |
+| `main.cpp` | CLI | full pipeline | ⬜ PHASE 4 (VM as the engine) |
+| `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
 
 ---
 
-## 3. Reglas del bytecode (CRÍTICAS)
+## 3. Bytecode rules (CRITICAL)
 
-Estas reglas **no son negociables**. Si una propuesta las viola, rechazarla
-y proponer una alternativa.
+These rules are **not negotiable**. If a proposal violates them, reject it
+and propose an alternative.
 
-1. **Register-based**, NO stack-based. Los registros son un array de valores
-   dinámicos en la VM (`Value regs[256]`). No usar solo `double`: Jolt
-   necesita representar también cadenas, booleanos, `nil`, arrays y mapas.
-   Todos los registros, variables globales, frames y valores temporales usan
-   el mismo tipo `Value`. `Bytecode::numbers` y `Bytecode::strings` son solo
-   pools de constantes para el compilador; la VM no mantiene registros
-   separados por tipo. Las operaciones aritméticas deben incluir rutas rápidas
-   para `int` y `float`.
-   En C++17, `Value` es un tagged union de 16 bytes con recuento de
-   referencias no atómico (el intérprete/VM es single-threaded). Las cadenas
-   son inmutables y compartidas, de modo que `MOVE` no duplica texto.
-2. **Cada opcode mapea a 1 instrucción ASM x86-64** (o casi). Si no mapea,
-   está mal diseñado.
-3. **Máximo ~40 opcodes** en total. Si se necesitan más, rediseñar.
-4. **Instrucciones prohibidas** (demasiado alto nivel):
+1. **Register-based**, NOT stack-based. Registers are an array of dynamic
+   values in the VM (`Value regs[256]`). Do not use `double` alone: Jolt also
+   needs to represent strings, booleans, `nil`, arrays and maps. All
+   registers, global variables, frames and temporaries use the same `Value`
+   type. `Bytecode::numbers` and `Bytecode::strings` are only constant pools
+   for the compiler; the VM does not keep separate registers per type.
+   Arithmetic operations must include fast paths for `int` and `float`.
+   In C++17, `Value` is a 16-byte tagged union with non-atomic reference
+   counting (the interpreter/VM is single-threaded). Strings are immutable
+   and shared, so `MOVE` does not duplicate text.
+2. **Each opcode maps to 1 x86-64 ASM instruction** (or close to it). If it
+   does not map, it is badly designed.
+3. **At most ~40 opcodes** in total. If more are needed, redesign.
+4. **Forbidden instructions** (too high level):
    - `OP_EVAL_EXPR`, `OP_EXECUTE_STATEMENT`, `OP_CALL_METHOD_DYNAMIC`
-5. **Instrucciones permitidas** (bajo nivel):
-   - Carga: `LOADK` (número), `LOADKS` (cadena), `LOADNIL`, `LOADBOOL`, `MOVE`
-   - Aritmética: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `NEG`, `NOT`
+5. **Allowed instructions** (low level):
+   - Load: `LOADK` (number), `LOADKS` (string), `LOADNIL`, `LOADBOOL`, `MOVE`
+   - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `NEG`, `NOT`
    - Bits: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`, `BNOT`
-   - Comparación: `EQ`, `NEQ`, `LT`, `GT`, `LTE`, `GTE`
+   - Comparison: `EQ`, `NEQ`, `LT`, `GT`, `LTE`, `GTE`
    - Variables: `GETGLOBAL`, `SETGLOBAL`, `DECLLOCAL`, `GETLOCAL`, `SETLOCAL`
    - Control: `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`
-   - Funciones: `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
+   - Functions: `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
    - I/O: `PRINT`
-   - Fin: `HALT`
+   - End: `HALT`
 
-### Anti-objetivo explícito
+### Explicit anti-goal
 
-> **NO repetir el error de Java**: bytecode de alto nivel que luego es
-> imposible compilar a nativo de forma eficiente. El bytecode de Jolt
-> debe nacer pensando en la compilación nativa futura.
+> **Do NOT repeat Java's mistake**: high-level bytecode that later turns out
+> to be impossible to compile to native code efficiently. Jolt's bytecode
+> must be born with future native compilation in mind.
 
-### Mapeo esperado bytecode → ASM
+### Expected bytecode → ASM mapping
 
-| Bytecode | ASM x86-64 |
+| Bytecode | x86-64 ASM |
 |----------|-----------|
 | `LOADK R0, 10` | `movq $10, %rax` |
 | `ADD R2, R0, R1` | `addq %rbx, %rax` |
@@ -88,222 +89,226 @@ y proponer una alternativa.
 
 ---
 
-## 4. Fases de desarrollo (en orden estricto)
+## 4. Development phases (strict order)
 
-No se puede avanzar a la siguiente fase sin completar y probar la anterior.
+You cannot move on to the next phase without completing and testing the
+previous one.
 
-### FASE 1 — `include/bytecode.h` ✅
-- Definir `enum class OpCode` con: `LOADK`, `LOADKS`, `LOADNIL`, `LOADBOOL`,
+### PHASE 1 — `include/bytecode.h` ✅
+- Define `enum class OpCode` with: `LOADK`, `LOADKS`, `LOADNIL`, `LOADBOOL`,
   `MOVE`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `NEG`, `NOT`, `EQ`, `NEQ`,
   `LT`, `LTE`, `GT`, `GTE`, `SETGLOBAL`, `GETGLOBAL`, `PRINT`, `HALT`
-- Definir `struct Instruction { OpCode op; int a, b, c; int jump; }`
-- Definir `struct Bytecode` con `code`, `numbers`, `strings` y `num_registers`
-- `numbers` es `std::vector<Value>` para conservar la diferencia entre `int` y `float`
-- `LOADK` carga constantes numéricas y `LOADKS` constantes de cadena (opcodes
-  separados, sin usar `c` como discriminador)
-- Funciones: `bytecode_init`, `bytecode_emit`, `bytecode_free` (declaradas en
-  `include/bytecode.h`, implementadas en `src/bytecode.cpp`)
+- Define `struct Instruction { OpCode op; int a, b, c; int jump; }`
+- Define `struct Bytecode` with `code`, `numbers`, `strings` and `num_registers`
+- `numbers` is a `std::vector<Value>` to preserve the difference between `int` and `float`
+- `LOADK` loads numeric constants and `LOADKS` string constants (separate
+  opcodes, without using `c` as a discriminator)
+- Functions: `bytecode_init`, `bytecode_emit`, `bytecode_free` (declared in
+  `include/bytecode.h`, implemented in `src/bytecode.cpp`)
 
-### FASE 2 — `src/compiler.cpp` (AST → bytecode) ✅
-- Literales: `nil` → `LOADNIL`, booleanos → `LOADBOOL`, números → `LOADK`,
-  cadenas → `LOADKS`
+### PHASE 2 — `src/compiler.cpp` (AST → bytecode) ✅
+- Literals: `nil` → `LOADNIL`, booleans → `LOADBOOL`, numbers → `LOADK`,
+  strings → `LOADKS`
 - `VariableExpr` → `GETGLOBAL`
-- `BinaryExpr` con `+`, `-`, `*`, `/`, `%`, `**` y comparaciones (`==`, `!=`,
-  `<`, `<=`, `>`, `>=`) → compilar izq, compilar der, emitir el opcode
-- `UnaryExpr`: `-` → `NEG`, `!` → `NOT`, `+` no emite instrucción, `~` sigue
-  reservado para FASE 5
-- `&&`, `||`, `in` y operadores de bits → FASE 5
-- `AssignExpr` sobre variable global → compilar expr, emitir `SETGLOBAL`
-- Asignación compuesta (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`) → `GETGLOBAL`,
-  operación, `SETGLOBAL`
-- `LetStmt` → compilar inicializador; si no hay, emitir `LOADNIL` explícito;
-  después `SETGLOBAL`
-- Seguimiento de `const` en tiempo de compilación (`consts_`): reasignar una
-  constante lanza `CompileError` con el mismo mensaje que el intérprete
-- `print(expr)` → compilar expr, emitir `PRINT`; en el AST actual `print` es
-  una llamada, así que se detecta como `CallExpr`
-- Asignación de registros con contador que sube/baja
-- Actualizar `num_registers` al reservar registros
-- Reutilización de constantes en los pools de números y cadenas; `int` y
-  `float` son constantes distintas
-- Nodos aún no soportados lanzan `CompileError` con línea/columna
+- `BinaryExpr` with `+`, `-`, `*`, `/`, `%`, `**` and comparisons (`==`, `!=`,
+  `<`, `<=`, `>`, `>=`) → compile left, compile right, emit the opcode
+- `UnaryExpr`: `-` → `NEG`, `!` → `NOT`, `+` emits no instruction, `~` stays
+  reserved for PHASE 5
+- `&&`, `||`, `in` and bitwise operators → PHASE 5
+- `AssignExpr` on a global variable → compile the expression, emit `SETGLOBAL`
+- Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`) → `GETGLOBAL`,
+  operation, `SETGLOBAL`
+- `LetStmt` → compile the initializer; if there is none, emit an explicit
+  `LOADNIL`; then `SETGLOBAL`
+- Compile-time `const` tracking (`consts_`): reassigning a constant throws a
+  `CompileError` with the same message as the interpreter
+- `print(expr)` → compile the expression, emit `PRINT`; in the current AST
+  `print` is a call, so it is detected as a `CallExpr`
+- Register allocation with a counter that goes up and down
+- Update `num_registers` when reserving registers
+- Reuse of constants in the number and string pools; `int` and `float` are
+  distinct constants
+- Nodes not yet supported throw `CompileError` with line/column
 
-### FASE 3 — `src/vm.cpp` (ejecutar bytecode) ✅
-- Bucle `while (pc < count)` + `switch` sobre opcode
-- `std::vector<Value> registers_` dimensionado por `num_registers`
-- Tabla de variables globales `std::unordered_map<std::string, Value>`
-- Rutas rápidas numéricas en `ADD`, `SUB`, `MUL`, `DIV` sin recorrer variantes
-- `ADD` también concatena cadenas; `DIV` y `MOD` detectan división por cero
-- `POW` replica `intPow` para `int ** int` con exponente no negativo y usa
-  `std::pow` en el resto de los casos
-- `NEG` y `NOT` respetan la semántica del intérprete (`0` es truthy)
-- Comparaciones con `EQ`/`NEQ`/`LT`/`LTE`/`GT`/`GTE` y la misma relación de
-  orden que `Interpreter::lessThan`
-- `PRINT` usa `Value::toString()`
-- Errores de ejecución mediante `RuntimeError`
-- `run()` reinicia registros y conserva globales entre ejecuciones
-- Cada opcode: 2-3 líneas de C++
+### PHASE 3 — `src/vm.cpp` (run bytecode) ✅
+- Loop `while (pc < count)` + `switch` on the opcode
+- `std::vector<Value> registers_` sized by `num_registers`
+- Global variable table `std::unordered_map<std::string, Value>`
+- Numeric fast paths in `ADD`, `SUB`, `MUL`, `DIV` without walking variants
+- `ADD` also concatenates strings; `DIV` and `MOD` detect division by zero
+- `POW` replicates `intPow` for `int ** int` with a non-negative exponent and
+  uses `std::pow` in every other case
+- `NEG` and `NOT` respect the interpreter's semantics (`0` is truthy)
+- Comparisons with `EQ`/`NEQ`/`LT`/`LTE`/`GT`/`GTE` and the same ordering
+  relation as `Interpreter::lessThan`
+- `PRINT` uses `Value::toString()`
+- Runtime errors through `RuntimeError`
+- `run()` resets the registers and keeps the globals between executions
+- Each opcode: 2-3 lines of C++
 
-### FASE 4 — `src/main.cpp` (VM como único motor) ⬜ (se ejecuta tras FASE 6)
-- Modelo Lua/LuaJIT: `jolt`, `jolt -e` y el REPL **siempre** compilan a bytecode
-  y ejecutan en la VM. El AST nunca se ejecuta en producción.
-- REPL con **una sola VM persistente**: cada entrada se compila a un chunk y se
-  ejecuta sobre los mismos globales.
-- `--ast` temporal solo para pruebas diferenciales (comparar AST vs VM); se
-  retira del binario cuando haya paridad.
-- `jolt -c archivo.jolt` compila sin ejecutar.
-- `jolt build archivo.jolt` (futuro) → generar C++ + g++
+### PHASE 4 — `src/main.cpp` (VM as the only engine) ⬜ (runs after PHASE 6)
+- Lua/LuaJIT model: `jolt`, `jolt -e` and the REPL **always** compile to
+  bytecode and run on the VM. The AST is never executed in production.
+- REPL with **a single persistent VM**: each input is compiled to a chunk and
+  run on the same globals.
+- Temporary `--ast` only for differential tests (comparing AST vs VM); it is
+  removed from the binary once parity is reached.
+- `jolt -c file.jolt` compiles without running.
+- `jolt build file.jolt` (future) → generate C++ + g++
 
-### FASE 5 — Control de flujo y locales ✅
+### PHASE 5 — Control flow and locals ✅
 - Opcodes: `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`
-- Saltos con backpatching (destino absoluto dentro de `code`)
-- `if`/`else` (incluido `else if`), `while`, `for` clásico, `break` y `continue`
-  (compile-time error fuera de un bucle)
-- Scopes de bloque y variables locales con slots (`DECLLOCAL`, `GETLOCAL`,
+- Jumps with backpatching (absolute target inside `code`)
+- `if`/`else` (including `else if`), `while`, classic `for`, `break` and
+  `continue` (compile-time error outside a loop)
+- Block scopes and local variables with slots (`DECLLOCAL`, `GETLOCAL`,
   `SETLOCAL`); `Bytecode::num_locals`
-- Las locales viven en `Cell` con recuento de referencias para que las closures
-  de FASE 6 capturen la variable, no solo su valor
-- Los `let`/`const` de nivel superior siguen siendo globales (persisten en el REPL)
-- `&&`, `||` con cortocircuito real (saltos), ternario con saltos
-- Operadores de bits: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`, `BNOT`
-- `+x` no emite instrucción; `~x` exige entero
-- **NO** se añaden `OP_IF` ni `OP_WHILE` (alto nivel)
-- `in` y `for-in` quedan para FASE 6 (dependen de colecciones)
+- Locals live in reference-counted `Cell`s so the PHASE 6 closures capture the
+  variable, not just its value
+- Top-level `let`/`const` remain globals (they persist in the REPL)
+- `&&`, `||` with real short-circuiting (jumps), ternary with jumps
+- Bitwise operators: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`, `BNOT`
+- `+x` emits no instruction; `~x` requires an integer
+- Do **NOT** add `OP_IF` or `OP_WHILE` (high level)
+- `in` and `for-in` are left for PHASE 6 (they depend on collections)
 
-### FASE 6 — Funciones, colecciones y biblioteca ⬜ ← SIGUIENTE
+### PHASE 6 — Functions, collections and library ⬜ ← NEXT
 - `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
-- Call stack en la VM y registros por frame
-- `Bytecode` evoluciona a **protos por función** con protos hijos (estilo Lua)
-- Closures con upvalues sobre `Cell` (las locales ya son celdas)
-- Interfaz `Runtime` compartida por VM e intérprete AST para que los builtins
-  (`map`, `filter`, `sort`) invoquen funciones de la VM sin reentrar en el AST
-- Arrays, mapas, índice, miembro, rangos, interpolación y `for-in`
-- `in` para arrays, mapas, cadenas y rangos
+- Call stack in the VM and registers per frame
+- `Bytecode` evolves into **per-function protos** with child protos (Lua style)
+- Closures with upvalues over `Cell` (locals are already cells)
+- Shared `Runtime` interface for the VM and the AST interpreter so that the
+  builtins (`map`, `filter`, `sort`) can invoke VM functions without
+  re-entering the AST
+- Arrays, maps, indexing, members, ranges, interpolation and `for-in`
+- `in` for arrays, maps, strings and ranges
 
-### FASE 7 — Compilador bytecode → C++ (futuro) ⬜
-- Traducir cada instrucción a una línea de C++
-- `g++ -O2` produce el binario nativo
-- Evaluar `union`/`variant` para `Instruction` y eliminar `jump` cuando no se use
-- Después, el JIT de LuaJIT como referencia
+### PHASE 7 — Bytecode → C++ compiler (future) ⬜
+- Translate each instruction into one line of C++
+- `g++ -O2` produces the native binary
+- Evaluate `union`/`variant` for `Instruction` and drop `jump` when unused
+- Afterwards, LuaJIT's JIT as a reference
 
-### Estado actual
-Fase 1: ✅ completada y revisada
-Fase 2: ✅ completada
-Fase 3: ✅ completada
-Fase 4: ⬜ pendiente (VM como único motor; requiere FASE 6)
-Fase 5: ✅ completada y probada
-Fase 6: ⬜ pendiente ← SIGUIENTE
-Fase 7: ⬜ pendiente
+### Current status
+Phase 1: ✅ completed and reviewed
+Phase 2: ✅ completed
+Phase 3: ✅ completed
+Phase 4: ⬜ pending (VM as the only engine; requires PHASE 6)
+Phase 5: ✅ completed and tested
+Phase 6: ⬜ pending ← NEXT
+Phase 7: ⬜ pending
 
 
 ---
 
-## 5. Reglas de código
+## 5. Code rules
 
-1. **C++17 puro**, sin dependencias externas (solo biblioteca estándar).
-2. **Nombres**: `snake_case` para funciones y variables.
-3. **Estructuras**: `struct` para datos y `enum class` para opcodes.
-4. **Memoria**: RAII y contenedores estándar (`std::vector`, `std::string`); sin `malloc`/`free`.
-5. **Errores**: structs de diagnóstico con línea/columna; la CLI los imprime en `stderr`.
-6. **Comentarios en español**, concisos, solo donde aporten.
-7. **Cada `.cpp` nuevo** tiene su `.h` en `include/`.
-8. **Sin variables globales mutables** excepto la tabla de globals de la VM.
-9. **Compilar con**: `g++ -std=c++17 -Wall -Wextra -O2`
-
----
-
-## 6. Checklist obligatorio por cada feature nueva
-
-Antes de escribir **una sola línea de código**, el agente debe responder
-y mostrar al usuario:
-¿Necesito un token nuevo en el lexer? → cuál
-
-¿Necesito un nodo nuevo en el AST? → cuál
-
-¿Necesito una regla nueva en el parser? → cuál
-
-¿Necesito un opcode nuevo en el bytecode? → cuál
-
-¿El opcode mapea a 1 instrucción ASM? → sí/no (si no, rediseñar)
-
-¿Necesito lógica nueva en la VM? → cuál
-
-¿Necesito lógica nueva en el compilador? → cuál
-
-
-Sin este checklist completo y aprobado, **no se procede a codificar**.
+1. **Pure C++17**, no external dependencies (standard library only).
+2. **Names**: `snake_case` for functions and variables.
+3. **Structures**: `struct` for data and `enum class` for opcodes.
+4. **Memory**: RAII and standard containers (`std::vector`, `std::string`); no `malloc`/`free`.
+5. **Errors**: diagnostic structs with line/column; the CLI prints them to `stderr`.
+6. **Language**: all code, comments, documentation and commit messages are
+   written in English (see `CONVENTIONS.md`). Comments are concise and only
+   where they add value.
+7. **Every new `.cpp`** has its `.h` in `include/`.
+8. **No mutable global variables** except the VM's globals table.
+9. **Build with**: `g++ -std=c++17 -Wall -Wextra -O2`
 
 ---
 
-## 7. Estilo de respuesta del agente
+## 6. Mandatory checklist for every new feature
 
-- ✅ Explicar el **concepto** antes del código.
-- ✅ Mostrar archivos **completos** modificados (no fragmentos).
-- ✅ Incluir un programa `.jolt` de prueba con cada feature nueva.
-- ✅ Señalar qué **NO** hacer y por qué (evitar el error de Java).
-- ✅ Advertir si una decisión afecta al diseño futuro (compilación nativa).
-- ❌ No añadir features no pedidas (evitar scope creep).
-- ❌ No proponer soluciones fuera de las fases actuales.
+Before writing **a single line of code**, the agent must answer and show the
+user:
 
----
+Do I need a new token in the lexer? → which one
 
-## 8. Prohibiciones explícitas
+Do I need a new node in the AST? → which one
 
-El agente **NO debe** proponer ni implementar:
+Do I need a new rule in the parser? → which one
 
-| Prohibido | Razón |
-|-----------|-------|
-| VM stack-based | Jolt es register-based (estilo Lua) |
-| Bytecode de alto nivel (`OP_EVAL_EXPR`) | Rompe la compilación nativa futura |
-| JIT (compilador en caliente) | Nivel 6, años de trabajo, no es objetivo actual |
-| Migrar el núcleo a C puro | El núcleo se mantiene en C++17 |
-| Añadir features sin probar la anterior | Rompe el desarrollo incremental |
-| Saltar el checklist de 7 puntos | Genera deuda arquitectónica |
-| Bibliotecas externas | Solo biblioteca estándar de C++ |
+Do I need a new opcode in the bytecode? → which one
+
+Does the opcode map to 1 ASM instruction? → yes/no (if not, redesign)
+
+Do I need new logic in the VM? → which one
+
+Do I need new logic in the compiler? → which one
+
+Without this checklist complete and approved, **do not proceed to code**.
 
 ---
 
-## 9. Comandos que el agente debe reconocer
+## 7. Agent response style
 
-| Comando del usuario | Acción del agente |
+- ✅ Explain the **concept** before the code.
+- ✅ Show the **complete** modified files (not fragments).
+- ✅ Include a test `.jolt` program with every new feature.
+- ✅ Point out what **NOT** to do and why (avoid Java's mistake).
+- ✅ Warn when a decision affects the future design (native compilation).
+- ❌ Do not add unrequested features (avoid scope creep).
+- ❌ Do not propose solutions outside the current phases.
+
+---
+
+## 8. Explicit prohibitions
+
+The agent **must NOT** propose or implement:
+
+| Prohibited | Reason |
+|-----------|--------|
+| Stack-based VM | Jolt is register-based (Lua style) |
+| High-level bytecode (`OP_EVAL_EXPR`) | Breaks future native compilation |
+| JIT (hot compiler) | Level 6, years of work, not a current goal |
+| Migrating the core to pure C | The core stays in C++17 |
+| Adding features without testing the previous one | Breaks incremental development |
+| Skipping the 7-point checklist | Creates architectural debt |
+| External libraries | C++ standard library only |
+
+---
+
+## 9. Commands the agent must recognize
+
+| User command | Agent action |
 |---------------------|-------------------|
-| `empezar` | Iniciar FASE 1: mostrar `bytecode.h` completo y esperar aprobación |
-| `fase N completada` | Verificar, actualizar estado, proponer FASE N+1 |
-| `añadir <feature>` | Aplicar checklist de 7 puntos, luego codificar |
-| `revisar <archivo>` | Verificar contra reglas del bytecode, señalar violaciones |
-| `estado` | Mostrar resumen de fases y checklist |
-| `resumen` | Resumir lo hecho en la sesión y actualizar estado |
+| `start` | Begin PHASE 1: show the complete `bytecode.h` and wait for approval |
+| `phase N done` | Verify, update the status, propose PHASE N+1 |
+| `add <feature>` | Apply the 7-point checklist, then code |
+| `review <file>` | Verify against the bytecode rules, point out violations |
+| `status` | Show a summary of the phases and the checklist |
+| `summary` | Summarize what was done in the session and update the status |
 
 ---
 
-## 10. Contexto histórico
+## 10. Historical context
 
-- Existe un **intérprete de AST previo** (MiniLang, renombrado a Jolt) que se
-  conserva únicamente como **oráculo de pruebas diferenciales** mientras se
-  alcanza la paridad con la VM.
-- El modelo del producto es el de **Lua/LuaJIT**: fuente → lexer → parser → AST
-  → compilador → bytecode → VM. El AST **no se ejecuta** en producción.
-- El enfoque "dual" (intérprete AST como motor alternativo) **NO** se preserva.
-  Cuando la VM cubra el lenguaje (FASE 4), el intérprete AST sale del binario y
-  queda solo en tests, y después se retira.
-- Las fases se ejecutan en orden: 5 ✅, 6, luego 4 (VM como único motor) y 7.
-
----
-
-## 11. Recursos de referencia (para el agente)
-
-- *Crafting Interpreters* (Robert Nystrom) — fundamentos
-- *The Implementation of Lua 5.0* — diseño de la VM de registros
-- LuaJIT source code (Mike Pall) — referencia de rendimiento
-- System V ABI AMD64 — convención de llamadas (FASE 7)
+- There is a **previous AST interpreter** (MiniLang, renamed Jolt) that is
+  kept only as a **differential test oracle** while parity with the VM is
+  being reached.
+- The product model is Lua/LuaJIT's: source → lexer → parser → AST → compiler
+  → bytecode → VM. The AST is **not executed** in production.
+- The "dual" approach (AST interpreter as an alternative engine) is **NOT**
+  preserved. Once the VM covers the language (PHASE 4), the AST interpreter
+  leaves the binary and stays only in tests, and is retired afterwards.
+- The phases run in order: 5 ✅, 6, then 4 (VM as the only engine) and 7.
 
 ---
 
-## 12. Primera tarea
+## 11. Reference resources (for the agent)
 
-Cuando el usuario escriba **`empezar`**, el agente debe:
+- *Crafting Interpreters* (Robert Nystrom) — fundamentals
+- *The Implementation of Lua 5.0* — register VM design
+- LuaJIT source code (Mike Pall) — performance reference
+- System V ABI AMD64 — calling convention (PHASE 7)
 
-1. Confirmar el diseño de `include/bytecode.h` con los opcodes mínimos.
-2. Mostrar el **archivo completo**.
-3. Explicar por qué cada opcode mapea a ASM.
-4. Esperar **aprobación explícita** antes de pasar a la siguiente fase.
+---
+
+## 12. First task
+
+When the user types **`start`**, the agent must:
+
+1. Confirm the design of `include/bytecode.h` with the minimum opcodes.
+2. Show the **complete file**.
+3. Explain why each opcode maps to ASM.
+4. Wait for **explicit approval** before moving on to the next phase.
