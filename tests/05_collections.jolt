@@ -137,6 +137,31 @@ for key in {b: 1, a: 2} {
 }
 assert_eq(map_keys, ["b", "a"]);
 
+// Map keys: scalar literals are canonicalized to strings, and computed
+// keys use the [expr] syntax.
+fn key_of(n) { return "k" + str(n); }
+let keyed = {1: "one", true: "yes", nil: "nothing", [2 + 2]: "four", [key_of(2)]: "two"};
+assert_eq(keyed["1"], "one");
+assert_eq(keyed["true"], "yes");
+assert_eq(keyed["nil"], "nothing");
+assert_eq(keyed["4"], "four");
+assert_eq(keyed["k2"], "two");
+
+// Range iteration is lazy: huge ranges never materialize an array.
+let counted = 0;
+for i in 0..1000000000 {
+  counted = counted + 1;
+  if (i == 2) { break; }
+}
+assert_eq(counted, 3);
+
+let skipped = [];
+for j in 5..=1 {
+  if (j == 3) { continue; }
+  skipped.push(j);
+}
+assert_eq(skipped, [5, 4, 2, 1]);
+
 // Ranges.
 let r = 1..5;
 assert_eq(type(r), "range");

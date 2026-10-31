@@ -536,7 +536,7 @@ for n in 1..=3 {
 }
 ```
 
-The iterable is evaluated only once. For arrays and maps, a snapshot of their elements or keys is taken when the loop starts. The iteration variable gets a fresh binding on every turn, so closures created inside the body capture different values.
+The iterable is evaluated only once. For arrays and maps, a snapshot of their elements or keys is taken when the loop starts. Ranges are iterated lazily: no intermediate array is created, so `for i in 0..1000000000 { ... }` runs in constant memory. The iteration variable gets a fresh binding on every turn, so closures created inside the body capture different values.
 
 ### 6.7 `break` and `continue`
 
@@ -827,7 +827,7 @@ assert_eq("5".pad_start(3, "0"), "005");
 
 ### 10.1 Literals
 
-The keys of a literal must be plain strings or identifiers:
+Keys in a literal can be identifiers, string literals, scalar literals (`int`, `true`, `false`, `nil`) or computed expressions in brackets:
 
 ```jolt
 let person = {
@@ -835,9 +835,18 @@ let person = {
   age: 36,
   "key with spaces": true,
 };
+
+// Scalar literals are canonicalized to their string form.
+let coded = {1: "one", true: "yes", nil: "nothing"};
+assert_eq(coded["1"], "one");
+
+// Computed keys use the [expr] syntax and are evaluated at runtime.
+let n = 2;
+let dyn = {[n * 10]: "twenty", ["a" + n]: "a2"};
+assert_eq(dyn["20"], "twenty");
 ```
 
-Computed or interpolated keys are not accepted in the literal. If a key is repeated, the last value wins, but the position of its first appearance is kept.
+All map keys are strings internally: scalar and computed keys are normalized with the value's canonical string form (for example `1` becomes `"1"`), so lookups always use strings. If a key is repeated, the last value wins, but the position of its first appearance is kept.
 
 ### 10.2 Access and assignment
 
@@ -922,6 +931,8 @@ assert_eq((3..=0).to_array(), [3, 2, 1, 0]);
 - Equality compares start, end and inclusiveness: `1..3 != 1..=3`.
 
 The `range(end)` function produces `0..end`, and `range(start, end)` produces `start..end` (always exclusive).
+
+Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `to_array()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements.
 
 ```jolt
 assert_eq(2 in 1..5, true);
@@ -1130,7 +1141,7 @@ for argument in args() {
 - No `try`/`catch` or exceptions that can be caught from the language.
 - No modules or `import`. In the REPL you can use `:load`.
 - No `switch`, `do`/`while`, `++`, `--`, default parameters or variadic arguments in user functions.
-- Map keys are always strings and literals only accept simple keys.
+- Map keys are always strings. Literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
 - `for ... in` does not accept parentheses around the variable and the iterable.
 - No slicing syntax for strings or arrays; methods such as `substr` and `slice` are used.

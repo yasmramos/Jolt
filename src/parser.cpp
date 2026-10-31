@@ -499,7 +499,10 @@ ExprPtr Parser::parsePrimary() {
     if (!check(Tok::RBrace)) {
       while (true) {
         if (check(Tok::RBrace)) break;
+        // Key forms: identifier, string literal, numeric/bool/nil literal
+        // (stored as literalKey), or `[expr]` for computed keys (keyExpr).
         std::string key;
+        ExprPtr keyExpr;
         if (check(Tok::Ident)) {
           key = advance().lexeme;
         } else if (check(Tok::Str)) {
@@ -508,11 +511,28 @@ ExprPtr Parser::parsePrimary() {
             error(keyToken, "map keys must be plain strings or identifiers");
           }
           key = keyToken.parts[0].text;
+        } else if (check(Tok::Int)) {
+          key = std::to_string(advance().intValue);
+        } else if (check(Tok::Float)) {
+          key = Value(previous().floatValue).toString();
+        } else if (check(Tok::True)) {
+          advance();
+          key = "true";
+        } else if (check(Tok::False)) {
+          advance();
+          key = "false";
+        } else if (check(Tok::Nil)) {
+          advance();
+          key = "nil";
+        } else if (check(Tok::LBracket)) {
+          advance();
+          keyExpr = parseExpression();
+          consume(Tok::RBracket, "expected ']' after the computed map key");
         } else {
-          error(peek(), "expected a string or identifier as a map key");
+          error(peek(), "expected a string, identifier, scalar literal or [expr] map key");
         }
         consume(Tok::Colon, "expected ':' after the map key");
-        entries.push_back(MapEntry{key, parseExpression()});
+        entries.push_back(MapEntry{std::move(key), std::move(keyExpr), parseExpression()});
         if (!match(Tok::Comma)) break;
       }
     }
@@ -554,12 +574,12 @@ ExprPtr Parser::buildString(const Token& token) {
       try {
         auto tokens = lex(part.text, part.line, part.col);
         Parser sub(std::move(tokens), where_);
-        piece.expr = sub.parseFullExpression();
+        piece.content = sub.parseFullExpression();
       } catch (const CompileError& err) {
         throw CompileError{"in string interpolation: " + err.message, err.line, err.col};
       }
     } else {
-      piece.text = part.text;
+      piece.content = part.text;
     }
     node.parts.push_back(std::move(piece));
   }

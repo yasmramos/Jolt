@@ -246,7 +246,7 @@ Current limitations:
 - There is no `try`/`catch` or exceptions that can be caught from the language.
 - There is no `import`/modules; in the REPL you can use `:load`.
 - There is no `switch`, `do`/`while`, `++`/`--` or default parameters.
-- Map keys are always strings and map literals only accept simple keys.
+- Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - Braces are mandatory in the bodies of `if`, `while` and `for`.
 - There is no slicing syntax (`s[1:3]`); use `substr`, `slice`, etc.
 - `upper` and `lower` only transform ASCII letters.
