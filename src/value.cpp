@@ -209,9 +209,10 @@ int64_t Range::length() const {
 }
 
 ArrayPtr makeArray(std::vector<Value> items) {
-  auto array = makeRef<Array>();
-  array->items = std::move(items);
-  return array;
+  // Construct in a single step: `array->items = std::move(items)` would leave
+  // the source vector alive with its elements still holding references, which
+  // keeps self-referencing containers (cycles) from ever reaching refs == 0.
+  return makeRef<Array>(std::move(items));
 }
 
 MapPtr makeMap() { return makeRef<Map>(); }

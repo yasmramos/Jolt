@@ -14,6 +14,9 @@ class Interpreter;
 struct Env;
 struct Stmt;
 
+template <typename T>
+class Ref;
+
 struct Value;
 struct Array;
 struct Map;
@@ -23,9 +26,104 @@ struct Range;
 // Single-threaded reference counting for VM values. The interpreter/VM do not
 // share values across threads, so a non-atomic counter is enough and avoids
 // the overhead of std::shared_ptr in register transfers.
+//
+// Destruction is driven by a per-type function pointer installed at creation
+// time instead of a virtual destructor. This keeps objects polymorphic-free
+// (smaller, no vtable indirection on release) and makes `Ref<T>::release()`
+// destroy derived objects correctly even when the static type is `RefCounted`.
 struct RefCounted {
+  using DestroyFn = void (*)(void*);
+
   mutable std::uint32_t refs = 1;
-  virtual ~RefCounted() = default;
+
+  // Number of live WeakRef handles pointing at this object. The counter is
+  // kept non-zero while weak handles exist, so `refs` never reaches 0 and the
+  // object is never destroyed as long as someone may still observe it through
+  // a weak handle. `WeakRef::reset()` drops this pin when the last handle
+  // dies (see Ref::~Ref).
+  mutable std::uint32_t weakRefs = 0;
+
+  // Not virtual on purpose: cleanup runs through `destroy` below. Adding a
+  // virtual destructor here would silently break cycle-safe deletion because
+  // `delete` on a `RefCounted*` without a vtable is undefined behavior.
+  ~RefCounted() = default;
+
+ private:
+  template <typename>
+  friend class Ref;
+  template <typename>
+  friend class WeakRef;
+  template <typename T, typename... Args>
+  friend Ref<T> makeRef(Args&&... args);
+  DestroyFn destroy = nullptr;
+};
+
+// A non-owning handle to a reference-counted object. Used to break ownership
+// cycles (e.g. a container whose bound methods would otherwise retain the
+// container itself). `lock()` returns an owning Ref while the object is still
+// reachable through at least one strong reference; it returns an empty Ref
+// once every strong reference has been dropped.
+template <typename T>
+class WeakRef {
+ public:
+  WeakRef() noexcept = default;
+
+  WeakRef(const Ref<T>& ref) noexcept : ptr_(ref.get()) {
+    if (ptr_) ++ptr_->weakRefs;
+  }
+
+  WeakRef(const WeakRef& other) noexcept : ptr_(other.ptr_) {
+    if (ptr_) ++ptr_->weakRefs;
+  }
+
+  WeakRef(WeakRef&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+
+  ~WeakRef() { reset(); }
+
+  WeakRef& operator=(const WeakRef& other) noexcept {
+    if (this != &other) {
+      reset();
+      ptr_ = other.ptr_;
+      if (ptr_) ++ptr_->weakRefs;
+    }
+    return *this;
+  }
+
+  WeakRef& operator=(WeakRef&& other) noexcept {
+    if (this != &other) {
+      reset();
+      ptr_ = other.ptr_;
+      other.ptr_ = nullptr;
+    }
+    return *this;
+  }
+
+  bool expired() const noexcept { return ptr_ == nullptr || ptr_->refs <= 1; }
+
+  // True when this handle observes exactly the given object. Used by
+  // `Interpreter::receiverOf` to check that the transient active receiver is
+  // the one this method was bound to before adopting it.
+  bool matches(const void* candidate) const noexcept { return ptr_ == candidate; }
+
+  // Returns an owning reference, or an empty Ref when the object is no longer
+  // strongly reachable.
+  Ref<T> lock() const noexcept {
+    if (!ptr_ || ptr_->refs <= 1) return Ref<T>();
+    return Ref<T>(ptr_);
+  }
+
+ private:
+  void reset() noexcept {
+    if (!ptr_) return;
+    // The weak pin keeps `refs` above zero, so decrementing here can never
+    // trigger destruction; a pending strong release re-runs the check.
+    if (--ptr_->weakRefs == 0 && ptr_->refs == 1) {
+      ptr_->destroy(ptr_);
+    }
+    ptr_ = nullptr;
+  }
+
+  T* ptr_ = nullptr;
 };
 
 template <typename T>
@@ -36,6 +134,10 @@ class Ref {
 
   Ref(const Ref& other) noexcept : ptr_(other.ptr_) { retain(); }
   Ref(Ref&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+
+  // Only declared (not defined): a copy constructor from WeakRef would bypass
+  // the `refs > weak pin` reachability check. Use `WeakRef::lock()` instead.
+  Ref(const WeakRef<T>&);
   ~Ref() { release(); }
 
   Ref& operator=(const Ref& other) noexcept {
@@ -70,7 +172,18 @@ class Ref {
   }
 
   void release() noexcept {
-    if (ptr_ && --ptr_->refs == 0) delete ptr_;
+    if (ptr_ && --ptr_->refs == 0) {
+      // Destruction goes through the per-type hook installed by `makeRef`.
+      // `delete static_cast<T*>(ptr_)` would be undefined behavior for any
+      // object reachable only through a base (`RefCounted*`) pointer, such as
+      // the inner Value of a self-referencing container.
+      ptr_->destroy(ptr_);
+    } else if (ptr_ && ptr_->refs == 1 && ptr_->weakRefs > 0) {
+      // Last strong reference dropped while weak handles still observe the
+      // object: the weak pin (refs >= 1) keeps it alive until the final weak
+      // handle resets, which performs the deferred destruction.
+      --ptr_->refs;
+    }
   }
 
   RefCounted* ptr_ = nullptr;
@@ -78,7 +191,14 @@ class Ref {
 
 template <typename T, typename... Args>
 Ref<T> makeRef(Args&&... args) {
-  return Ref<T>(new T(std::forward<Args>(args)...));
+  static_assert(std::is_base_of<RefCounted, T>::value,
+                "Ref<T> targets must derive from RefCounted");
+  T* object = new T(std::forward<Args>(args)...);
+  // The lambda converts `void*` to `T*` and deletes through the concrete
+  // type, so members are destroyed correctly regardless of how the object is
+  // later referenced. Marked non-capturing: stored as a plain function ptr.
+  object->destroy = [](void* p) { delete static_cast<T*>(p); };
+  return Ref<T>(object);
 }
 
 struct StringObj : RefCounted {
@@ -187,10 +307,15 @@ struct Value {
   // Jolt strings are immutable. The shared object is never exposed as mutable.
   const std::string& asStr() const { return data.string->value; }
 
+  StringPtr strPtr() const { return data.string; }
   ArrayPtr arrayPtr() const { return data.array; }
   MapPtr mapPtr() const { return data.map; }
   FuncPtr funcPtr() const { return data.function; }
   RangePtr rangePtr() const { return data.range; }
+
+  // Mutable access to the stored function reference, used by `bindMethod` to
+  // stamp the receiver identity on freshly created bound methods.
+  FuncPtr& funcRef() { return data.function; }
 
   Array& arr() const;
   Map& map() const;
@@ -313,6 +438,9 @@ using CellPtr = Ref<Cell>;
 
 struct Array : RefCounted {
   std::vector<Value> items;
+
+  Array() = default;
+  explicit Array(std::vector<Value> init) : items(std::move(init)) {}
 };
 
 // Insertion-ordered string-keyed map.
@@ -334,8 +462,19 @@ struct Function : RefCounted {
   std::string name;
   std::vector<std::string> params;
   std::shared_ptr<Stmt> body;
+  // Lexical scope captured at definition time. `Env` (declared in
+  // interpreter.h) is only ever used through `std::shared_ptr`, which supports
+  // incomplete pointed-to types here, so value.h stays free of interpreter
+  // dependencies. The destructor instantiated in translation units that do
+  // see the full `Env` type destroys the chain correctly.
   std::shared_ptr<Env> closure;
   NativeFn native;
+  // For bound methods created by `bindMethod`: the raw identity of the
+  // receiver object (never owning!). Interpreter::call moves it into the
+  // interpreter's transient field before running the native, and the
+  // callback re-adopts it through `resolveReceiver`, so stored methods do
+  // not keep their receiver alive (`a.push(a)` stays collectable).
+  RefCounted* boundReceiver = nullptr;
 
   bool isNative() const { return static_cast<bool>(native); }
 };

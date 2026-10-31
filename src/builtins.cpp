@@ -118,95 +118,117 @@ void sortItems(Interpreter& in, std::vector<Value>& items, const Value* comparat
   }
 }
 
+
+// Resolves the live container for a weakly-captured bound method. Defined at
+// namespace scope so every native lambda below can call it without capturing
+// anything but its own `WeakRef` handle (see bindArray/bindMap comments).
+template <typename T>
+static Ref<T> receiverOf(Interpreter& in, const WeakRef<T>& captured) {
+  return in.receiverOf(in, captured);
+}
+
 // --------------------------------------------------------------- array methods
 
-bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& out) {
-  (void)in;
+bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& name, Value& out) {
+  // Weak capture: bound methods must not keep their receiver alive,
+  // otherwise storing a method inside its own container (`a.push(a.map(...))`)
+  // creates an unbreakable refcount cycle. The live object is resolved at
+  // call time through `Function::boundReceiver` (see Interpreter::call).
+  WeakRef<Array> array(strongArray);
+
 
   if (name == "push") {
-    out = makeNative("array.push", [array](Interpreter&, Args args) -> Value {
-      for (auto& arg : args) array->items.push_back(arg);
-      return Value(array);
+    out = makeNative("array.push", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
+      for (auto& arg : args) self->items.push_back(arg);
+      return Value(self);
     });
     return true;
   }
   if (name == "pop") {
     out = makeNative("array.pop", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "pop", args, 0);
-      if (array->items.empty()) return Value();
-      Value value = std::move(array->items.back());
-      array->items.pop_back();
+      if (self->items.empty()) return Value();
+      Value value = std::move(self->items.back());
+      self->items.pop_back();
       return value;
     });
     return true;
   }
   if (name == "shift") {
     out = makeNative("array.shift", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "shift", args, 0);
-      if (array->items.empty()) return Value();
-      Value value = std::move(array->items.front());
-      array->items.erase(array->items.begin());
+      if (self->items.empty()) return Value();
+      Value value = std::move(self->items.front());
+      self->items.erase(self->items.begin());
       return value;
     });
     return true;
   }
   if (name == "unshift") {
     out = makeNative("array.unshift", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "unshift", args, 1);
-      array->items.insert(array->items.begin(), args[0]);
-      return Value(array);
+      self->items.insert(self->items.begin(), args[0]);
+      return Value(self);
     });
     return true;
   }
   if (name == "insert") {
     out = makeNative("array.insert", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "insert", args, 2);
       int64_t index = wantInt(in, "insert", args[0], "index");
-      int64_t length = static_cast<int64_t>(array->items.size());
+      int64_t length = static_cast<int64_t>(self->items.size());
       if (index < 0) index += length;
       if (index < 0 || index > length) {
         in.fail("insert() index out of range (length " + std::to_string(length) + ")");
       }
-      array->items.insert(array->items.begin() + index, args[1]);
-      return Value(array);
+      self->items.insert(self->items.begin() + index, args[1]);
+      return Value(self);
     });
     return true;
   }
   if (name == "remove_at") {
     out = makeNative("array.remove_at", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "remove_at", args, 1);
       int64_t index = wantInt(in, "remove_at", args[0], "index");
-      int64_t length = static_cast<int64_t>(array->items.size());
+      int64_t length = static_cast<int64_t>(self->items.size());
       if (index < 0) index += length;
       if (index < 0 || index >= length) {
         in.fail("remove_at() index out of range (length " + std::to_string(length) + ")");
       }
-      Value value = std::move(array->items[static_cast<size_t>(index)]);
-      array->items.erase(array->items.begin() + index);
+      Value value = std::move(self->items[static_cast<size_t>(index)]);
+      self->items.erase(self->items.begin() + index);
       return value;
     });
     return true;
   }
   if (name == "slice") {
     out = makeNative("array.slice", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       needBetween(in, "slice", args, 0, 2);
-      int64_t length = static_cast<int64_t>(array->items.size());
+      int64_t length = static_cast<int64_t>(self->items.size());
       int64_t start = args.size() > 0 ? wantInt(in, "slice", args[0], "start") : 0;
       int64_t end = args.size() > 1 ? wantInt(in, "slice", args[1], "end") : length;
       start = clampIndex(start, length);
       end = clampIndex(end, length);
       if (end < start) end = start;
       std::vector<Value> items;
-      for (int64_t i = start; i < end; ++i) items.push_back(array->items[static_cast<size_t>(i)]);
+      for (int64_t i = start; i < end; ++i) items.push_back(self->items[static_cast<size_t>(i)]);
       return Value(makeArray(std::move(items)));
     });
     return true;
   }
   if (name == "concat") {
     out = makeNative("array.concat", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "concat", args, 1);
-      if (!args[0].isArray()) in.fail("concat() expects an array");
-      std::vector<Value> items = array->items;
+      if (!args[0].isArray()) in.fail("concat() expects an self");
+      std::vector<Value> items = self->items;
       items.insert(items.end(), args[0].arr().items.begin(), args[0].arr().items.end());
       return Value(makeArray(std::move(items)));
     });
@@ -214,12 +236,13 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "join") {
     out = makeNative("array.join", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       needBetween(in, "join", args, 0, 1);
       std::string separator = args.empty() ? "" : args[0].toString();
       std::string result;
-      for (size_t i = 0; i < array->items.size(); ++i) {
+      for (size_t i = 0; i < self->items.size(); ++i) {
         if (i) result += separator;
-        result += array->items[i].toString();
+        result += self->items[i].toString();
       }
       return Value(std::move(result));
     });
@@ -227,16 +250,18 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "sort") {
     out = makeNative("array.sort", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       needBetween(in, "sort", args, 0, 1);
-      sortItems(in, array->items, args.empty() ? nullptr : &args[0], "sort");
-      return Value(array);
+      sortItems(in, self->items, args.empty() ? nullptr : &args[0], "sort");
+      return Value(self);
     });
     return true;
   }
   if (name == "sorted") {
     out = makeNative("array.sorted", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       needBetween(in, "sorted", args, 0, 1);
-      std::vector<Value> items = array->items;
+      std::vector<Value> items = self->items;
       sortItems(in, items, args.empty() ? nullptr : &args[0], "sorted");
       return Value(makeArray(std::move(items)));
     });
@@ -244,8 +269,9 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "reversed") {
     out = makeNative("array.reversed", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "reversed", args, 0);
-      std::vector<Value> items = array->items;
+      std::vector<Value> items = self->items;
       std::reverse(items.begin(), items.end());
       return Value(makeArray(std::move(items)));
     });
@@ -253,8 +279,9 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "contains") {
     out = makeNative("array.contains", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "contains", args, 1);
-      for (const auto& item : array->items) {
+      for (const auto& item : self->items) {
         if (item.equals(args[0])) return Value(true);
       }
       return Value(false);
@@ -263,9 +290,10 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "index_of") {
     out = makeNative("array.index_of", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "index_of", args, 1);
-      for (size_t i = 0; i < array->items.size(); ++i) {
-        if (array->items[i].equals(args[0])) return Value(static_cast<int64_t>(i));
+      for (size_t i = 0; i < self->items.size(); ++i) {
+        if (self->items[i].equals(args[0])) return Value(static_cast<int64_t>(i));
       }
       return Value(static_cast<int64_t>(-1));
     });
@@ -273,19 +301,21 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "map") {
     out = makeNative("array.map", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "map", args, 1);
       std::vector<Value> result;
-      result.reserve(array->items.size());
-      for (const auto& item : array->items) result.push_back(invoke(in, args[0], {item}, "map()"));
+      result.reserve(self->items.size());
+      for (const auto& item : self->items) result.push_back(invoke(in, args[0], {item}, "map()"));
       return Value(makeArray(std::move(result)));
     });
     return true;
   }
   if (name == "filter") {
     out = makeNative("array.filter", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "filter", args, 1);
       std::vector<Value> result;
-      for (const auto& item : array->items) {
+      for (const auto& item : self->items) {
         if (invoke(in, args[0], {item}, "filter()").truthy()) result.push_back(item);
       }
       return Value(makeArray(std::move(result)));
@@ -294,18 +324,19 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "reduce") {
     out = makeNative("array.reduce", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       needBetween(in, "reduce", args, 1, 2);
       size_t index = 0;
       Value accumulator;
       if (args.size() == 2) {
         accumulator = args[1];
       } else {
-        if (array->items.empty()) in.fail("reduce() of an empty array needs an initial value");
-        accumulator = array->items[0];
+        if (self->items.empty()) in.fail("reduce() of an empty self needs an initial value");
+        accumulator = self->items[0];
         index = 1;
       }
-      for (; index < array->items.size(); ++index) {
-        accumulator = invoke(in, args[0], {accumulator, array->items[index]}, "reduce()");
+      for (; index < self->items.size(); ++index) {
+        accumulator = invoke(in, args[0], {accumulator, self->items[index]}, "reduce()");
       }
       return accumulator;
     });
@@ -313,16 +344,18 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "each") {
     out = makeNative("array.each", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "each", args, 1);
-      for (const auto& item : array->items) invoke(in, args[0], {item}, "each()");
-      return Value(array);
+      for (const auto& item : self->items) invoke(in, args[0], {item}, "each()");
+      return Value(self);
     });
     return true;
   }
   if (name == "find") {
     out = makeNative("array.find", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "find", args, 1);
-      for (const auto& item : array->items) {
+      for (const auto& item : self->items) {
         if (invoke(in, args[0], {item}, "find()").truthy()) return item;
       }
       return Value();
@@ -331,8 +364,9 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "any") {
     out = makeNative("array.any", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "any", args, 1);
-      for (const auto& item : array->items) {
+      for (const auto& item : self->items) {
         if (invoke(in, args[0], {item}, "any()").truthy()) return Value(true);
       }
       return Value(false);
@@ -341,8 +375,9 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "all") {
     out = makeNative("array.all", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "all", args, 1);
-      for (const auto& item : array->items) {
+      for (const auto& item : self->items) {
         if (!invoke(in, args[0], {item}, "all()").truthy()) return Value(false);
       }
       return Value(true);
@@ -351,12 +386,13 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "sum") {
     out = makeNative("array.sum", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "sum", args, 0);
       bool allInts = true;
       int64_t intTotal = 0;
       double floatTotal = 0;
-      for (const auto& item : array->items) {
-        if (!item.isNumber()) in.fail("sum() expects an array of numbers");
+      for (const auto& item : self->items) {
+        if (!item.isNumber()) in.fail("sum() expects an self of numbers");
         if (item.isInt() && allInts) {
           intTotal = static_cast<int64_t>(static_cast<uint64_t>(intTotal) +
                                           static_cast<uint64_t>(item.asInt()));
@@ -372,16 +408,18 @@ bool bindArray(Interpreter& in, ArrayPtr array, const std::string& name, Value& 
   }
   if (name == "clear") {
     out = makeNative("array.clear", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "clear", args, 0);
-      array->items.clear();
-      return Value(array);
+      self->items.clear();
+      return Value(self);
     });
     return true;
   }
   if (name == "clone") {
     out = makeNative("array.clone", [array](Interpreter& in, Args args) -> Value {
+      ArrayPtr self = receiverOf(in, array);
       need(in, "clone", args, 0);
-      return Value(makeArray(array->items));
+      return Value(makeArray(self->items));
     });
     return true;
   }
@@ -400,7 +438,9 @@ std::string asciiUpper(std::string text) {
   return text;
 }
 
-bool bindString(Interpreter& in, const std::string& text, const std::string& name, Value& out) {
+bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Value& out) {
+  // The captured object is a RefCounted string; work on its payload directly.
+  const std::string& text = receiver->value;
   (void)in;
 
   if (name == "upper") {
@@ -642,32 +682,35 @@ bool bindString(Interpreter& in, const std::string& text, const std::string& nam
 
 // ----------------------------------------------------------------- map methods
 
-bool bindMap(Interpreter& in, MapPtr map, const std::string& name, Value& out) {
-  (void)in;
-
+bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, Value& out) {
+  // Weak capture, see bindArray above.
+  WeakRef<Map> map(strongMap);
   if (name == "keys") {
     out = makeNative("map.keys", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "keys", args, 0);
       std::vector<Value> items;
-      for (const auto& entry : map->entries) items.emplace_back(entry.first);
+      for (const auto& entry : self->entries) items.emplace_back(entry.first);
       return Value(makeArray(std::move(items)));
     });
     return true;
   }
   if (name == "values") {
     out = makeNative("map.values", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "values", args, 0);
       std::vector<Value> items;
-      for (const auto& entry : map->entries) items.push_back(entry.second);
+      for (const auto& entry : self->entries) items.push_back(entry.second);
       return Value(makeArray(std::move(items)));
     });
     return true;
   }
   if (name == "entries") {
     out = makeNative("map.entries", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "entries", args, 0);
       std::vector<Value> items;
-      for (const auto& entry : map->entries) {
+      for (const auto& entry : self->entries) {
         items.push_back(Value(makeArray({Value(entry.first), entry.second})));
       }
       return Value(makeArray(std::move(items)));
@@ -676,17 +719,19 @@ bool bindMap(Interpreter& in, MapPtr map, const std::string& name, Value& out) {
   }
   if (name == "has") {
     out = makeNative("map.has", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "has", args, 1);
       std::string key = wantString(in, "has", args[0], "key");
-      return Value(map->has(key));
+      return Value(self->has(key));
     });
     return true;
   }
   if (name == "get") {
     out = makeNative("map.get", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       needBetween(in, "get", args, 1, 2);
       std::string key = wantString(in, "get", args[0], "key");
-      const Value* found = map->get(key);
+      const Value* found = self->get(key);
       if (found) return *found;
       return args.size() > 1 ? args[1] : Value();
     });
@@ -694,43 +739,49 @@ bool bindMap(Interpreter& in, MapPtr map, const std::string& name, Value& out) {
   }
   if (name == "set") {
     out = makeNative("map.set", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "set", args, 2);
       std::string key = wantString(in, "set", args[0], "key");
-      map->set(key, args[1]);
-      return Value(map);
+      self->set(key, args[1]);
+      return Value(self);
     });
     return true;
   }
   if (name == "delete") {
     out = makeNative("map.delete", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "delete", args, 1);
       std::string key = wantString(in, "delete", args[0], "key");
-      return Value(map->erase(key));
+      return Value(self->erase(key));
     });
     return true;
   }
   if (name == "clear") {
     out = makeNative("map.clear", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "clear", args, 0);
-      map->clear();
-      return Value(map);
+      self->clear();
+      return Value(self);
     });
     return true;
   }
   if (name == "merge") {
     out = makeNative("map.merge", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "merge", args, 1);
       if (!args[0].isMap()) in.fail("merge() expects a map");
-      for (const auto& entry : args[0].map().entries) map->set(entry.first, entry.second);
-      return Value(map);
+      MapPtr other = args[0].mapPtr();
+      for (const auto& entry : other->entries) self->set(entry.first, entry.second);
+      return Value(self);
     });
     return true;
   }
   if (name == "clone") {
     out = makeNative("map.clone", [map](Interpreter& in, Args args) -> Value {
+      MapPtr self = receiverOf(in, map);
       need(in, "clone", args, 0);
       auto copy = makeMap();
-      for (const auto& entry : map->entries) copy->set(entry.first, entry.second);
+      for (const auto& entry : self->entries) copy->set(entry.first, entry.second);
       return Value(std::move(copy));
     });
     return true;
@@ -775,11 +826,28 @@ bool bindRange(Interpreter& in, RangePtr range, const std::string& name, Value& 
 }  // namespace
 
 bool bindMethod(Interpreter& interp, const Value& receiver, const std::string& name, Value& out) {
-  if (receiver.isArray()) return bindArray(interp, receiver.arrayPtr(), name, out);
-  if (receiver.isStr()) return bindString(interp, receiver.asStr(), name, out);
-  if (receiver.isMap()) return bindMap(interp, receiver.mapPtr(), name, out);
-  if (receiver.isRange()) return bindRange(interp, receiver.rangePtr(), name, out);
-  return false;
+  bool bound = false;
+  if (receiver.isArray()) bound = bindArray(interp, receiver.arrayPtr(), name, out);
+  else if (receiver.isStr()) bound = bindString(interp, receiver.strPtr(), name, out);
+  else if (receiver.isMap()) bound = bindMap(interp, receiver.mapPtr(), name, out);
+  else if (receiver.isRange()) bound = bindRange(interp, receiver.rangePtr(), name, out);
+  if (!bound) return false;
+
+  // Record the receiver identity on the produced closure. Mutable receivers
+  // (arrays/maps) are stored as a raw non-owning pointer that
+  // Interpreter::call hands over to `resolveReceiver` right before the
+  // native runs: this breaks the ownership cycle that a plain capture would
+  // create when a method is stored inside its own receiver (`a.push(a)`).
+  if (out.isFunc()) {
+    // Copy the function so every bound method owns a private `Function`
+    // object; stamping the receiver on a shared closure would leak the
+    // identity to unrelated bindings of the same native.
+    FuncPtr copy = makeRef<Function>(*out.funcRef());
+    if (receiver.isArray()) copy->boundReceiver = receiver.arrayPtr().get();
+    else if (receiver.isMap()) copy->boundReceiver = receiver.mapPtr().get();
+    out = Value(std::move(copy));
+  }
+  return true;
 }
 
 // ------------------------------------------------------------------- builtins
