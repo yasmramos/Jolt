@@ -319,6 +319,11 @@ Ref<T> makeRef(Args&&... args) {
   // type, so members are destroyed correctly regardless of how the object is
   // later referenced. Marked non-capturing: stored as a plain function ptr.
   object->destroy = [](void* p) { delete static_cast<T*>(p); };
+  // The adopting constructor does not retain, so seed the count with the
+  // single strong reference owned by the returned handle. Without this the
+  // first copy of the handle brings the count to 1 and the original's
+  // destructor drops it to 0, freeing an object that is still referenced.
+  object->refs = 1;
   return Ref<T>(typename Ref<T>::Adopt{}, object);
 }
 
