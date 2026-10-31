@@ -391,10 +391,10 @@ Value Interpreter::eval(const Expr& expr) {
           [&](const InterpExpr& e) {
             std::string result;
             for (const auto& part : e.parts) {
-              if (part.expr) {
-                result += eval(*part.expr).toString();
+              if (part.isText()) {
+                result += part.text();
               } else {
-                result += part.text;
+                result += eval(*part.expr()).toString();
               }
             }
             return Value(std::move(result));

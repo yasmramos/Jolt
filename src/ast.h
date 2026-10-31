@@ -20,11 +20,17 @@ struct LiteralExpr {
   Value value;
 };
 
+// One piece of an interpolated string: either a literal chunk or an embedded
+// expression. The variant makes the two cases mutually exclusive by design,
+// so there is no "expr == nullptr means use text" convention to remember.
 struct InterpPart {
-  std::string text;  // used when expr == nullptr
-  ExprPtr expr;
+  std::variant<std::string, ExprPtr> content;
   int line = 1;
   int col = 1;
+
+  bool isText() const { return std::holds_alternative<std::string>(content); }
+  const std::string& text() const { return std::get<std::string>(content); }
+  const ExprPtr& expr() const { return std::get<ExprPtr>(content); }
 };
 
 // "Hello ${name}!"
@@ -63,9 +69,15 @@ struct BinaryExpr {
 };
 
 struct AssignExpr {
+  // Invariant (enforced by the parser via isAssignable()): `target` is always
+  // a VariableExpr, IndexExpr or MemberExpr. Any other shape is rejected at
+  // parse time, so evaluators never need to re-check it at runtime.
   ExprPtr target;
   Tok op = Tok::Eq;
   ExprPtr value;
+  // Position of the assignment operator itself, which usually differs from
+  // Expr::line/col of the enclosing node; kept intentionally for precise
+  // diagnostics (same convention as BinaryExpr::opLine/opCol).
   int opLine = 1;
   int opCol = 1;
 };
@@ -98,6 +110,11 @@ struct RangeExpr {
 };
 
 struct LambdaExpr {
+  // Convention: `body` is always a BlockStmt. An expression-bodied lambda
+  // (fn x => x * 2) is desugared by the parser into a BlockStmt containing a
+  // single ReturnStmt, so evaluators only ever see statement bodies and an
+  // implicit "no return" yields nil. `name` may be empty for anonymous
+  // lambdas; it is only used for diagnostics and function values.
   std::string name;
   std::vector<std::string> params;
   StmtPtr body;
@@ -109,6 +126,10 @@ using ExprNode =
                  RangeExpr, LambdaExpr>;
 
 struct Expr {
+  // Position convention: every Expr/Stmt carries the line/col of the token
+  // that starts (or, for operator nodes, produces) the node. Leaf nodes such
+  // as LiteralExpr or BreakStmt deliberately have no extra position fields;
+  // operator positions live as opLine/opCol on BinaryExpr and AssignExpr only.
   ExprNode node;
   int line = 1;
   int col = 1;
@@ -127,6 +148,10 @@ struct LetStmt {
 };
 
 struct FnDeclStmt {
+  // `body` follows the same convention as LambdaExpr::body: always a
+  // BlockStmt. A function whose body has no ReturnStmt (or a bare `return;`)
+  // implicitly evaluates to nil; the interpreter handles that, so an explicit
+  // returnsValue flag would be redundant here.
   std::string name;
   std::vector<std::string> params;
   StmtPtr body;  // BlockStmt

@@ -554,12 +554,12 @@ ExprPtr Parser::buildString(const Token& token) {
       try {
         auto tokens = lex(part.text, part.line, part.col);
         Parser sub(std::move(tokens), where_);
-        piece.expr = sub.parseFullExpression();
+        piece.content = sub.parseFullExpression();
       } catch (const CompileError& err) {
         throw CompileError{"in string interpolation: " + err.message, err.line, err.col};
       }
     } else {
-      piece.text = part.text;
+      piece.content = part.text;
     }
     node.parts.push_back(std::move(piece));
   }
