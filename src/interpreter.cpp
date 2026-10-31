@@ -777,7 +777,12 @@ Value Interpreter::call(const Value& callee, std::vector<Value> args, int line, 
     fail(std::string("cannot call a value of type '") + callee.typeName() + "'", line, col);
   }
 
-  auto function = callee.funcPtr();
+  // Keep the callee object strongly alive for the entire call. A temporary
+  // bound method (`items.push(1)` on a transient array) owns the only strong
+  // reference to its `Function`; letting it die mid-call would destroy the
+  // closure — including its captured state and receiver handle — while the
+  // native is still running.
+  FuncPtr function = callee.funcPtr();
   Function& fn = *function;
 
   if (fn.isNative()) {
@@ -786,20 +791,15 @@ Value Interpreter::call(const Value& callee, std::vector<Value> args, int line, 
     currentLine = line;
     currentCol = col;
     try {
-      // Set the transient receiver for the duration of the native call. The
-      // raw pointer is only ever dereferenced while the owning `callee` value
-      // keeps the container alive, so bound methods can capture receivers
-      // weakly (see Interpreter::receiverOf).
-      RefCounted* savedReceiver = activeReceiver_;
-      activeReceiver_ = fn.boundReceiver;
-      Value result;
-      try {
-        result = fn.native(*this, args);
-      } catch (...) {
-        activeReceiver_ = savedReceiver;
-        throw;
-      }
-      activeReceiver_ = savedReceiver;
+      // Pin the receiver for the duration of the native call. The guard saves
+      // and restores `activeReceiver_` around the native, so nested calls
+      // inside a native keep their own receiver. Bound methods capture their
+      // container weakly (see Interpreter::receiverOf), and locking the
+      // handle here keeps the container strongly alive even when the last
+      // external owner dies mid-call (e.g. the temporary bound method of
+      // `items.push(1)` releasing its receiver before the native finishes).
+      ActiveReceiverGuard receiverGuard(*this, fn.boundReceiver.lock());
+      Value result = fn.native(*this, args);
       currentLine = savedLine;
       currentCol = savedCol;
       return result;
