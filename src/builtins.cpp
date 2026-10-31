@@ -826,6 +826,14 @@ bool bindRange(Interpreter& in, RangePtr range, const std::string& name, Value& 
 }  // namespace
 
 bool bindMethod(Interpreter& interp, const Value& receiver, const std::string& name, Value& out) {
+  // Snapshot the receiver's owning reference before binding. `bindArray` and
+  // friends stamp a weak handle onto the produced closure that points at the
+  // *same object* this call holds; keeping this strong copy alive until the
+  // binding finishes guarantees the container cannot die mid-bind (e.g. when
+  // `items.push(1)` evaluates on a temporary array whose last external owner
+  // is released while the bound method is still being created). Without it,
+  // the freshly created weak handle would observe an already-dead receiver.
+  Value receiverOwner = receiver;
   bool bound = false;
   if (receiver.isArray()) bound = bindArray(interp, receiver.arrayPtr(), name, out);
   else if (receiver.isStr()) bound = bindString(interp, receiver.strPtr(), name, out);
@@ -841,10 +849,16 @@ bool bindMethod(Interpreter& interp, const Value& receiver, const std::string& n
   if (out.isFunc()) {
     // Copy the function so every bound method owns a private `Function`
     // object; stamping the receiver on a shared closure would leak the
-    // identity to unrelated bindings of the same native.
+    // identity to unrelated bindings of the same native. The receiver is
+    // captured as a weak handle: it never keeps the container alive, and its
+    // expiration is observed safely through the control block even when many
+    // bound methods share the same receiver.
     FuncPtr copy = makeRef<Function>(*out.funcRef());
-    if (receiver.isArray()) copy->boundReceiver = receiver.arrayPtr().get();
-    else if (receiver.isMap()) copy->boundReceiver = receiver.mapPtr().get();
+    if (receiver.isArray()) {
+      copy->boundReceiver = WeakRef<RefCounted>(receiver.arrayPtr());
+    } else if (receiver.isMap()) {
+      copy->boundReceiver = WeakRef<RefCounted>(receiver.mapPtr());
+    }
     out = Value(std::move(copy));
   }
   return true;

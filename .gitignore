@@ -23,3 +23,9 @@ Makefile
 # Sanitizer reports
 sanitizer*
 LSan.*
+build_asan/
+build-cmake/
+*.o
+*.obj
+sanitizer*
+LSan.*

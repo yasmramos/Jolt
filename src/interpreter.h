@@ -135,34 +135,57 @@ class Interpreter {
   void addNative(const std::string& name, NativeFn fn);
 
 
-  // Transient identity of the receiver for the native method currently being
-  // invoked (see `Function::boundReceiver`). Set by `call()` right before the
-  // native runs and restored to the previous value afterwards, so nested
-  // calls inside a native keep their own receiver.
-  RefCounted* activeReceiver_ = nullptr;
+  // RAII guard that installs the strong receiver pin for the duration of one
+  // native call frame (see `Interpreter::call`). Nesting works naturally:
+  // each guard saves the outer slot on construction and restores it on
+  // destruction, so a reference adopted from the pin always has its count
+  // properly incremented while the innermost frame is running.
+  struct ActiveReceiverGuard {
+    explicit ActiveReceiverGuard(Interpreter& target, Ref<RefCounted> pin) noexcept
+        : interpreter(target), saved(std::move(target.activeReceiver_)) {
+      target.activeReceiver_ = std::move(pin);
+    }
+    ~ActiveReceiverGuard() { interpreter.activeReceiver_ = std::move(saved); }
+    ActiveReceiverGuard(const ActiveReceiverGuard&) = delete;
+    ActiveReceiverGuard& operator=(const ActiveReceiverGuard&) = delete;
+
+    Interpreter& interpreter;
+    Ref<RefCounted> saved;
+  };
+
+ private:
+  // Transient strong reference to the receiver of the native method currently
+  // being invoked (see `Function::boundReceiver`). Set by `call()` right
+  // before the native runs through `ActiveReceiverGuard`, and restored
+  // afterwards, so nested calls inside a native keep their own receiver.
+  // Holding the object strongly here guarantees it stays alive for the whole
+  // duration of the native even when the last external owner dies mid-call:
+  // bound methods capture their receiver weakly to break ownership cycles
+  // (`a.push(a)`), and `receiverOf` below re-adopts this pinned reference
+  // instead of resurrecting the object from the (possibly expired) weak
+  // handle.
+  Ref<RefCounted> activeReceiver_;
 
  public:
-  // Re-adopts the live receiver for a bound array/map method. Bound methods
-  // hold only a `WeakRef` to their container, which breaks the ownership
-  // cycle that a strong capture would create when a method is stored inside
-  // its own receiver (`a.push(a)`). At call time `Interpreter::call` sets
-  // `activeReceiver_` to the receiver recorded on the function being invoked,
-  // so the live object (guaranteed strongly alive during the call) is adopted
-  // from there after verifying it matches the binding-time capture. Outside
-  // an active call (e.g. globals or direct native invocation) the weak handle
-  // is locked instead.
+  // Returns an owning reference to the live receiver of a bound array/map
+  // method. Bound methods hold only a `WeakRef` to their container, which
+  // breaks the ownership cycle that a strong capture would create when a
+  // method is stored inside its own receiver (`a.push(a)`). At call time
+  // `Interpreter::call` pins the receiver in `activeReceiver_`, so during the
+  // native the live object is guaranteed strongly reachable; when its
+  // identity matches the binding-time capture, the pin is converted into a
+  // typed owning reference with a proper `retain()`. If the pin does not
+  // match (or no native frame is active), the weak handle is locked as a
+  // fallback. A bound method used after its receiver died fails with a clear
+  // error instead of touching freed memory.
   template <typename T>
   Ref<T> receiverOf(Interpreter& in, const WeakRef<T>& captured) {
-    if (in.activeReceiver_) {
-      // Only trust the transient slot when it points at the very object this
-      // method was bound to; otherwise fall back to locking the weak handle.
-      if (captured.matches(in.activeReceiver_)) {
-        return Ref<T>(static_cast<T*>(in.activeReceiver_));
-      }
+    if (in.activeReceiver_.get() && captured.matches(in.activeReceiver_.get())) {
+      return Ref<T>::retaining(static_cast<T*>(in.activeReceiver_.get()));
     }
     auto strong = captured.lock();
-    if (!strong) in.fail("internal error: use of a bound method whose receiver was destroyed");
-    return strong;
+    if (strong) return strong;
+    in.fail("internal error: use of a bound method whose receiver was destroyed");
   }
 
   [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const;
