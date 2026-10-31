@@ -1,12 +1,12 @@
 // Scoping, shadowing, closures and hoisting.
 
-let global = "g";
+var global = "g";
 assert_eq(global, "g");
 
 {
-  let local = "l";
+  var local = "l";
   assert_eq(local, "l");
-  let global = "shadow";
+  var global = "shadow";
   assert_eq(global, "shadow");
 }
 assert_eq(global, "g");
@@ -17,28 +17,28 @@ fn reads_global() {
 assert_eq(reads_global(), "g");
 
 fn compute() {
-  let hidden = 42;
+  var hidden = 42;
   return hidden;
 }
 assert_eq(compute(), 42);
 
 // Nested blocks can read bindings from their parents.
-let depth = 0;
+var depth = 0;
 {
-  let a = 1;
+  var a = 1;
   {
-    let b = 2;
+    var b = 2;
     depth = a + b;
   }
 }
 assert_eq(depth, 3);
 
 // Shadowing creates a new binding instead of mutating the outer one.
-let x = 1;
+var x = 1;
 {
-  let x = 2;
+  var x = 2;
   {
-    let x = 3;
+    var x = 3;
     assert_eq(x, 3);
   }
   assert_eq(x, 2);
@@ -48,7 +48,7 @@ let x = 1;
 assert_eq(x, 1);
 
 // Assignment walks up to the nearest existing binding.
-let value = "outer";
+var value = "outer";
 fn update() {
   value = "inner";
 }
@@ -56,9 +56,9 @@ update();
 assert_eq(value, "inner");
 
 // Variables without an initializer start as nil.
-let nothing;
+var nothing;
 assert_eq(nothing, nil);
-let later;
+var later;
 later = 5;
 assert_eq(later, 5);
 
@@ -85,27 +85,27 @@ assert_eq(outer(), 7);
 
 // Closures capture bindings by reference.
 fn make_getter() {
-  let state = 1;
-  let get = fn() => state;
+  var state = 1;
+  var get = fn() => state;
   state = 2;
   return get;
 }
 assert_eq(make_getter()(), 2);
 
 fn make_pair() {
-  let n = 5;
+  var n = 5;
   return {
     get: fn() => n,
     set: fn(v) { n = v; },
   };
 }
-let pair = make_pair();
+var pair = make_pair();
 assert_eq(pair.get(), 5);
 pair.set(9);
 assert_eq(pair.get(), 9);
 
 // Each for-in iteration has its own variable binding.
-let fns = [];
+var fns = [];
 for i in 0..3 {
   fns.push(fn() => i);
 }
@@ -118,7 +118,7 @@ fn named() {
   return "fn";
 }
 {
-  let named = "var";
+  var named = "var";
   assert_eq(named, "var");
 }
 assert_eq(named(), "fn");

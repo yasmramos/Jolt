@@ -112,10 +112,10 @@ void testBoolAndNilLiterals() {
   assert(bc.code[6].op == OpCode::HALT);
 }
 
-void testLetWithoutInitializer() {
-  Bytecode bc = compileSource("let x;\n");
+void testVarWithoutInitializer() {
+  Bytecode bc = compileSource("var x;\n");
 
-  // `let x;` must emit LOADNIL explicitly, not leave the register undefined.
+  // `var x;` must emit LOADNIL explicitly, not leave the register undefined.
   assert(bc.code.size() == 3);
   assert(bc.code[0].op == OpCode::LOADNIL);
   assert(bc.code[0].a == 0);
@@ -169,7 +169,7 @@ void testUnaryOperators() {
 }
 
 void testCompoundAssignment() {
-  Bytecode bc = compileSource("let x = 1;\nx += 2;\n");
+  Bytecode bc = compileSource("var x = 1;\nx += 2;\n");
 
   // LOADK, SETGLOBAL, GETGLOBAL, LOADK, ADD, SETGLOBAL, HALT
   assert(bc.code.size() == 7);
@@ -183,12 +183,12 @@ void testCompoundAssignment() {
   assert(bc.code[6].op == OpCode::HALT);
 }
 
-void testConstReassignment() {
-  expectCompileError("const x = 10;\nx = 20;\n", "const reassignment");
-  expectCompileError("const x = 10;\nx += 1;\n", "const compound assignment");
+void testLetReassignment() {
+  expectCompileError("let x = 10;\nx = 20;\n", "immutable reassignment");
+  expectCompileError("let x = 10;\nx += 1;\n", "immutable compound assignment");
 
-  // Redeclaring with `let` lifts the restriction, exactly like `Env::define`.
-  Bytecode bc = compileSource("const x = 10;\nlet x = 20;\nx = 30;\n");
+  // Redeclaring with `var` lifts the restriction, exactly like `Env::define`.
+  Bytecode bc = compileSource("let x = 10;\nvar x = 20;\nx = 30;\n");
   assert(!bc.code.empty());
 }
 
@@ -256,7 +256,7 @@ void testWhileBackpatch() {
 }
 
 void testForBackpatch() {
-  Bytecode bc = compileSource("for (let i = 0; i < 3; i += 1) { print(i); }\n");
+  Bytecode bc = compileSource("for (var i = 0; i < 3; i += 1) { print(i); }\n");
 
   // 0 LOADK, 1 DECLLOCAL, 2 GETLOCAL, 3 LOADK, 4 LT, 5 JMP_IF_FALSE,
   // 6 GETLOCAL, 7 PRINT, 8 GETLOCAL, 9 LOADK, 10 ADD, 11 SETLOCAL,
@@ -306,7 +306,7 @@ void testBreakAndContinueBackpatch() {
 void testBlockScopingBytecode() {
   Bytecode bc = compileSource(
       "{\n"
-      "  let x = 1;\n"
+      "  var x = 1;\n"
       "  x = 2;\n"
       "}\n");
 
@@ -337,9 +337,9 @@ void testShadowingSlots() {
   assert(bc.num_locals == 2);
 }
 
-void testLocalConstAssignment() {
-  expectCompileError("{ const x = 1; x = 2; }\n", "local const reassignment");
-  expectCompileError("{ const x = 1; x += 2; }\n", "local const compound assignment");
+void testLocalImmutableAssignment() {
+  expectCompileError("{ let x = 1; x = 2; }\n", "local immutable reassignment");
+  expectCompileError("{ let x = 1; x += 2; }\n", "local immutable compound assignment");
 }
 
 void testLogicalShortCircuit() {
@@ -417,12 +417,12 @@ int main() {
   testLeftAssociativePrecedence();
   testStringConstant();
   testBoolAndNilLiterals();
-  testLetWithoutInitializer();
+  testVarWithoutInitializer();
   testModuloAndPower();
   testComparisons();
   testUnaryOperators();
   testCompoundAssignment();
-  testConstReassignment();
+  testLetReassignment();
   testAssignment();
   testConstantDeduplication();
   testIfElseJumps();
@@ -432,7 +432,7 @@ int main() {
   testBreakAndContinueBackpatch();
   testBlockScopingBytecode();
   testShadowingSlots();
-  testLocalConstAssignment();
+  testLocalImmutableAssignment();
   testLogicalShortCircuit();
   testTernary();
   testBitwiseOps();

@@ -1,7 +1,7 @@
 // FizzBuzz from 1 to 100.
 
 for n in 1..=100 {
-  let out = "";
+  var out = "";
   if (n % 3 == 0) {
     out += "Fizz";
   }

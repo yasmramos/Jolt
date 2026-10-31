@@ -160,9 +160,13 @@ struct ExprStmt {
 };
 
 struct LetStmt {
+  // Declaration keyword semantics: `var` declares a mutable binding and its
+  // initializer is optional (`var x;` binds nil); `let` declares an immutable
+  // binding (constant) and always requires an initializer. The parser enforces
+  // both rules, so the interpreter/compiler only need to honor `isImmutable`.
   std::string name;
-  ExprPtr init;  // may be null
-  bool isConst = false;
+  ExprPtr init;  // may be null only when isImmutable == false
+  bool isImmutable = false;  // true for `let`, false for `var`
 };
 
 struct FnDeclStmt {

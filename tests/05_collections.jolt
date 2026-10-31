@@ -1,6 +1,6 @@
 // Arrays, maps and ranges.
 
-let arr = [1, 2, 3];
+var arr = [1, 2, 3];
 assert_eq(arr, [1, 2, 3]);
 assert_eq(arr.length, 3);
 assert_eq(len(arr), 3);
@@ -9,7 +9,7 @@ assert_eq(arr[-1], 3);
 arr[0] = 10;
 assert_eq(arr, [10, 2, 3]);
 
-let built = [];
+var built = [];
 built.push(1);
 built.push(2, 3);
 assert_eq(built, [1, 2, 3]);
@@ -24,7 +24,7 @@ assert_eq(built, [0, 1, 2]);
 assert_eq(built.remove_at(1), 1);
 assert_eq(built, [0, 2]);
 
-let s = [0, 1, 2, 3, 4];
+var s = [0, 1, 2, 3, 4];
 assert_eq(s.slice(1, 3), [1, 2]);
 assert_eq(s.slice(3), [3, 4]);
 assert_eq(s.slice(-2), [3, 4]);
@@ -35,7 +35,7 @@ assert_eq([1, 2].concat([3, 4]), [1, 2, 3, 4]);
 assert_eq(["a", "b"].join("-"), "a-b");
 assert_eq([1, 2, 3].join(), "123");
 
-let unsorted = [3, 1, 2];
+var unsorted = [3, 1, 2];
 assert_eq(unsorted.sorted(), [1, 2, 3]);
 assert_eq(unsorted, [3, 1, 2]);
 unsorted.sort();
@@ -54,7 +54,7 @@ assert_eq([1, 2, 3, 4].filter(fn(x) => x % 2 == 0), [2, 4]);
 assert_eq([1, 2, 3, 4].reduce(fn(acc, x) => acc + x), 10);
 assert_eq([1, 2, 3, 4].reduce(fn(acc, x) => acc + x, 100), 110);
 
-let seen = [];
+var seen = [];
 [1, 2].each(fn(x) {
   seen.push(x * 10);
 });
@@ -69,19 +69,19 @@ assert_eq([1, 2, 3].all(fn(x) => x > 1), false);
 assert_eq([1, 2, 3].sum(), 6);
 assert_eq([1, 2.5].sum(), 3.5);
 
-let clone_src = [1, 2];
-let clone_dst = clone_src.clone();
+var clone_src = [1, 2];
+var clone_dst = clone_src.clone();
 clone_dst.push(3);
 assert_eq(clone_dst, [1, 2, 3]);
 assert_eq(clone_src, [1, 2]);
 
-let clearing = [1, 2];
+var clearing = [1, 2];
 clearing.clear();
 assert_eq(clearing, []);
 assert_eq(clearing.length, 0);
 
 // Maps preserve insertion order.
-let person = {name: "Ada", age: 36};
+var person = {name: "Ada", age: 36};
 assert_eq(person.name, "Ada");
 assert_eq(person["age"], 36);
 assert_eq(person.length, 2);
@@ -108,30 +108,30 @@ assert_eq(person.delete("city"), true);
 assert_eq(person.delete("city"), false);
 assert_eq(person.has("city"), false);
 
-let base = {a: 1};
-let merged = base.merge({b: 2, a: 3});
+var base = {a: 1};
+var merged = base.merge({b: 2, a: 3});
 assert_eq(merged, {a: 3, b: 2});
 assert_eq(base, {a: 3, b: 2});
 
-let copy = {x: 1}.clone();
+var copy = {x: 1}.clone();
 copy.x = 2;
 assert_eq(copy, {x: 2});
 
-let empty = {a: 1};
+var empty = {a: 1};
 empty.clear();
 assert_eq(empty, {});
 assert_eq(empty.length, 0);
 assert_eq(empty.has("a"), false);
 
-let literal = {"quoted key": 1, plain: 2};
+var literal = {"quoted key": 1, plain: 2};
 assert_eq(literal["quoted key"], 1);
 assert_eq(literal.plain, 2);
 
 // A real "length" key wins over the built-in member.
-let with_length = {length: 99, x: 1};
+var with_length = {length: 99, x: 1};
 assert_eq(with_length.length, 99);
 
-let map_keys = [];
+var map_keys = [];
 for key in {b: 1, a: 2} {
   map_keys.push(key);
 }
@@ -140,7 +140,7 @@ assert_eq(map_keys, ["b", "a"]);
 // Map keys: scalar literals are canonicalized to strings, and computed
 // keys use the [expr] syntax.
 fn key_of(n) { return "k" + str(n); }
-let keyed = {1: "one", true: "yes", nil: "nothing", [2 + 2]: "four", [key_of(2)]: "two"};
+var keyed = {1: "one", true: "yes", nil: "nothing", [2 + 2]: "four", [key_of(2)]: "two"};
 assert_eq(keyed["1"], "one");
 assert_eq(keyed["true"], "yes");
 assert_eq(keyed["nil"], "nothing");
@@ -148,14 +148,14 @@ assert_eq(keyed["4"], "four");
 assert_eq(keyed["k2"], "two");
 
 // Range iteration is lazy: huge ranges never materialize an array.
-let counted = 0;
+var counted = 0;
 for i in 0..1000000000 {
   counted = counted + 1;
   if (i == 2) { break; }
 }
 assert_eq(counted, 3);
 
-let skipped = [];
+var skipped = [];
 for j in 5..=1 {
   if (j == 3) { continue; }
   skipped.push(j);
@@ -163,7 +163,7 @@ for j in 5..=1 {
 assert_eq(skipped, [5, 4, 2, 1]);
 
 // Ranges.
-let r = 1..5;
+var r = 1..5;
 assert_eq(type(r), "range");
 assert_eq(r.length, 4);
 assert_eq(len(r), 4);
@@ -180,14 +180,14 @@ assert_eq(range(3).to_array(), [0, 1, 2]);
 assert_eq(range(2, 5).to_array(), [2, 3, 4]);
 
 // Nested structures, deep equality and shared references.
-let nested = {list: [1, [2, 3]], inner: {ok: true}};
+var nested = {list: [1, [2, 3]], inner: {ok: true}};
 assert_eq(nested.list[1][0], 2);
 assert_eq(nested.inner.ok, true);
 assert_eq(nested, {list: [1, [2, 3]], inner: {ok: true}});
 assert_eq([1, [2]].contains([2]), true);
 
-let alias = [1];
-let same = alias;
+var alias = [1];
+var same = alias;
 same.push(2);
 assert_eq(alias, [1, 2]);
 

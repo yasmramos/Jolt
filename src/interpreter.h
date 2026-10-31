@@ -12,7 +12,7 @@
 
 struct Binding {
   Value value;
-  bool isConst = false;
+  bool isImmutable = false;
 };
 
 struct Env : std::enable_shared_from_this<Env> {
@@ -60,8 +60,8 @@ struct Env : std::enable_shared_from_this<Env> {
   // variable is not visible anymore (including when a parent environment has
   // already been collected through its weak link).
   Binding* find(const std::string& name);
-  void define(const std::string& name, Value value, bool isConst = false);
-  enum class Assign { Ok, NotFound, Const };
+  void define(const std::string& name, Value value, bool isImmutable = false);
+  enum class Assign { Ok, NotFound, Immutable };
   Assign assign(const std::string& name, Value value);
 
   // Removes every binding (used when resetting the interpreter between runs).
@@ -131,7 +131,7 @@ class Interpreter {
 
   Value call(const Value& callee, std::vector<Value> args, int line, int col);
 
-  void defineGlobal(const std::string& name, Value value, bool isConst = false);
+  void defineGlobal(const std::string& name, Value value, bool isImmutable = false);
   void addNative(const std::string& name, NativeFn fn);
 
   [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const;

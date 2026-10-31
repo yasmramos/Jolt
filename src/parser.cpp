@@ -103,7 +103,7 @@ ExprPtr Parser::parseFullExpression() {
 StmtPtr Parser::parseStatement() {
   const Token& token = peek();
 
-  if (match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
+  if (match(Tok::Let) || match(Tok::Var)) return parseVarDecl();
   if (match(Tok::Fn)) return parseFnDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
@@ -123,16 +123,18 @@ StmtPtr Parser::parseStatement() {
 
 StmtPtr Parser::parseVarDecl() {
   const Token& keyword = previous();
-  bool isConst = keyword.type == Tok::Const;
+  // `let` binds an immutable variable and must be initialized; `var` binds a
+  // mutable one and may omit the initializer (the binding starts as nil).
+  bool isImmutable = keyword.type == Tok::Let;
   const Token& name = consume(Tok::Ident, "expected a variable name");
   ExprPtr init;
   if (match(Tok::Eq)) {
     init = parseExpression();
-  } else if (isConst) {
-    error(peek(), "a 'const' declaration requires a value");
+  } else if (isImmutable) {
+    error(peek(), "a 'let' declaration requires a value (use 'var' for a mutable binding)");
   }
   consume(Tok::Semicolon, "expected ';' after variable declaration");
-  return makeStmt(LetStmt{name.lexeme, std::move(init), isConst}, keyword.line, keyword.col);
+  return makeStmt(LetStmt{name.lexeme, std::move(init), isImmutable}, keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseFnDecl() {
@@ -204,7 +206,7 @@ StmtPtr Parser::parseFor() {
 
   consume(Tok::LParen, "expected '(' after 'for'");
   StmtPtr init;
-  if (match(Tok::Let) || match(Tok::Const)) {
+  if (match(Tok::Let) || match(Tok::Var)) {
     init = parseVarDecl();  // consumes the ';'
   } else if (match(Tok::Semicolon)) {
     init = nullptr;
