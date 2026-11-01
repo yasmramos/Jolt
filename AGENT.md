@@ -49,25 +49,30 @@ and propose an alternative.
    values in the VM (`Value regs[256]`). Do not use `double` alone: Jolt also
    needs to represent strings, booleans, `nil`, arrays and maps. All
    registers, global variables, frames and temporaries use the same `Value`
-   type. `Bytecode::numbers` and `Bytecode::strings` are only constant pools
-   for the compiler; the VM does not keep separate registers per type.
+   type. `Bytecode::constants` is a single tagged constant pool shared by the
+   compiler and the VM (numbers, strings and global names); the VM does not
+   keep separate registers per type.
    Arithmetic operations must include fast paths for `int` and `float`.
    In C++17, `Value` is a 16-byte tagged union with non-atomic reference
    counting (the interpreter/VM is single-threaded). Strings are immutable
    and shared, so `MOVE` does not duplicate text.
 2. **Each opcode maps to 1 x86-64 ASM instruction** (or close to it). If it
    does not map, it is badly designed.
-3. **At most ~40 opcodes** in total. If more are needed, redesign.
+3. **At most ~40 opcodes** in total. If more are needed, redesign. PHASE 6
+   sits exactly at the limit: 40.
 4. **Forbidden instructions** (too high level):
    - `OP_EVAL_EXPR`, `OP_EXECUTE_STATEMENT`, `OP_CALL_METHOD_DYNAMIC`
 5. **Allowed instructions** (low level):
-   - Load: `LOADK` (number), `LOADKS` (string), `LOADNIL`, `LOADBOOL`, `MOVE`
-   - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `NEG`, `NOT`
-   - Bits: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`, `BNOT`
+   - Load: `LOADK` (tagged constant: nil, bool, int, float, string), `MOVE`
+   - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `UNOP` (`c` selects
+     negate/not/bit-not)
+   - Bits: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`
    - Comparison: `EQ`, `NEQ`, `LT`, `GT`, `LTE`, `GTE`
    - Variables: `GETGLOBAL`, `SETGLOBAL`, `DECLLOCAL`, `GETLOCAL`, `SETLOCAL`
    - Control: `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`
    - Functions: `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
+   - Collections: `NEWTABLE`, `GETTABLE`, `SETTABLE`, `IN`
+   - Iteration: `ITER`
    - I/O: `PRINT`
    - End: `HALT`
 
@@ -95,31 +100,28 @@ You cannot move on to the next phase without completing and testing the
 previous one.
 
 ### PHASE 1 — `include/bytecode.h` ✅
-- Define `enum class OpCode` with: `LOADK`, `LOADKS`, `LOADNIL`, `LOADBOOL`,
-  `MOVE`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `NEG`, `NOT`, `EQ`, `NEQ`,
-  `LT`, `LTE`, `GT`, `GTE`, `SETGLOBAL`, `GETGLOBAL`, `PRINT`, `HALT`
-- Define `struct Instruction { OpCode op; int a, b, c; int jump; }`
-- Define `struct Bytecode` with `code`, `numbers`, `strings` and `numRegisters`
-- `numbers` is a `std::vector<Value>` to preserve the difference between `int` and `float`
-- `LOADK` loads numeric constants and `LOADKS` string constants (separate
-  opcodes, without using `c` as a discriminator)
+- Define `enum class OpCode` with the 40 opcodes listed in §3.5
+- Define `struct Instruction { OpCode op; int a, b, c; int jump; int line, col; }`
+- Define `struct Bytecode` with `code`, a tagged `constants` pool and `numRegisters`
+- `constants` is a `std::vector<Value>` so `int`, `float`, strings, booleans and
+  nil keep their type
+- `LOADK` loads any constant (`nil`, booleans, numbers and strings)
 - Functions: `bytecodeInit`, `bytecodeEmit`, `bytecodeFree` (declared in
   `include/bytecode.h`, implemented in `src/bytecode.cpp`)
 
 ### PHASE 2 — `src/compiler.cpp` (AST → bytecode) ✅
-- Literals: `nil` → `LOADNIL`, booleans → `LOADBOOL`, numbers → `LOADK`,
-  strings → `LOADKS`
+- Literals: every literal → `LOADK` with the value in the tagged pool
 - `VariableExpr` → `GETGLOBAL`
 - `BinaryExpr` with `+`, `-`, `*`, `/`, `%`, `**` and comparisons (`==`, `!=`,
   `<`, `<=`, `>`, `>=`) → compile left, compile right, emit the opcode
-- `UnaryExpr`: `-` → `NEG`, `!` → `NOT`, `+` emits no instruction, `~` stays
-  reserved for PHASE 5
+- `UnaryExpr`: `-` → `UNOP` negate, `!` → `UNOP` not, `+` emits no
+  instruction, `~` → `UNOP` bit-not
 - `&&`, `||`, `in` and bitwise operators → PHASE 5
 - `AssignExpr` on a global variable → compile the expression, emit `SETGLOBAL`
 - Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`) → `GETGLOBAL`,
   operation, `SETGLOBAL`
-- `LetStmt` → compile the initializer; if there is none, emit an explicit
-  `LOADNIL`; then `SETGLOBAL`
+- `LetStmt` → compile the initializer; if there is none, load an explicit nil
+  constant; then `SETGLOBAL`
 - Compile-time immutability tracking (`isImmutable` on locals and globals):
   assigning to a `let` binding throws a
   `CompileError` with the same message as the interpreter
@@ -127,8 +129,8 @@ previous one.
   `print` is a call, so it is detected as a `CallExpr`
 - Register allocation with a counter that goes up and down
 - Update `numRegisters` when reserving registers
-- Reuse of constants in the number and string pools; `int` and `float` are
-  distinct constants
+- Reuse of constants in the tagged pool; `int` and `float` are distinct
+  constants
 - Nodes not yet supported throw `CompileError` with line/column
 
 ### PHASE 3 — `src/vm.cpp` (run bytecode) ✅
@@ -139,7 +141,8 @@ previous one.
 - `ADD` also concatenates strings; `DIV` and `MOD` detect division by zero
 - `POW` replicates `intPow` for `int ** int` with a non-negative exponent and
   uses `std::pow` in every other case
-- `NEG` and `NOT` respect the interpreter's semantics (`0` is truthy)
+- `UNOP` respects the interpreter's semantics (`0` is truthy) for negate, not
+  and bit-not
 - Comparisons with `EQ`/`NEQ`/`LT`/`LTE`/`GT`/`GTE` and the same ordering
   relation as `Interpreter::lessThan`
 - `PRINT` uses `Value::toString()`

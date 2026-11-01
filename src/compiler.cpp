@@ -121,6 +121,23 @@ bool binaryOpCode(Tok op, OpCode& out) {
   }
 }
 
+// Unary operators with their own semantics. `+x` is compiled as `x` instead.
+bool unaryOpCode(Tok op, UnaryOp& out) {
+  switch (op) {
+    case Tok::Minus:
+      out = UnaryOp::Negate;
+      return true;
+    case Tok::Bang:
+      out = UnaryOp::Not;
+      return true;
+    case Tok::Tilde:
+      out = UnaryOp::BitNot;
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Compound assignment operators: `x op= y`.
 bool compoundOpCode(Tok op, OpCode& out) {
   switch (op) {
@@ -163,25 +180,19 @@ void Compiler::freeReg(int count) {
 }
 
 int Compiler::addConstant(const Value& value) {
-  for (size_t i = 0; i < bc_.numbers.size(); ++i) {
-    const Value& existing = bc_.numbers[i];
+  for (size_t i = 0; i < bc_.constants.size(); ++i) {
+    const Value& existing = bc_.constants[i];
     // The type is part of the identity: `1` (int) and `1.0` (float) are not
     // the same constant even though they are numerically equal.
     if (existing.type() == value.type() && existing.equals(value)) {
       return static_cast<int>(i);
     }
   }
-  bc_.numbers.push_back(value);
-  return static_cast<int>(bc_.numbers.size() - 1);
+  bc_.constants.push_back(value);
+  return static_cast<int>(bc_.constants.size() - 1);
 }
 
-int Compiler::addString(const std::string& value) {
-  for (size_t i = 0; i < bc_.strings.size(); ++i) {
-    if (bc_.strings[i] == value) return static_cast<int>(i);
-  }
-  bc_.strings.push_back(value);
-  return static_cast<int>(bc_.strings.size() - 1);
-}
+int Compiler::addString(const std::string& value) { return addConstant(Value(value)); }
 
 int Compiler::emit(OpCode op, int a, int b, int c) {
   Instruction instruction;
@@ -344,7 +355,7 @@ void Compiler::compileLet(const LetStmt& s) {
     reg = compileExpr(*s.init);
   } else {
     reg = allocReg();
-    emit(OpCode::LOADNIL, reg);
+    emit(OpCode::LOADK, reg, addConstant(Value()));
   }
 
   if (inGlobalScope()) {
@@ -538,24 +549,11 @@ int Compiler::compileExpr(const Expr& expr) {
       Overloaded{
           [&](const LiteralExpr& literal) -> int {
             const Value& value = literal.value;
-            if (value.isNil()) {
-              int reg = allocReg();
-              emit(OpCode::LOADNIL, reg);
-              return reg;
-            }
-            if (value.isBool()) {
-              int reg = allocReg();
-              emit(OpCode::LOADBOOL, reg, value.asBool() ? 1 : 0);
-              return reg;
-            }
-            if (value.isNumber()) {
+            // Every literal, including nil/booleans/strings, lives in the same
+            // tagged pool; `LOADK` uses the value's type at runtime.
+            if (value.isNil() || value.isBool() || value.isNumber() || value.isStr()) {
               int reg = allocReg();
               emit(OpCode::LOADK, reg, addConstant(value));
-              return reg;
-            }
-            if (value.isStr()) {
-              int reg = allocReg();
-              emit(OpCode::LOADKS, reg, addString(value.asStr()));
               return reg;
             }
             fail("unsupported literal in the bytecode compiler", expr.line, expr.col);
@@ -563,21 +561,15 @@ int Compiler::compileExpr(const Expr& expr) {
           [&](const VariableExpr& variable) -> int { return compileVariable(variable.name); },
           [&](const UnaryExpr& unary) -> int {
             int operand = compileExpr(*unary.operand);
-            switch (unary.op) {
-              case Tok::Minus:
-                emit(OpCode::NEG, operand, operand);
-                break;
-              case Tok::Plus:
-                break;  // +x is x
-              case Tok::Bang:
-                emit(OpCode::NOT, operand, operand);
-                break;
-              case Tok::Tilde:
-                emit(OpCode::BNOT, operand, operand);
-                break;
-              default:
-                fail("unsupported unary operator", expr.line, expr.col);
+            if (unary.op == Tok::Plus) return operand;  // +x is x
+            UnaryOp op;
+            if (!unaryOpCode(unary.op, op)) {
+              fail("unsupported unary operator", expr.line, expr.col);
             }
+            // Point runtime errors at the operator, like the interpreter.
+            currentLine_ = expr.line;
+            currentCol_ = expr.col;
+            emit(OpCode::UNOP, operand, operand, static_cast<int>(op));
             return operand;
           },
           [&](const BinaryExpr& binary) -> int {

@@ -49,27 +49,28 @@ void testArithmeticAndPrint() {
   assert(bc.code[2].op == OpCode::ADD);
   assert(bc.code[2].a == 0 && bc.code[2].b == 0 && bc.code[2].c == 1);
   assert(bc.code[3].op == OpCode::SETGLOBAL);
-  assert(bc.code[3].a == 0 && bc.code[3].b == 0);
+  assert(bc.code[3].a == 0 && bc.code[3].b == 2);
   assert(bc.code[4].op == OpCode::GETGLOBAL);
-  assert(bc.code[4].a == 0 && bc.code[4].b == 0);
+  assert(bc.code[4].a == 0 && bc.code[4].b == 2);
   assert(bc.code[5].op == OpCode::PRINT);
   assert(bc.code[5].a == 0);
   assert(bc.code[6].op == OpCode::HALT);
 
-  assert(bc.numbers.size() == 2);
-  assert(bc.numbers[0].isInt() && bc.numbers[0].asInt() == 1);
-  assert(bc.numbers[1].isInt() && bc.numbers[1].asInt() == 2);
-  assert(bc.strings.size() == 1 && bc.strings[0] == "x");
+  assert(bc.constants.size() == 3);
+  assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
+  assert(bc.constants[1].isInt() && bc.constants[1].asInt() == 2);
+  assert(bc.constants[2].isStr() && bc.constants[2].asStr() == "x");
   assert(bc.numRegisters == 2);
 }
 
 void testNumericConstantTypes() {
   Bytecode bc = compileSource("let a = 1;\nlet b = 1.0;\n");
 
-  // int and float must not be merged in the constant pool.
-  assert(bc.numbers.size() == 2);
-  assert(bc.numbers[0].isInt() && bc.numbers[0].asInt() == 1);
-  assert(bc.numbers[1].isFloat() && bc.numbers[1].asFloat() == 1.0);
+  // int and float must not be merged in the constant pool. Global names share
+  // the pool, so the layout is 1, "a", 1.0, "b".
+  assert(bc.constants.size() == 4);
+  assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
+  assert(bc.constants[2].isFloat() && bc.constants[2].asFloat() == 1.0);
 }
 
 void testLeftAssociativePrecedence() {
@@ -90,15 +91,16 @@ void testStringConstant() {
   Bytecode bc = compileSource("let greeting = \"hi\";\n");
 
   assert(bc.code.size() == 3);
-  assert(bc.code[0].op == OpCode::LOADKS);
+  assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[0].a == 0 && bc.code[0].b == 0);
   assert(bc.code[1].op == OpCode::SETGLOBAL);
   assert(bc.code[1].a == 0 && bc.code[1].b == 1);
   assert(bc.code[2].op == OpCode::HALT);
 
-  assert(bc.strings.size() == 2);
-  assert(bc.strings[0] == "hi");
-  assert(bc.strings[1] == "greeting");
+  // Strings and global names share the same tagged pool.
+  assert(bc.constants.size() == 2);
+  assert(bc.constants[0].isStr() && bc.constants[0].asStr() == "hi");
+  assert(bc.constants[1].isStr() && bc.constants[1].asStr() == "greeting");
   assert(bc.numRegisters == 1);
 }
 
@@ -121,27 +123,30 @@ void testBoolAndNilLiterals() {
   Bytecode bc = compileSource("let a = true;\nlet b = false;\nlet c = nil;\n");
 
   assert(bc.code.size() == 7);
-  assert(bc.code[0].op == OpCode::LOADBOOL);
-  assert(bc.code[0].a == 0 && bc.code[0].b == 1);
-  assert(bc.code[1].op == OpCode::SETGLOBAL);
-  assert(bc.code[2].op == OpCode::LOADBOOL);
-  assert(bc.code[2].a == 0 && bc.code[2].b == 0);
-  assert(bc.code[3].op == OpCode::SETGLOBAL);
-  assert(bc.code[4].op == OpCode::LOADNIL);
-  assert(bc.code[4].a == 0);
-  assert(bc.code[5].op == OpCode::SETGLOBAL);
+  assert(bc.code[0].op == OpCode::LOADK);
+  assert(bc.code[2].op == OpCode::LOADK);
+  assert(bc.code[4].op == OpCode::LOADK);
   assert(bc.code[6].op == OpCode::HALT);
+
+  // All literals share the tagged pool with global names, in source order:
+  // true, "a", false, "b", nil, "c".
+  assert(bc.constants.size() == 6);
+  assert(bc.constants[0].isBool() && bc.constants[0].asBool());
+  assert(bc.constants[2].isBool() && !bc.constants[2].asBool());
+  assert(bc.constants[4].isNil());
 }
 
 void testVarWithoutInitializer() {
   Bytecode bc = compileSource("var x;\n");
 
-  // `var x;` must emit LOADNIL explicitly, not leave the register undefined.
+  // `var x;` must load an explicit nil constant, not leave the register
+  // undefined.
   assert(bc.code.size() == 3);
-  assert(bc.code[0].op == OpCode::LOADNIL);
+  assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[0].a == 0);
   assert(bc.code[1].op == OpCode::SETGLOBAL);
   assert(bc.code[2].op == OpCode::HALT);
+  assert(bc.constants.size() == 2 && bc.constants[0].isNil());
 }
 
 void testModuloAndPower() {
@@ -175,12 +180,14 @@ void testUnaryOperators() {
   Bytecode neg = compileSource("let y = -5;\n");
   assert(neg.code.size() == 4);
   assert(neg.code[0].op == OpCode::LOADK);
-  assert(neg.code[1].op == OpCode::NEG);
+  assert(neg.code[1].op == OpCode::UNOP);
   assert(neg.code[1].a == 0 && neg.code[1].b == 0);
+  assert(neg.code[1].c == static_cast<int>(UnaryOp::Negate));
 
   Bytecode notBc = compileSource("let y = !1;\n");
   assert(notBc.code.size() == 4);
-  assert(notBc.code[1].op == OpCode::NOT);
+  assert(notBc.code[1].op == OpCode::UNOP);
+  assert(notBc.code[1].c == static_cast<int>(UnaryOp::Not));
 
   // `+x` emits no instruction.
   Bytecode plus = compileSource("let y = +5;\n");
@@ -195,12 +202,12 @@ void testCompoundAssignment() {
   // LOADK, SETGLOBAL, GETGLOBAL, LOADK, ADD, SETGLOBAL, HALT
   assert(bc.code.size() == 7);
   assert(bc.code[2].op == OpCode::GETGLOBAL);
-  assert(bc.code[2].a == 0 && bc.code[2].b == 0);
+  assert(bc.code[2].a == 0 && bc.code[2].b == 1);
   assert(bc.code[3].op == OpCode::LOADK);
   assert(bc.code[4].op == OpCode::ADD);
   assert(bc.code[4].a == 0 && bc.code[4].b == 0 && bc.code[4].c == 1);
   assert(bc.code[5].op == OpCode::SETGLOBAL);
-  assert(bc.code[5].a == 0 && bc.code[5].b == 0);
+  assert(bc.code[5].a == 0 && bc.code[5].b == 1);
   assert(bc.code[6].op == OpCode::HALT);
 }
 
@@ -219,7 +226,7 @@ void testAssignment() {
   assert(bc.code.size() == 3);
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::SETGLOBAL);
-  assert(bc.code[1].a == 0 && bc.code[1].b == 0);
+  assert(bc.code[1].a == 0 && bc.code[1].b == 1);
   assert(bc.code[2].op == OpCode::HALT);
   assert(bc.numRegisters == 1);
 }
@@ -227,8 +234,8 @@ void testAssignment() {
 void testConstantDeduplication() {
   Bytecode bc = compileSource("print(1 + 1);\n");
 
-  assert(bc.numbers.size() == 1);
-  assert(bc.strings.empty());
+  assert(bc.constants.size() == 1);
+  assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
 }
 
 // --------------------------------------------------------- PHASE 5: control
@@ -236,10 +243,10 @@ void testConstantDeduplication() {
 void testIfElseJumps() {
   Bytecode bc = compileSource("if (true) { print(1); } else { print(2); }\n");
 
-  // 0 LOADBOOL, 1 JMP_IF_FALSE, 2 LOADK, 3 PRINT,
+  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 PRINT,
   // 4 JMP, 5 LOADK, 6 PRINT, 7 HALT
   assert(bc.code.size() == 8);
-  assert(bc.code[0].op == OpCode::LOADBOOL);
+  assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
   assert(bc.code[1].a == 0 && bc.code[1].jump == 5);  // jumps to the `else`
   assert(bc.code[2].op == OpCode::LOADK);
@@ -264,9 +271,9 @@ void testIfWithoutElse() {
 void testWhileBackpatch() {
   Bytecode bc = compileSource("while (false) { print(1); }\n");
 
-  // 0 LOADBOOL, 1 JMP_IF_FALSE, 2 LOADK, 3 PRINT, 4 JMP, 5 HALT
+  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 PRINT, 4 JMP, 5 HALT
   assert(bc.code.size() == 6);
-  assert(bc.code[0].op == OpCode::LOADBOOL);
+  assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
   assert(bc.code[1].jump == 5);  // leaves the loop
   assert(bc.code[2].op == OpCode::LOADK);
@@ -304,7 +311,7 @@ void testForBackpatch() {
 
 void testBreakAndContinueBackpatch() {
   Bytecode brk = compileSource("while (true) { break; }\n");
-  // 0 LOADBOOL, 1 JMP_IF_FALSE, 2 JMP (break), 3 JMP (back), 4 HALT
+  // 0 LOADK, 1 JMP_IF_FALSE, 2 JMP (break), 3 JMP (back), 4 HALT
   assert(brk.code.size() == 5);
   assert(brk.code[2].op == OpCode::JMP && brk.code[2].jump == 4);
   assert(brk.code[3].op == OpCode::JMP && brk.code[3].jump == 0);
@@ -382,10 +389,10 @@ void testLogicalShortCircuit() {
 void testTernary() {
   Bytecode bc = compileSource("let a = true ? 1 : 2;\n");
 
-  // 0 LOADBOOL, 1 JMP_IF_FALSE, 2 LOADK, 3 MOVE, 4 JMP,
+  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 MOVE, 4 JMP,
   // 5 LOADK, 6 MOVE, 7 SETGLOBAL, 8 HALT
   assert(bc.code.size() == 9);
-  assert(bc.code[0].op == OpCode::LOADBOOL);
+  assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
   assert(bc.code[1].jump == 5);
   assert(bc.code[3].op == OpCode::MOVE);
@@ -409,8 +416,9 @@ void testBitwiseOps() {
   assert(bc.code[10].op == OpCode::BXOR);
   assert(bc.code[14].op == OpCode::SHL);
   assert(bc.code[18].op == OpCode::SHR);
-  assert(bc.code[21].op == OpCode::BNOT);
+  assert(bc.code[21].op == OpCode::UNOP);
   assert(bc.code[21].a == 0 && bc.code[21].b == 0);
+  assert(bc.code[21].c == static_cast<int>(UnaryOp::BitNot));
 }
 
 void testUnsupportedConstructs() {

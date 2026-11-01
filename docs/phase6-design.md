@@ -22,6 +22,10 @@ come after parity is proven.
 | 6a | next | protos, `CALL`/`RETURN`/`CLOSURE`, 0 upvalues |
 | 6b-6f | pending | upvalues, tables, `ITER`, callbacks, parity gate |
 
+The 40-opcode consolidation (D1) is done: `Bytecode::constants` replaces the
+`numbers`/`strings` pools and `UNOP` replaces `NEG`/`NOT`/`BNOT`. The PHASE 6
+opcodes are declared and the VM rejects them until their slice lands.
+
 Decisions taken while implementing 6a.0, superseding the text below:
 
 - Error positions live in `Instruction::line`/`col` instead of a parallel
@@ -55,14 +59,14 @@ Decisions taken while implementing 6a.0, superseding the text below:
 
 ## 2. Decisions
 
-### D1 — Opcode budget (needs approval)
+### D1 — Opcode budget (approved)
 
-35 opcodes today; PHASE 6 needs 9 more (5 for functions, 3 for tables, 1 for
-iteration). 44 breaks the "~40" rule in `AGENT.md` §3.
+35 opcodes before PHASE 6; the phase needs 9 more (5 for functions, 3 for
+tables, 1 for iteration) plus `IN`. 45 breaks the "~40" rule in `AGENT.md` §3.
 
-Recommendation: **39 opcodes**, by folding instructions whose operand is a
-compile-time constant (so native codegen in PHASE 7 specializes them back to
-one instruction each):
+Approved result: **exactly 40 opcodes**, by folding instructions whose operand
+is a compile-time constant (so native codegen in PHASE 7 specializes them back
+to one instruction each):
 
 | Change | Delta |
 |--------|-------|
@@ -71,15 +75,12 @@ one instruction each):
 | `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL` | +5 |
 | `NEWTABLE`, `GETTABLE`, `SETTABLE` | +3 |
 | `ITER` | +1 |
-| **Total** | **39** |
+| `IN` | +1 |
+| **Total** | **40** |
 
 `GETTABLE`/`SETTABLE` take a mode bit (index vs member) in `c`; like `UNOP`
 and `NEWTABLE`'s kind bit it is a compiler constant, so it becomes a
-specialized instruction later. That leaves one free slot (`IN`, see D7).
-
-Alternative if you prefer to keep the current encoding: allow 44 opcodes and
-amend `AGENT.md` §3.3 with the reason. I do not recommend it: the budget exists
-to force exactly this kind of consolidation.
+specialized instruction later.
 
 ### D2 — A proto is a `Bytecode`
 

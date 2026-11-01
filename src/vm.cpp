@@ -17,18 +17,17 @@ void VM::fail(const std::string& message, int line, int col) const {
   throw error;
 }
 
-const Value& VM::numberAt(const Bytecode& bytecode, int index) const {
-  if (index < 0 || static_cast<size_t>(index) >= bytecode.numbers.size()) {
-    fail("numeric constant index out of range: " + std::to_string(index));
+const Value& VM::constantAt(const Bytecode& bytecode, int index) const {
+  if (index < 0 || static_cast<size_t>(index) >= bytecode.constants.size()) {
+    fail("constant index out of range: " + std::to_string(index));
   }
-  return bytecode.numbers[static_cast<size_t>(index)];
+  return bytecode.constants[static_cast<size_t>(index)];
 }
 
-const std::string& VM::stringAt(const Bytecode& bytecode, int index) const {
-  if (index < 0 || static_cast<size_t>(index) >= bytecode.strings.size()) {
-    fail("string constant index out of range: " + std::to_string(index));
-  }
-  return bytecode.strings[static_cast<size_t>(index)];
+const std::string& VM::nameAt(const Bytecode& bytecode, int index) const {
+  const Value& value = constantAt(bytecode, index);
+  if (!value.isStr()) fail("global name is not a string constant");
+  return value.asStr();
 }
 
 // ------------------------------------------------------------------ registers
@@ -143,19 +142,7 @@ void VM::run(const Bytecode& bytecode) {
 
     switch (instruction.op) {
       case OpCode::LOADK:
-        setReg(instruction.a, numberAt(bytecode, instruction.b));
-        break;
-
-      case OpCode::LOADKS:
-        setReg(instruction.a, Value(stringAt(bytecode, instruction.b)));
-        break;
-
-      case OpCode::LOADNIL:
-        setReg(instruction.a, Value{});
-        break;
-
-      case OpCode::LOADBOOL:
-        setReg(instruction.a, Value(instruction.b != 0));
+        setReg(instruction.a, constantAt(bytecode, instruction.b));
         break;
 
       case OpCode::MOVE:
@@ -187,13 +174,24 @@ void VM::run(const Bytecode& bytecode) {
                binary(Tok::StarStar, getReg(instruction.b), getReg(instruction.c), line, col));
         break;
 
-      case OpCode::NEG:
-        setReg(instruction.a, ops::unary(*this, Tok::Minus, getReg(instruction.b), line, col));
+      case OpCode::UNOP: {
+        Tok op;
+        switch (static_cast<UnaryOp>(instruction.c)) {
+          case UnaryOp::Negate:
+            op = Tok::Minus;
+            break;
+          case UnaryOp::Not:
+            op = Tok::Bang;
+            break;
+          case UnaryOp::BitNot:
+            op = Tok::Tilde;
+            break;
+          default:
+            fail("invalid unary operator: " + std::to_string(instruction.c), line, col);
+        }
+        setReg(instruction.a, ops::unary(*this, op, getReg(instruction.b), line, col));
         break;
-
-      case OpCode::NOT:
-        setReg(instruction.a, ops::unary(*this, Tok::Bang, getReg(instruction.b), line, col));
-        break;
+      }
 
       case OpCode::BAND:
         setReg(instruction.a, binary(Tok::Amp, getReg(instruction.b), getReg(instruction.c), line, col));
@@ -213,10 +211,6 @@ void VM::run(const Bytecode& bytecode) {
 
       case OpCode::SHR:
         setReg(instruction.a, binary(Tok::Shr, getReg(instruction.b), getReg(instruction.c), line, col));
-        break;
-
-      case OpCode::BNOT:
-        setReg(instruction.a, ops::unary(*this, Tok::Tilde, getReg(instruction.b), line, col));
         break;
 
       case OpCode::EQ:
@@ -273,11 +267,11 @@ void VM::run(const Bytecode& bytecode) {
         break;
 
       case OpCode::SETGLOBAL:
-        globals_[stringAt(bytecode, instruction.b)] = getReg(instruction.a);
+        globals_[nameAt(bytecode, instruction.b)] = getReg(instruction.a);
         break;
 
       case OpCode::GETGLOBAL: {
-        const std::string& name = stringAt(bytecode, instruction.b);
+        const std::string& name = nameAt(bytecode, instruction.b);
         auto it = globals_.find(name);
         if (it == globals_.end()) fail("undefined variable '" + name + "'", line, col);
         setReg(instruction.a, it->second);
@@ -304,6 +298,21 @@ void VM::run(const Bytecode& bytecode) {
         setReg(instruction.a, cell->value);
         break;
       }
+
+      // PHASE 6 opcodes are declared now so the instruction budget stays at
+      // 40. The compiler does not emit them until their slice lands, so
+      // reaching one of these cases would be a compiler bug.
+      case OpCode::CALL:
+      case OpCode::RETURN:
+      case OpCode::CLOSURE:
+      case OpCode::GETUPVAL:
+      case OpCode::SETUPVAL:
+      case OpCode::NEWTABLE:
+      case OpCode::GETTABLE:
+      case OpCode::SETTABLE:
+      case OpCode::ITER:
+      case OpCode::IN:
+        fail("opcode not implemented yet", line, col);
 
       case OpCode::PRINT:
         std::cout << getReg(instruction.a).toString() << '\n';

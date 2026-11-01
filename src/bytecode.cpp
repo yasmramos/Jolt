@@ -4,8 +4,7 @@
 
 void bytecodeInit(Bytecode& bc) {
   bc.code.clear();
-  bc.numbers.clear();
-  bc.strings.clear();
+  bc.constants.clear();
   bc.numRegisters = 0;
   bc.numLocals = 0;
 }

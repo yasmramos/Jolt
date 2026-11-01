@@ -59,6 +59,6 @@ class VM : public Runtime {
   void setReg(int index, Value value);
   CellPtr& localAt(int index);
 
-  const Value& numberAt(const Bytecode& bytecode, int index) const;
-  const std::string& stringAt(const Bytecode& bytecode, int index) const;
+  const Value& constantAt(const Bytecode& bytecode, int index) const;
+  const std::string& nameAt(const Bytecode& bytecode, int index) const;
 };
