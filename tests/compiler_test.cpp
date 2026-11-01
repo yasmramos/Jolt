@@ -1,6 +1,12 @@
 // Tests for the AST -> bytecode compiler (PHASE 2-5).
 // Uses no external framework: only assert and a failure counter.
 
+// Release builds define NDEBUG, which would compile every assert() out and
+// leave the suite green without testing anything.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -94,6 +100,21 @@ void testStringConstant() {
   assert(bc.strings[0] == "hi");
   assert(bc.strings[1] == "greeting");
   assert(bc.numRegisters == 1);
+}
+
+void testNewlineNormalization() {
+  // CRLF and lone CR are folded to LF before lexing, so string literals and
+  // line numbers are identical on every platform.
+  auto crlf = lex("\"a\r\nb\"");
+  assert(crlf.size() == 2);
+  assert(crlf[0].parts.size() == 1 && crlf[0].parts[0].text == "a\nb");
+
+  auto cr = lex("\"a\rb\"");
+  assert(cr[0].parts.size() == 1 && cr[0].parts[0].text == "a\nb");
+
+  auto lines = lex("a\r\nb");
+  assert(lines.size() == 3);
+  assert(lines[0].line == 1 && lines[1].line == 2);
 }
 
 void testBoolAndNilLiterals() {
@@ -416,6 +437,7 @@ int main() {
   testNumericConstantTypes();
   testLeftAssociativePrecedence();
   testStringConstant();
+  testNewlineNormalization();
   testBoolAndNilLiterals();
   testVarWithoutInitializer();
   testModuloAndPower();
