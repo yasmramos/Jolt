@@ -152,14 +152,14 @@ bool compoundOpCode(Tok op, OpCode& out) {
 // ------------------------------------------------------------ registers and pools
 
 int Compiler::allocReg() {
-  int reg = next_reg_++;
-  if (next_reg_ > max_reg_) max_reg_ = next_reg_;
+  int reg = nextReg_++;
+  if (nextReg_ > maxReg_) maxReg_ = nextReg_;
   return reg;
 }
 
 void Compiler::freeReg(int count) {
-  next_reg_ -= count;
-  if (next_reg_ < 0) next_reg_ = 0;
+  nextReg_ -= count;
+  if (nextReg_ < 0) nextReg_ = 0;
 }
 
 int Compiler::addConstant(const Value& value) {
@@ -189,7 +189,7 @@ int Compiler::emit(OpCode op, int a, int b, int c) {
   instruction.a = a;
   instruction.b = b;
   instruction.c = c;
-  return bytecode_emit(bc_, instruction);
+  return bytecodeEmit(bc_, instruction);
 }
 
 int Compiler::emitJump(OpCode op, int a) {
@@ -197,7 +197,7 @@ int Compiler::emitJump(OpCode op, int a) {
   instruction.op = op;
   instruction.a = a;
   instruction.jump = -1;  // pending backpatching
-  return bytecode_emit(bc_, instruction);
+  return bytecodeEmit(bc_, instruction);
 }
 
 void Compiler::patchJump(int index, int target) {
@@ -213,19 +213,19 @@ int Compiler::currentOffset() const { return static_cast<int>(bc_.code.size()); 
 
 void Compiler::pushScope() {
   Scope scope;
-  scope.baseSlot = next_local_;
+  scope.baseSlot = nextLocal_;
   scopes_.push_back(std::move(scope));
 }
 
 void Compiler::popScope() {
   if (scopes_.size() <= 1) return;
-  next_local_ = scopes_.back().baseSlot;
+  nextLocal_ = scopes_.back().baseSlot;
   scopes_.pop_back();
 }
 
 int Compiler::declareLocal(const std::string& name, bool isImmutable) {
-  int slot = next_local_++;
-  if (next_local_ > max_local_) max_local_ = next_local_;
+  int slot = nextLocal_++;
+  if (nextLocal_ > maxLocal_) maxLocal_ = nextLocal_;
   Scope& scope = scopes_.back();
   scope.vars[name] = LocalVar{slot, isImmutable};
   return slot;
@@ -254,11 +254,11 @@ void Compiler::declareGlobal(const std::string& name, bool isImmutable) {
 // -------------------------------------------------------------------- program
 
 Bytecode Compiler::compile(const StmtPtr& program) {
-  bytecode_init(bc_);
-  next_reg_ = 0;
-  max_reg_ = 0;
-  next_local_ = 0;
-  max_local_ = 0;
+  bytecodeInit(bc_);
+  nextReg_ = 0;
+  maxReg_ = 0;
+  nextLocal_ = 0;
+  maxLocal_ = 0;
   scopes_.clear();
   loops_.clear();
   globalConsts_.clear();
@@ -276,8 +276,8 @@ Bytecode Compiler::compile(const StmtPtr& program) {
 
   emit(OpCode::HALT);
 
-  bc_.num_registers = max_reg_;
-  bc_.num_locals = max_local_;
+  bc_.numRegisters = maxReg_;
+  bc_.numLocals = maxLocal_;
   return std::move(bc_);
 }
 

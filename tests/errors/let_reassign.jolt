@@ -1,3 +1,3 @@
 // expect-exit: 70
-let LIMITE = 10;
-LIMITE = 20;
+let LIMIT = 10;
+LIMIT = 20;

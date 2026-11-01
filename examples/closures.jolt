@@ -1,6 +1,6 @@
 // Closures: functions that remember their environment.
 
-fn make_counter(start) {
+fn makeCounter(start) {
   var count = start;
   return {
     next: () => {
@@ -14,8 +14,8 @@ fn make_counter(start) {
   };
 }
 
-var a = make_counter(0);
-var b = make_counter(100);
+var a = makeCounter(0);
+var b = makeCounter(100);
 
 print("a.next() = ${a.next()}");
 print("a.next() = ${a.next()}");

@@ -72,17 +72,17 @@ struct Bytecode {
   // integers and floats (a `double` would turn everything into a float).
   std::vector<Value> numbers;
   std::vector<std::string> strings;
-  int num_registers = 0;
+  int numRegisters = 0;
   // Number of local cells the frame needs.
-  int num_locals = 0;
+  int numLocals = 0;
 };
 
 // Resets the bytecode while keeping the capacity of its containers.
-void bytecode_init(Bytecode& bc);
+void bytecodeInit(Bytecode& bc);
 
 // Appends an instruction and returns its index.
-int bytecode_emit(Bytecode& bc, const Instruction& instruction);
+int bytecodeEmit(Bytecode& bc, const Instruction& instruction);
 
 // Releases the bytecode contents. In C++ the containers manage their own
 // memory, but the function is kept for symmetry with the original design.
-void bytecode_free(Bytecode& bc);
+void bytecodeFree(Bytecode& bc);

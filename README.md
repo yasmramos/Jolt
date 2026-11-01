@@ -180,7 +180,7 @@ let name = "world";
 const VERSION = "0.1.0";
 
 // Functions and closures
-fn make_counter() {
+fn makeCounter() {
   var n = 0;
   return () => {
     n += 1;
@@ -188,7 +188,7 @@ fn make_counter() {
   };
 }
 
-let counter = make_counter();
+let counter = makeCounter();
 print(counter()); // 1
 print(counter()); // 2
 
@@ -205,10 +205,10 @@ for i in 1..=3 {
 
 // Collections
 let numbers = [1, 2, 3, 4, 5];
-let even_squares = numbers
+let evenSquares = numbers
   .filter(n => n % 2 == 0)
   .map(n => n * n);
-print(even_squares); // [4, 16]
+print(evenSquares); // [4, 16]
 
 let person = {name: "Ada", age: 36};
 person.age += 1;
@@ -235,7 +235,7 @@ Linux, macOS or MSYS2:
 ./tests/run_vm.sh
 ```
 
-The positive tests use `assert` and `assert_eq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of assignments to immutable `let` bindings. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
+The positive tests use `assert` and `assertEq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of assignments to immutable `let` bindings. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
 
 ## Limitations and roadmap
 

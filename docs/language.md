@@ -74,6 +74,8 @@ nil    return true  var     while
 
 They cannot be used as names of variables, parameters or unquoted map keys.
 
+The convention is `camelCase` for variables, functions and methods, and the standard library follows it (`startsWith`, `readFile`, `assertEq`).
+
 ### 2.3 Numbers
 
 | Form | Example | Value |
@@ -314,11 +316,11 @@ Rules:
 - `+` concatenates two strings and also two arrays (creating a new array).
 
 ```jolt
-assert_eq(7 / 2, 3);
-assert_eq(7 / 2.0, 3.5);
-assert_eq(2 ** 10, 1024);
-assert_eq("a" + "b", "ab");
-assert_eq([1] + [2], [1, 2]);
+assertEq(7 / 2, 3);
+assertEq(7 / 2.0, 3.5);
+assertEq(2 ** 10, 1024);
+assertEq("a" + "b", "ab");
+assertEq([1] + [2], [1, 2]);
 ```
 
 ### 5.3 Comparison
@@ -346,11 +348,11 @@ Comparing incompatible types is an error.
 `&&` and `||` **return one of their operands**, not a boolean:
 
 ```jolt
-assert_eq(nil || "default", "default");
-assert_eq("value" || "default", "value");
-assert_eq(false && 123, false);
-assert_eq(true && 123, 123);
-assert_eq(nil && 123, nil);
+assertEq(nil || "default", "default");
+assertEq("value" || "default", "value");
+assertEq(false && 123, false);
+assertEq(true && 123, 123);
+assertEq(nil && 123, nil);
 ```
 
 The right operand is only evaluated if needed.
@@ -369,11 +371,11 @@ The right operand is only evaluated if needed.
 They only accept `int`. Shifting requires a count between 0 and 63.
 
 ```jolt
-assert_eq(6 & 3, 2);
-assert_eq(6 | 3, 7);
-assert_eq(1 << 4, 16);
-assert_eq(256 >> 3, 32);
-assert_eq(~0, -1);
+assertEq(6 & 3, 2);
+assertEq(6 | 3, 7);
+assertEq(1 << 4, 16);
+assertEq(256 >> 3, 32);
+assertEq(~0, -1);
 ```
 
 ### 5.7 Membership
@@ -388,10 +390,10 @@ The `in` operator tests membership:
 | range | The left side must be an integer; checks whether it lies within the range. |
 
 ```jolt
-assert_eq(2 in [1, 2, 3], true);
-assert_eq("a" in {a: 1}, true);
-assert_eq("ell" in "hello", true);
-assert_eq(5 in 1..10, true);
+assertEq(2 in [1, 2, 3], true);
+assertEq("a" in {a: 1}, true);
+assertEq("ell" in "hello", true);
+assertEq(5 in 1..10, true);
 ```
 
 ### 5.8 Ternary
@@ -413,8 +415,8 @@ Assignment is an expression and returns the assigned value:
 ```jolt
 var x = 0;
 let y = (x = 5);
-assert_eq(x, 5);
-assert_eq(y, 5);
+assertEq(x, 5);
+assertEq(y, 5);
 
 var a = 0;
 var b = 0;
@@ -663,7 +665,7 @@ For anything longer than a one-liner, prefer a declared function (`fn power(base
 Functions capture the environment where they are created and keep it alive:
 
 ```jolt
-fn make_counter() {
+fn makeCounter() {
   var n = 0;
   return () => {
     n += 1;
@@ -671,7 +673,7 @@ fn make_counter() {
   };
 }
 
-let counter = make_counter();
+let counter = makeCounter();
 print(counter()); // 1
 print(counter()); // 2
 ```
@@ -716,8 +718,8 @@ let numbers = [1, 2, 3,];
 A trailing comma is allowed. Indexes are integers; negative ones count from the end:
 
 ```jolt
-assert_eq(numbers[0], 1);
-assert_eq(numbers[-1], 3);
+assertEq(numbers[0], 1);
+assertEq(numbers[-1], 3);
 ```
 
 An out-of-range index is a runtime error. Arrays are mutable:
@@ -740,7 +742,7 @@ numbers.push(4);
 | `shift()` | Removes and returns the first element; `nil` if empty. |
 | `unshift(value)` | Inserts a value at the start and returns the array. |
 | `insert(index, value)` | Inserts at `index` (negatives allowed) and returns the array. |
-| `remove_at(index)` | Removes and returns the element at `index`. |
+| `removeAt(index)` | Removes and returns the element at `index`. |
 | `slice(start?, end?)` | Returns a new array with the range `[start, end)`. |
 | `concat(other)` | Returns a new array with both arrays. |
 | `join(separator?)` | Joins the elements into a string. |
@@ -748,7 +750,7 @@ numbers.push(4);
 | `sorted(comparator?)` | Returns a sorted copy. |
 | `reversed()` | Returns a reversed copy. |
 | `contains(value)` | Checks structural equality. |
-| `index_of(value)` | Returns the first index or `-1`. |
+| `indexOf(value)` | Returns the first index or `-1`. |
 | `map(f)` | Returns an array with the results of `f(element)`. |
 | `filter(f)` | Returns the elements for which `f` is truthy. |
 | `reduce(f, initial?)` | Accumulates with `f(accumulator, element)`. |
@@ -770,10 +772,10 @@ Details:
 
 ```jolt
 let nums = [3, 1, 2];
-assert_eq(nums.sorted(), [1, 2, 3]);
-assert_eq(nums.sorted((a, b) => a > b), [3, 2, 1]);
-assert_eq(nums.map(n => n * 2), [6, 2, 4]);
-assert_eq(nums.reduce((a, n) => a + n, 0), 6);
+assertEq(nums.sorted(), [1, 2, 3]);
+assertEq(nums.sorted((a, b) => a > b), [3, 2, 1]);
+assertEq(nums.map(n => n * 2), [6, 2, 4]);
+assertEq(nums.reduce((a, n) => a + n, 0), 6);
 ```
 
 ---
@@ -784,9 +786,9 @@ Strings are immutable and indexed by code point:
 
 ```jolt
 let s = "áé";
-assert_eq(s.length, 2);
-assert_eq(s[0], "á");
-assert_eq(s[-1], "é");
+assertEq(s.length, 2);
+assertEq(s[0], "á");
+assertEq(s[-1], "é");
 ```
 
 An out-of-range index is an error. You cannot assign to a string index.
@@ -800,38 +802,38 @@ There is no slicing syntax (`s[1:3]`); use `substr`, `split`, etc.
 | `upper()` | Converts ASCII letters to uppercase. |
 | `lower()` | Converts ASCII letters to lowercase. |
 | `trim()` | Removes ASCII whitespace at the start and end. |
-| `trim_start()` | Removes ASCII whitespace at the start. |
-| `trim_end()` | Removes ASCII whitespace at the end. |
+| `trimStart()` | Removes ASCII whitespace at the start. |
+| `trimEnd()` | Removes ASCII whitespace at the end. |
 | `split(separator?)` | With no argument splits on whitespace; with `""` splits into characters. |
 | `lines()` | Splits on `\n` line breaks. |
 | `replace(search, replacement)` | Replaces all non-overlapping occurrences. |
-| `replace_first(search, replacement)` | Replaces the first occurrence. |
-| `starts_with(prefix)` | Checks the prefix. |
-| `ends_with(suffix)` | Checks the suffix. |
+| `replaceFirst(search, replacement)` | Replaces the first occurrence. |
+| `startsWith(prefix)` | Checks the prefix. |
+| `endsWith(suffix)` | Checks the suffix. |
 | `contains(text)` | Checks whether it contains the substring. |
-| `index_of(text)` | Code-point index of the first occurrence, or `-1`. |
+| `indexOf(text)` | Code-point index of the first occurrence, or `-1`. |
 | `substr(start, length?)` | Substring from `start` (negatives allowed). |
 | `chars()` | Array of one-character strings. |
 | `repeat(n)` | Repeats the string `n` times. |
 | `reversed()` | Reverses the code points. |
-| `pad_start(width, fill?)` | Pads on the left up to `width`. |
-| `pad_end(width, fill?)` | Pads on the right up to `width`. |
+| `padStart(width, fill?)` | Pads on the left up to `width`. |
+| `padEnd(width, fill?)` | Pads on the right up to `width`. |
 
 Details:
 
 - `upper` and `lower` only transform `A-Z` and `a-z`; the rest of Unicode is unchanged.
 - `trim*` considers ASCII whitespace (`std::isspace`), not every Unicode space.
 - `lines` does not add an empty trailing line if the string ends with `\n`.
-- `index_of` searches bytes but returns the index in code points.
+- `indexOf` searches bytes but returns the index in code points.
 - `substr` counts code points; a negative `length` produces an empty string.
-- `pad_start` and `pad_end` pad by code points and trim the fill to the exact width.
+- `padStart` and `padEnd` pad by code points and trim the fill to the exact width.
 - `repeat` has a 64 MB limit on the result.
 
 ```jolt
-assert_eq("  hello  ".trim(), "hello");
-assert_eq("a,b,c".split(","), ["a", "b", "c"]);
-assert_eq("abc".substr(1, 2), "bc");
-assert_eq("5".pad_start(3, "0"), "005");
+assertEq("  hello  ".trim(), "hello");
+assertEq("a,b,c".split(","), ["a", "b", "c"]);
+assertEq("abc".substr(1, 2), "bc");
+assertEq("5".padStart(3, "0"), "005");
 ```
 
 ---
@@ -851,12 +853,12 @@ let person = {
 
 // Scalar literals are canonicalized to their string form.
 let coded = {1: "one", true: "yes", nil: "nothing"};
-assert_eq(coded["1"], "one");
+assertEq(coded["1"], "one");
 
 // Computed keys use the [expr] syntax and are evaluated at runtime.
 let n = 2;
 let dyn = {[n * 10]: "twenty", ["a" + n]: "a2"};
-assert_eq(dyn["20"], "twenty");
+assertEq(dyn["20"], "twenty");
 ```
 
 All map keys are strings internally: scalar and computed keys are normalized with the value's canonical string form (for example `1` becomes `"1"`), so lookups always use strings. If a key is repeated, the last value wins, but the position of its first appearance is kept.
@@ -864,8 +866,8 @@ All map keys are strings internally: scalar and computed keys are normalized wit
 ### 10.2 Access and assignment
 
 ```jolt
-assert_eq(person.name, "Ada");
-assert_eq(person["age"], 36);
+assertEq(person.name, "Ada");
+assertEq(person["age"], 36);
 
 person.age = 37;
 person["city"] = "London";
@@ -897,11 +899,11 @@ Maps preserve insertion order. Reassigning an existing key does not move it.
 ```jolt
 let m = {a: 1};
 m.set("b", 2);
-assert_eq(m.keys(), ["a", "b"]);
-assert_eq(m.entries(), [["a", 1], ["b", 2]]);
-assert_eq(m.get("z", 0), 0);
-assert_eq(m.delete("a"), true);
-assert_eq(m, {b: 2});
+assertEq(m.keys(), ["a", "b"]);
+assertEq(m.entries(), [["a", 1], ["b", 2]]);
+assertEq(m.get("z", 0), 0);
+assertEq(m.delete("a"), true);
+assertEq(m, {b: 2});
 ```
 
 Map equality does not depend on order: two maps with the same keys and values are equal.
@@ -928,10 +930,10 @@ for key in {a: 1, b: 2} {
 The bounds must be integers. A range can be ascending or descending:
 
 ```jolt
-assert_eq((1..4).to_array(), [1, 2, 3]);
-assert_eq((1..=3).to_array(), [1, 2, 3]);
-assert_eq((3..0).to_array(), [3, 2, 1]);
-assert_eq((3..=0).to_array(), [3, 2, 1, 0]);
+assertEq((1..4).toArray(), [1, 2, 3]);
+assertEq((1..=3).toArray(), [1, 2, 3]);
+assertEq((3..0).toArray(), [3, 2, 1]);
+assertEq((3..=0).toArray(), [3, 2, 1, 0]);
 ```
 
 `5..5` is empty; `5..=5` contains one element.
@@ -939,19 +941,19 @@ assert_eq((3..=0).to_array(), [3, 2, 1, 0]);
 ### 11.2 Operations
 
 - `.length` / `len(range)`: number of elements.
-- `.to_array()`: converts to an array (limit of 10,000,000 elements).
+- `.toArray()`: converts to an array (limit of 10,000,000 elements).
 - `.contains(value)`: same as `value in range`.
 - Equality compares start, end and inclusiveness: `1..3 != 1..=3`.
 
 The `range(end)` function produces `0..end`, and `range(start, end)` produces `start..end` (always exclusive).
 
-Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `to_array()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements.
+Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `toArray()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements.
 
 ```jolt
-assert_eq(2 in 1..5, true);
-assert_eq(5 in 1..5, false);
-assert_eq(5 in 1..=5, true);
-assert_eq(len(5..0), 5);
+assertEq(2 in 1..5, true);
+assertEq(5 in 1..5, false);
+assertEq(5 in 1..=5, true);
+assertEq(len(5..0), 5);
 ```
 
 ---
@@ -983,9 +985,9 @@ assert_eq(len(5..0), 5);
 `str` of an array or map uses the representation of its elements, with inner strings in quotes:
 
 ```jolt
-assert_eq(str(42), "42");
-assert_eq(str([1, "a"]), "[1, \"a\"]");
-assert_eq(repr("a"), "\"a\"");
+assertEq(str(42), "42");
+assertEq(str([1, "a"]), "[1, \"a\"]");
+assertEq(repr("a"), "\"a\"");
 ```
 
 ### 12.3 Math
@@ -1029,20 +1031,20 @@ assert_eq(repr("a"), "\"a\"");
 
 | Function | Description |
 | --- | --- |
-| `read_file(path)` | Returns the contents of a file as a string. |
-| `write_file(path, contents)` | Writes the contents (exact binary). |
-| `file_exists(path)` | Checks whether the file can be opened. |
+| `readFile(path)` | Returns the contents of a file as a string. |
+| `writeFile(path, contents)` | Writes the contents (exact binary). |
+| `fileExists(path)` | Checks whether the file can be opened. |
 
 ### 12.7 Assertions and control
 
 | Function | Description |
 | --- | --- |
 | `assert(condition, message?)` | Fails if the condition is falsy. |
-| `assert_eq(expected, actual, message?)` | Fails if they are not equal. |
+| `assertEq(expected, actual, message?)` | Fails if they are not equal. |
 | `panic(message?)` | Raises a runtime error. |
 | `exit(code?)` | Ends the process with the given code (0 by default). |
 
-`assert_eq` follows the order `expected, actual` and adds both values to the error message.
+`assertEq` follows the order `expected, actual` and adds both values to the error message.
 
 ---
 
@@ -1170,7 +1172,7 @@ for argument in args() {
 ```jolt
 // Counts words and shows the most frequent ones.
 
-fn count_words(text) {
+fn countWords(text) {
   let counts = {};
   for word in text.lower().split() {
     counts[word] = counts.get(word, 0) + 1;
@@ -1179,7 +1181,7 @@ fn count_words(text) {
 }
 
 let text = "one two two three three three four four four four";
-let counts = count_words(text);
+let counts = countWords(text);
 
 let pairs = counts.entries();
 pairs.sort((a, b) => a[1] > b[1]);

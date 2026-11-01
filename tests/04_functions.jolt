@@ -3,15 +3,15 @@
 fn add(a, b) {
   return a + b;
 }
-assert_eq(add(2, 3), 5);
+assertEq(add(2, 3), 5);
 
 fn noop() {}
-assert_eq(noop(), nil);
+assertEq(noop(), nil);
 
 fn greet(name) {
   return "Hello, " + name;
 }
-assert_eq(greet("Jolt"), "Hello, Jolt");
+assertEq(greet("Jolt"), "Hello, Jolt");
 
 // return exits the function early.
 fn sign(n) {
@@ -23,9 +23,9 @@ fn sign(n) {
   }
   return "pos";
 }
-assert_eq(sign(-5), "neg");
-assert_eq(sign(0), "zero");
-assert_eq(sign(8), "pos");
+assertEq(sign(-5), "neg");
+assertEq(sign(0), "zero");
+assertEq(sign(8), "pos");
 
 // Recursion.
 fn fact(n) {
@@ -34,9 +34,9 @@ fn fact(n) {
   }
   return n * fact(n - 1);
 }
-assert_eq(fact(0), 1);
-assert_eq(fact(5), 120);
-assert_eq(fact(10), 3628800);
+assertEq(fact(0), 1);
+assertEq(fact(5), 120);
+assertEq(fact(10), 3628800);
 
 fn fib(n) {
   if (n < 2) {
@@ -44,80 +44,80 @@ fn fib(n) {
   }
   return fib(n - 1) + fib(n - 2);
 }
-assert_eq(fib(10), 55);
+assertEq(fib(10), 55);
 
 // Mutual recursion works thanks to hoisting inside a block.
-fn is_even(n) {
+fn isEven(n) {
   if (n == 0) {
     return true;
   }
-  return is_odd(n - 1);
+  return isOdd(n - 1);
 }
-fn is_odd(n) {
+fn isOdd(n) {
   if (n == 0) {
     return false;
   }
-  return is_even(n - 1);
+  return isEven(n - 1);
 }
-assert_eq(is_even(10), true);
-assert_eq(is_odd(10), false);
+assertEq(isEven(10), true);
+assertEq(isOdd(10), false);
 
 // Functions are first-class values.
 var double = x => { return x * 2; };
-assert_eq(double(21), 42);
+assertEq(double(21), 42);
 
 var triple = x => x * 3;
-assert_eq(triple(4), 12);
+assertEq(triple(4), 12);
 
 var join = (a, b) => str(a) + "-" + str(b);
-assert_eq(join(1, 2), "1-2");
+assertEq(join(1, 2), "1-2");
 
 var ops = {
   add: (a, b) => a + b,
   mul: (a, b) => a * b,
 };
-assert_eq(ops.add(2, 3), 5);
-assert_eq(ops["mul"](2, 3), 6);
+assertEq(ops.add(2, 3), 5);
+assertEq(ops["mul"](2, 3), 6);
 
 // A lambda bound to a variable can call itself recursively.
 var power = (base, exp) => exp == 0 ? 1 : base * power(base, exp - 1);
-assert_eq(power(2, 10), 1024);
+assertEq(power(2, 10), 1024);
 
 // Closures keep the captured environment alive.
-fn make_counter() {
+fn makeCounter() {
   var count = 0;
   return () => {
     count += 1;
     return count;
   };
 }
-var counter = make_counter();
-assert_eq(counter(), 1);
-assert_eq(counter(), 2);
-assert_eq(counter(), 3);
+var counter = makeCounter();
+assertEq(counter(), 1);
+assertEq(counter(), 2);
+assertEq(counter(), 3);
 
-var other = make_counter();
-assert_eq(other(), 1);
-assert_eq(counter(), 4);
+var other = makeCounter();
+assertEq(other(), 1);
+assertEq(counter(), 4);
 
-fn make_adder(n) {
+fn makeAdder(n) {
   return x => x + n;
 }
-var add5 = make_adder(5);
-var add10 = make_adder(10);
-assert_eq(add5(1), 6);
-assert_eq(add10(1), 11);
+var add5 = makeAdder(5);
+var add10 = makeAdder(10);
+assertEq(add5(1), 6);
+assertEq(add10(1), 11);
 
 // Higher-order functions and chaining.
 fn apply(f, x) {
   return f(x);
 }
-assert_eq(apply(x => x * x, 9), 81);
+assertEq(apply(x => x * x, 9), 81);
 
 var numbers = [1, 2, 3, 4];
-assert_eq(numbers.map(x => x * 2), [2, 4, 6, 8]);
-assert_eq(numbers.map(x => x * 2).filter(x => x > 4), [6, 8]);
-assert_eq(numbers.reduce((acc, x) => acc + x, 0), 10);
+assertEq(numbers.map(x => x * 2), [2, 4, 6, 8]);
+assertEq(numbers.map(x => x * 2).filter(x => x > 4), [6, 8]);
+assertEq(numbers.reduce((acc, x) => acc + x, 0), 10);
 
 // Parameters shadow outer variables without touching them.
 var value = 10;
@@ -125,23 +125,23 @@ fn shadow(value) {
   value += 1;
   return value;
 }
-assert_eq(shadow(1), 2);
-assert_eq(value, 10);
+assertEq(shadow(1), 2);
+assertEq(value, 10);
 
 // Arrays are passed by reference, but rebinding a parameter stays local.
-fn push_one(arr) {
+fn pushOne(arr) {
   arr.push(1);
 }
 var shared = [];
-push_one(shared);
-assert_eq(shared, [1]);
+pushOne(shared);
+assertEq(shared, [1]);
 
 fn replace(arr) {
   arr = [9];
   return arr;
 }
 var original = [1];
-assert_eq(replace(original), [9]);
-assert_eq(original, [1]);
+assertEq(replace(original), [9]);
+assertEq(original, [1]);
 
 print("functions ok");

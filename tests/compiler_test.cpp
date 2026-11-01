@@ -54,7 +54,7 @@ void testArithmeticAndPrint() {
   assert(bc.numbers[0].isInt() && bc.numbers[0].asInt() == 1);
   assert(bc.numbers[1].isInt() && bc.numbers[1].asInt() == 2);
   assert(bc.strings.size() == 1 && bc.strings[0] == "x");
-  assert(bc.num_registers == 2);
+  assert(bc.numRegisters == 2);
 }
 
 void testNumericConstantTypes() {
@@ -77,7 +77,7 @@ void testLeftAssociativePrecedence() {
   assert(bc.code[4].op == OpCode::ADD);
   assert(bc.code[5].op == OpCode::PRINT);
   assert(bc.code[6].op == OpCode::HALT);
-  assert(bc.num_registers == 3);
+  assert(bc.numRegisters == 3);
 }
 
 void testStringConstant() {
@@ -93,7 +93,7 @@ void testStringConstant() {
   assert(bc.strings.size() == 2);
   assert(bc.strings[0] == "hi");
   assert(bc.strings[1] == "greeting");
-  assert(bc.num_registers == 1);
+  assert(bc.numRegisters == 1);
 }
 
 void testBoolAndNilLiterals() {
@@ -200,7 +200,7 @@ void testAssignment() {
   assert(bc.code[1].op == OpCode::SETGLOBAL);
   assert(bc.code[1].a == 0 && bc.code[1].b == 0);
   assert(bc.code[2].op == OpCode::HALT);
-  assert(bc.num_registers == 1);
+  assert(bc.numRegisters == 1);
 }
 
 void testConstantDeduplication() {
@@ -228,7 +228,7 @@ void testIfElseJumps() {
   assert(bc.code[5].op == OpCode::LOADK);
   assert(bc.code[6].op == OpCode::PRINT);
   assert(bc.code[7].op == OpCode::HALT);
-  assert(bc.num_locals == 0);
+  assert(bc.numLocals == 0);
 }
 
 void testIfWithoutElse() {
@@ -277,8 +277,8 @@ void testForBackpatch() {
   assert(bc.code[12].jump == 2);  // goes back to the condition
 
   // The `for` initializer is local, not global.
-  assert(bc.num_locals == 1);
-  assert(bc.num_registers == 2);
+  assert(bc.numLocals == 1);
+  assert(bc.numRegisters == 2);
 }
 
 void testBreakAndContinueBackpatch() {
@@ -316,7 +316,7 @@ void testBlockScopingBytecode() {
   assert(bc.code[1].b == 0);
   assert(bc.code[3].op == OpCode::SETLOCAL);
   assert(bc.code[3].b == 0);
-  assert(bc.num_locals == 1);
+  assert(bc.numLocals == 1);
 }
 
 void testShadowingSlots() {
@@ -334,7 +334,7 @@ void testShadowingSlots() {
   assert(bc.code[3].op == OpCode::DECLLOCAL && bc.code[3].b == 1);
   assert(bc.code[4].op == OpCode::GETLOCAL && bc.code[4].b == 1);
   assert(bc.code[6].op == OpCode::GETLOCAL && bc.code[6].b == 0);
-  assert(bc.num_locals == 2);
+  assert(bc.numLocals == 2);
 }
 
 void testLocalImmutableAssignment() {

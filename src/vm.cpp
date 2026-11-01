@@ -213,8 +213,8 @@ CellPtr& VM::localAt(int index) {
 // ------------------------------------------------------------------ execution
 
 void VM::run(const Bytecode& bytecode) {
-  const int registerCount = bytecode.num_registers > 0 ? bytecode.num_registers : 0;
-  const int localCount = bytecode.num_locals > 0 ? bytecode.num_locals : 0;
+  const int registerCount = bytecode.numRegisters > 0 ? bytecode.numRegisters : 0;
+  const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
   locals_.assign(static_cast<size_t>(localCount), CellPtr{});
 

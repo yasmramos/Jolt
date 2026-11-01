@@ -1,43 +1,43 @@
 // Compile-time constants: `const` bindings are folded by the parser.
 
 const MAX = 10 * 2 + 3;
-assert_eq(MAX, 23);
+assertEq(MAX, 23);
 
 // Consts can reference other consts, including forward references at the
 // top level (the parser resolves the const table to a fixed point).
 const B = A + 1;
 const A = 41;
-assert_eq(B, 42);
-assert_eq(A, 41);
+assertEq(B, 42);
+assertEq(A, 41);
 
 // String concatenation of constants is folded too.
 const GREETING = "hello" + ", " + "world";
-assert_eq(GREETING, "hello, world");
+assertEq(GREETING, "hello, world");
 
 // Unary and comparison operators over constants.
 const NEG = -7;
-assert_eq(NEG, -7);
+assertEq(NEG, -7);
 const FLAG = MAX > 10;
-assert_eq(FLAG, true);
+assertEq(FLAG, true);
 
 // Consts are visible inside functions (they fold to literals).
 fn scaled(n) { return n * MAX; }
-assert_eq(scaled(2), 46);
+assertEq(scaled(2), 46);
 
 // Nested blocks fold their consts eagerly.
 {
   const LOCAL = 5 + 5;
-  assert_eq(LOCAL, 10);
+  assertEq(LOCAL, 10);
 }
 
 // `const` is immutable like `let`: assignment is rejected at runtime here.
-// See tests/errors/const_reassign.jolt for the negative test.
+// See tests/errors/constReassign.jolt for the negative test.
 
 // `let` (runtime immutable) and `var` (mutable) still work alongside consts.
 let derived = MAX + 1;
-assert_eq(derived, 24);
+assertEq(derived, 24);
 var counter = 0;
 counter = counter + MAX;
-assert_eq(counter, 23);
+assertEq(counter, 23);
 
 print("constants ok");
