@@ -121,7 +121,7 @@ void sortItems(Interpreter& in, std::vector<Value>& items, const Value* comparat
 
 // --------------------------------------------------------------- array methods
 
-bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& name, Value& out) {
+bool bindArray(Interpreter&, const ArrayPtr& strongArray, const std::string& name, Value& out) {
   // Bound methods own their receiver, so a method called on a temporary
   // (`[1, 2].concat(...)`) keeps it alive for the whole call. The only cycle
   // this creates is a method stored inside its own receiver (`a.f = a.push`).
@@ -672,7 +672,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
 
 // ----------------------------------------------------------------- map methods
 
-bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, Value& out) {
+bool bindMap(Interpreter&, const MapPtr& strongMap, const std::string& name, Value& out) {
   // Bound methods own their receiver, see bindArray above.
   MapPtr map = strongMap;
   if (name == "keys") {
