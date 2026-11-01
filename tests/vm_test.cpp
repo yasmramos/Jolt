@@ -1,6 +1,12 @@
 // Tests for the register-based virtual machine (PHASE 3-5).
 // Compiles Jolt snippets and runs the resulting bytecode.
 
+// Release builds define NDEBUG, which would compile every assert() out and
+// leave the suite green without testing anything.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <cassert>
 #include <cmath>
 #include <cstdio>
