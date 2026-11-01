@@ -129,10 +129,10 @@ Binding* Env::find(const std::string& name) {
   return nullptr;
 }
 
-void Env::define(const std::string& name, Value value, bool isConst) {
+void Env::define(const std::string& name, Value value, bool isImmutable) {
   Binding binding;
   binding.value = std::move(value);
-  binding.isConst = isConst;
+  binding.isImmutable = isImmutable;
   vars[name] = std::move(binding);
 }
 
@@ -146,7 +146,7 @@ Env::Assign Env::assign(const std::string& name, Value value) {
     if (!visited.insert(current.get()).second) continue;
     auto it = current->vars.find(name);
     if (it != current->vars.end()) {
-      if (it->second.isConst) return Env::Assign::Const;
+      if (it->second.isImmutable) return Env::Assign::Immutable;
       it->second.value = std::move(value);
       return Env::Assign::Ok;
     }
@@ -164,8 +164,8 @@ Interpreter::Interpreter(std::string name)
   registerBuiltins(*this);
 }
 
-void Interpreter::defineGlobal(const std::string& name, Value value, bool isConst) {
-  globals->define(name, std::move(value), isConst);
+void Interpreter::defineGlobal(const std::string& name, Value value, bool isImmutable) {
+  globals->define(name, std::move(value), isImmutable);
 }
 
 void Interpreter::addNative(const std::string& name, NativeFn fn) {
@@ -220,7 +220,7 @@ void Interpreter::exec(const Stmt& stmt) {
           [&](const ExprStmt& s) { eval(*s.expr); },
           [&](const LetStmt& s) {
             Value value = s.init ? eval(*s.init) : Value();
-            env->define(s.name, std::move(value), s.isConst);
+            env->define(s.name, std::move(value), s.kind != Tok::Var);
           },
           [&](const FnDeclStmt& s) {
             env->define(s.name, Value(makeFunction(s.name, s.params, s.body, env)), false);
@@ -460,8 +460,8 @@ Value Interpreter::eval(const Expr& expr) {
             if (auto* var = std::get_if<VariableExpr>(&e.target->node)) {
               Binding* binding = env->find(var->name);
               if (!binding) fail("undefined variable '" + var->name + "'", e.target->line, e.target->col);
-              if (binding->isConst) {
-                fail("cannot assign to constant '" + var->name + "'", e.target->line, e.target->col);
+              if (binding->isImmutable) {
+                fail("cannot assign to immutable variable '" + var->name + "'", e.target->line, e.target->col);
               }
               Value result = binary(op, binding->value, right, e.opLine, e.opCol);
               binding->value = result;
@@ -699,10 +699,10 @@ Value Interpreter::assignTo(const Expr& target, Value value) {
     switch (env->assign(var->name, value)) {
       case Env::Assign::Ok:
         return value;
-      case Env::Assign::Const:
-        fail("cannot assign to constant '" + var->name + "'", target.line, target.col);
+      case Env::Assign::Immutable:
+        fail("cannot assign to immutable variable '" + var->name + "'", target.line, target.col);
       case Env::Assign::NotFound:
-        fail("undefined variable '" + var->name + "' (declare it with 'let')", target.line,
+        fail("undefined variable '" + var->name + "' (declare it with 'var' or 'let')", target.line,
              target.col);
     }
   }

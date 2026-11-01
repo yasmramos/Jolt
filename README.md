@@ -18,7 +18,7 @@ for language in languages {
 ## Features
 
 - Dynamic types: `nil`, `bool`, `int` (64-bit), `float`, `string`, `array`, `map`, `function` and `range`.
-- Variables with `let` and `const`, block scope and real closures.
+- Variables with `var` (mutable), `let` (immutable, runtime) and `const` (immutable, folded at compile time), block scope and real closures.
 - First-class functions, recursion, anonymous functions and `=>` lambdas.
 - String interpolation with `"${expression}"` and UTF-8 support.
 - Ordered arrays and maps that preserve insertion order.
@@ -175,13 +175,13 @@ jolt examples/fizzbuzz.jolt
 ## The language in a minute
 
 ```jolt
-// Variables and constants
+// Variables: var is mutable, let is immutable, const is a compile-time constant
 let name = "world";
 const VERSION = "0.1.0";
 
 // Functions and closures
 fn make_counter() {
-  let n = 0;
+  var n = 0;
   return fn() {
     n += 1;
     return n;
@@ -235,7 +235,7 @@ Linux, macOS or MSYS2:
 ./tests/run_vm.sh
 ```
 
-The positive tests use `assert` and `assert_eq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of reassigned constants. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
+The positive tests use `assert` and `assert_eq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of assignments to immutable `let` bindings. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
 
 ## Limitations and roadmap
 

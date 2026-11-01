@@ -16,7 +16,8 @@ struct Keyword {
 };
 
 const Keyword kKeywords[] = {
-    {"let", Tok::Let},       {"const", Tok::Const},     {"fn", Tok::Fn},
+    {"let", Tok::Let},       {"var", Tok::Var},        {"const", Tok::Const},
+    {"fn", Tok::Fn},
     {"if", Tok::If},         {"else", Tok::Else},       {"while", Tok::While},
     {"for", Tok::For},       {"in", Tok::In},           {"break", Tok::Break},
     {"continue", Tok::Continue}, {"return", Tok::Return}, {"true", Tok::True},

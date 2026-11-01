@@ -223,11 +223,11 @@ void Compiler::popScope() {
   scopes_.pop_back();
 }
 
-int Compiler::declareLocal(const std::string& name, bool isConst) {
+int Compiler::declareLocal(const std::string& name, bool isImmutable) {
   int slot = next_local_++;
   if (next_local_ > max_local_) max_local_ = next_local_;
   Scope& scope = scopes_.back();
-  scope.vars[name] = LocalVar{slot, isConst};
+  scope.vars[name] = LocalVar{slot, isImmutable};
   return slot;
 }
 
@@ -243,8 +243,8 @@ bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
   return false;
 }
 
-void Compiler::declareGlobal(const std::string& name, bool isConst) {
-  if (isConst) {
+void Compiler::declareGlobal(const std::string& name, bool isImmutable) {
+  if (isImmutable) {
     globalConsts_.insert(name);
   } else {
     globalConsts_.erase(name);
@@ -344,11 +344,11 @@ void Compiler::compileLet(const LetStmt& s) {
   if (inGlobalScope()) {
     // Top level: global variable (persists in the REPL).
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
-    declareGlobal(s.name, s.isConst);
+    declareGlobal(s.name, s.kind != Tok::Var);
   } else {
     // Nested block: frame-local variable. The declaration happens after the
     // initializer is compiled, exactly like `Env::define`.
-    int slot = declareLocal(s.name, s.isConst);
+    int slot = declareLocal(s.name, s.kind != Tok::Var);
     emit(OpCode::DECLLOCAL, reg, slot);
   }
   freeReg();
@@ -466,11 +466,11 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   LocalVar local;
   bool isLocal = resolveLocal(name, local);
 
-  if (isLocal && local.isConst) {
-    fail("cannot assign to constant '" + name + "'", line, col);
+  if (isLocal && local.isImmutable) {
+    fail("cannot assign to immutable variable '" + name + "'", line, col);
   }
   if (!isLocal && globalConsts_.find(name) != globalConsts_.end()) {
-    fail("cannot assign to constant '" + name + "'", line, col);
+    fail("cannot assign to immutable variable '" + name + "'", line, col);
   }
 
   if (assign.op == Tok::Eq) {

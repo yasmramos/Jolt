@@ -13,6 +13,7 @@ enum class Tok {
   Str,
   Ident,
   // keywords
+  Var,
   Let,
   Const,
   Fn,

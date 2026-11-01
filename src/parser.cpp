@@ -1,10 +1,158 @@
 #include "parser.h"
 
+#include <cmath>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "errors.h"
 
 namespace {
+
+// Collects the statements of a block-like node (BlockStmt) for rewriting.
+const std::vector<StmtPtr>* blockStatements(const StmtNode& node) {
+  if (const auto* block = std::get_if<BlockStmt>(&node)) return &block->stmts;
+  return nullptr;
+}
+
+}  // namespace
+
+// Parse-time resolution of top-level `const` declarations. Runs as a second
+// pass over the finished program because `const` values are resolved while
+// parsing: a const may legally reference another top-level const declared
+// later in the file. The pass hoists top-level consts to the front of the
+// program (in source order), folds each const initializer against the table
+// of constants recorded so far, normalizes the node to a literal (so every
+// backend gets the folded value without repeating the fold) and records the
+// result for later references. Consts nested inside functions or blocks keep
+// their folded values from the first parse pass and are not hoisted, so
+// their scope rules stay honest.
+void Parser::resolveTopLevelConsts(StmtPtr& program) {
+  const std::vector<StmtPtr>* stmts = blockStatements(program->node);
+  if (!stmts) return;
+  std::vector<StmtPtr> reordered;
+  reordered.reserve(stmts->size());
+  std::vector<StmtPtr> consts;
+  for (const StmtPtr& stmt : *stmts) {
+    const auto* decl = std::get_if<LetStmt>(&stmt->node);
+    if (decl && decl->kind == Tok::Const) {
+      consts.push_back(stmt);
+    } else {
+      reordered.push_back(stmt);
+    }
+  }
+  if (consts.empty()) return;
+
+  // Build the const table. A top-level const initializer may reference
+  // another top-level const declared later in the file, so a single
+  // sequential pass is not enough: iterate to a fixed point. Declarations
+  // whose initializer still depends on an unresolved const are retried once
+  // the missing value becomes available; cycles and genuinely non-constant
+  // expressions are reported against the first declaration left unresolved.
+  struct Pending {
+    StmtPtr stmt;
+    std::string name;
+    std::string lastReason;
+  };
+  std::vector<Pending> pending;
+  for (const StmtPtr& stmt : consts) {
+    const auto& decl = std::get<LetStmt>(stmt->node);
+    pending.push_back(Pending{stmt, decl.name, "initializer is not a constant expression"});
+  }
+  bool progressed = true;
+  while (!pending.empty() && progressed) {
+    progressed = false;
+    for (size_t index = 0; index < pending.size();) {
+      auto& item = pending[index];
+      auto& decl = std::get<LetStmt>(item.stmt->node);
+      Value foldedValue;
+      std::string reason;
+      if (foldConstant(*decl.init, foldedValue, reason)) {
+        // Normalize to a literal so backends never re-evaluate the expression.
+        decl.init = makeExpr(LiteralExpr{foldedValue}, item.stmt->line, item.stmt->col);
+        constValues_[item.name] = std::move(foldedValue);
+        pending.erase(pending.begin() + static_cast<long>(index));
+        progressed = true;
+      } else {
+        item.lastReason = std::move(reason);
+        ++index;
+      }
+    }
+  }
+  if (!pending.empty()) {
+    const Pending& first = pending.front();
+    throw CompileError{"'const' '" + first.name + "' initializer must be a constant expression: " +
+                           first.lastReason,
+                       first.stmt->line, first.stmt->col};
+  }
+  reordered.insert(reordered.begin(), consts.begin(), consts.end());
+  BlockStmt rebuilt{std::move(reordered)};
+  program->node = std::move(rebuilt);
+}
+
+Parser::TopLevelScope::TopLevelScope(bool& flag) : flag_(flag), previous_(flag) {
+  flag_ = true;
+}
+
+Parser::TopLevelScope::~TopLevelScope() { flag_ = previous_; }
+
+StmtPtr Parser::parseProgram() {
+  TopLevelScope topLevel(atTopLevel_);
+  std::vector<StmtPtr> statements;
+  int line = peek().line;
+  int col = peek().col;
+  while (!check(Tok::Eof)) {
+    if (match(Tok::Semicolon)) continue;
+    statements.push_back(parseStatement());
+  }
+  auto program = makeStmt(BlockStmt{std::move(statements)}, line, col);
+  // Second pass: `const` values are resolved at parse time, so a const may
+  // reference another top-level const declared later in the file. Hoisting
+  // top-level consts to the front of the program makes their folded values
+  // available to every subsequent const initializer. Re-running the pass is
+  // idempotent (the parser state was consumed by the first pass).
+  resolveTopLevelConsts(program);
+  return program;
+}
+
+// Wrapping integer arithmetic, matching the interpreter's overflow behavior.
+int64_t wrapAdd(int64_t left, int64_t right) {
+  return static_cast<int64_t>(static_cast<uint64_t>(left) + static_cast<uint64_t>(right));
+}
+int64_t wrapSub(int64_t left, int64_t right) {
+  return static_cast<int64_t>(static_cast<uint64_t>(left) - static_cast<uint64_t>(right));
+}
+int64_t wrapMul(int64_t left, int64_t right) {
+  return static_cast<int64_t>(static_cast<uint64_t>(left) * static_cast<uint64_t>(right));
+}
+
+// Binary exponentiation on integers (exponent assumed non-negative),
+// mirroring the interpreter's `intPow`.
+int64_t foldIntPow(int64_t base, int64_t exponent) {
+  uint64_t result = 1;
+  uint64_t factor = static_cast<uint64_t>(base);
+  uint64_t exp = static_cast<uint64_t>(exponent);
+  while (exp > 0) {
+    if (exp & 1U) result *= factor;
+    factor *= factor;
+    exp >>= 1U;
+  }
+  return static_cast<int64_t>(result);
+}
+
+bool isComparisonOp(Tok op) {
+  switch (op) {
+    case Tok::EqEq:
+    case Tok::BangEq:
+    case Tok::Lt:
+    case Tok::LtEq:
+    case Tok::Gt:
+    case Tok::GtEq:
+      return true;
+    default:
+      return false;
+  }
+}
 
 bool isAssignOp(Tok type) {
   switch (type) {
@@ -26,8 +174,6 @@ bool isAssignable(const ExprPtr& expr) {
          std::holds_alternative<IndexExpr>(expr->node) ||
          std::holds_alternative<MemberExpr>(expr->node);
 }
-
-}  // namespace
 
 Parser::Parser(std::vector<Token> tokens, std::string where)
     : tokens_(std::move(tokens)), where_(std::move(where)) {}
@@ -80,17 +226,6 @@ void Parser::error(const Token& token, const std::string& message) const {
   throw CompileError{message + ", found " + describe(token), token.line, token.col};
 }
 
-StmtPtr Parser::parseProgram() {
-  std::vector<StmtPtr> statements;
-  int line = peek().line;
-  int col = peek().col;
-  while (!check(Tok::Eof)) {
-    if (match(Tok::Semicolon)) continue;
-    statements.push_back(parseStatement());
-  }
-  return makeStmt(BlockStmt{std::move(statements)}, line, col);
-}
-
 ExprPtr Parser::parseFullExpression() {
   auto expr = parseExpression();
   match(Tok::Semicolon);
@@ -103,7 +238,7 @@ ExprPtr Parser::parseFullExpression() {
 StmtPtr Parser::parseStatement() {
   const Token& token = peek();
 
-  if (match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
+  if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
   if (match(Tok::Fn)) return parseFnDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
@@ -123,16 +258,200 @@ StmtPtr Parser::parseStatement() {
 
 StmtPtr Parser::parseVarDecl() {
   const Token& keyword = previous();
-  bool isConst = keyword.type == Tok::Const;
+  // Binding kinds (see LetStmt): `var` is mutable with an optional
+  // initializer; `let` is immutable and evaluated at runtime; `const` is
+  // immutable and must be initialized with a compile-time constant
+  // expression. The parser enforces every rule so downstream phases only
+  // need to honor immutability.
+  const bool isImmutable = keyword.type != Tok::Var;
   const Token& name = consume(Tok::Ident, "expected a variable name");
   ExprPtr init;
   if (match(Tok::Eq)) {
     init = parseExpression();
-  } else if (isConst) {
-    error(peek(), "a 'const' declaration requires a value");
+    // Top-level consts are folded in resolveTopLevelConsts after the whole
+    // program is parsed (so they may reference other top-level consts);
+    // nested ones must only use literals and already-known values here.
+    if (keyword.type == Tok::Const && !atTopLevel_) {
+      Value constantValue;
+      std::string reason;
+      if (!foldConstant(*init, constantValue, reason)) {
+        error(keyword, "'const' initializer must be a constant expression: " + reason);
+      }
+      // Normalize the node to a literal so every backend gets the folded
+      // value without repeating the fold.
+      init = makeExpr(LiteralExpr{constantValue}, keyword.line, keyword.col);
+    }
+  } else if (isImmutable) {
+    error(peek(), "'" + keyword.lexeme + "' declaration requires a value (use 'var' for a mutable binding)");
   }
   consume(Tok::Semicolon, "expected ';' after variable declaration");
-  return makeStmt(LetStmt{name.lexeme, std::move(init), isConst}, keyword.line, keyword.col);
+  LetStmt stmt{name.lexeme, std::move(init), keyword.type};
+  return makeStmt(std::move(stmt), keyword.line, keyword.col);
+}
+
+// Compile-time constant folding for `const` initializers. Supported:
+// literals (int/float/string/bool/nil), references to previously declared
+// consts, unary +/-/! and binary arithmetic/comparison over constants.
+// Anything else (calls, arrays/maps, non-const variables) is rejected with
+// a human-readable reason.
+bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) const {
+  // Variant alternatives are addressed by type (never by raw index): the
+  // order of ExprNode alternatives changes as nodes are added to the AST.
+  if (const auto* lit = std::get_if<LiteralExpr>(&expr.node)) {
+    out = lit->value;
+    return true;
+  }
+  if (const auto* var = std::get_if<VariableExpr>(&expr.node)) {
+    auto it = constValues_.find(var->name);
+    if (it == constValues_.end()) {
+      reason = "'" + var->name + "' is not a previously declared 'const'";
+      return false;
+    }
+    out = it->second;
+    return true;
+  }
+  if (const auto* u = std::get_if<UnaryExpr>(&expr.node)) {
+    Value operand;
+    if (!foldConstant(*u->operand, operand, reason)) return false;
+    switch (u->op) {
+        case Tok::Bang:
+          out = Value(!operand.truthy());
+          return true;
+        case Tok::Minus:
+          if (operand.isInt()) {
+            out = Value(static_cast<int64_t>(0ULL - static_cast<uint64_t>(operand.asInt())));
+            return true;
+          }
+          if (operand.isFloat()) { out = Value(-operand.asFloat()); return true; }
+          reason = "unary '-' needs a numeric constant";
+          return false;
+        case Tok::Plus:
+          if (operand.isNumber()) { out = operand; return true; }
+          reason = "unary '+' needs a numeric constant";
+          return false;
+        case Tok::Tilde:
+          if (operand.isInt()) { out = Value(~operand.asInt()); return true; }
+          reason = "unary '~' needs an integer constant";
+          return false;
+        default:
+          reason = "unsupported unary operator in a constant expression";
+          return false;
+      }
+  }
+  if (const auto* bPtr = std::get_if<BinaryExpr>(&expr.node)) {
+      const BinaryExpr& b = *bPtr;
+      // Short-circuit operators fold their operands and apply the same
+      // lazy semantics as the interpreter.
+      if (b.op == Tok::AmpAmp || b.op == Tok::PipePipe) {
+        Value left;
+        if (!foldConstant(*b.lhs, left, reason)) return false;
+        const bool takeRight = (b.op == Tok::AmpAmp) ? left.truthy() : !left.truthy();
+        if (!takeRight) { out = left; return true; }
+        return foldConstant(*b.rhs, out, reason);
+      }
+      Value left;
+      Value right;
+      if (!foldConstant(*b.lhs, left, reason)) return false;
+      if (!foldConstant(*b.rhs, right, reason)) return false;
+      // String concatenation of two constant strings.
+      if (b.op == Tok::Plus && left.isStr() && right.isStr()) {
+        out = Value(left.asStr() + right.asStr());
+        return true;
+      }
+      // Comparisons mirror the interpreter's ordering for numbers, strings
+      // and booleans.
+      if (isComparisonOp(b.op)) {
+        if (b.op == Tok::EqEq) { out = Value(left.equals(right)); return true; }
+        if (b.op == Tok::BangEq) { out = Value(!left.equals(right)); return true; }
+        bool ordered = false;
+        int64_t cmpRank = 0;  // -1: left < right, 0: equal, 1: left > right
+        if (left.isNumber() && right.isNumber()) {
+          if (left.isInt() && right.isInt()) {
+            cmpRank = left.asInt() < right.asInt() ? -1 : (right.asInt() < left.asInt() ? 1 : 0);
+          } else {
+            cmpRank = left.number() < right.number() ? -1 : (right.number() < left.number() ? 1 : 0);
+          }
+          ordered = true;
+        } else if (left.isStr() && right.isStr()) {
+          cmpRank = left.asStr() < right.asStr() ? -1 : (right.asStr() < left.asStr() ? 1 : 0);
+          ordered = true;
+        } else if (left.isBool() && right.isBool()) {
+          cmpRank = (!left.asBool() && right.asBool()) ? -1
+                    : ((left.asBool() && !right.asBool()) ? 1 : 0);
+          ordered = true;
+        }
+        if (!ordered) {
+          reason = "cannot compare '" + std::string(left.typeName()) + "' with '" +
+                   std::string(right.typeName()) + "' in a constant expression";
+          return false;
+        }
+        switch (b.op) {
+          case Tok::Lt: out = Value(cmpRank < 0); return true;
+          case Tok::LtEq: out = Value(cmpRank <= 0); return true;
+          case Tok::Gt: out = Value(cmpRank > 0); return true;
+          case Tok::GtEq: out = Value(cmpRank >= 0); return true;
+          default: return false;
+        }
+      }
+      // Numeric promotion mirrors the interpreter: int op float -> float.
+      if (!left.isNumber() || !right.isNumber()) {
+        reason = "arithmetic in a constant expression needs numeric operands";
+        return false;
+      }
+      if (left.isInt() && right.isInt()) {
+        const int64_t a = left.asInt();
+        const int64_t c = right.asInt();
+        switch (b.op) {
+          case Tok::Plus: out = Value(wrapAdd(a, c)); return true;
+          case Tok::Minus: out = Value(wrapSub(a, c)); return true;
+          case Tok::Star: out = Value(wrapMul(a, c)); return true;
+          case Tok::Slash:
+            if (c == 0) { reason = "division by zero in a constant expression"; return false; }
+            if (a == INT64_MIN && c == -1) { out = Value(a); return true; }
+            out = Value(a / c); return true;
+          case Tok::Percent:
+            if (c == 0) { reason = "division by zero in a constant expression"; return false; }
+            if (a == INT64_MIN && c == -1) { out = Value(static_cast<int64_t>(0)); return true; }
+            out = Value(a % c); return true;
+          case Tok::StarStar:
+            if (c >= 0) { out = Value(foldIntPow(a, c)); return true; }
+            out = Value(std::pow(static_cast<double>(a), static_cast<double>(c))); return true;
+          case Tok::Amp: out = Value(a & c); return true;
+          case Tok::Pipe: out = Value(a | c); return true;
+          case Tok::Caret: out = Value(a ^ c); return true;
+          case Tok::Shl:
+            if (c < 0 || c > 63) { reason = "shift count must be between 0 and 63"; return false; }
+            out = Value(static_cast<int64_t>(static_cast<uint64_t>(a) << static_cast<uint64_t>(c)));
+            return true;
+          case Tok::Shr:
+            if (c < 0 || c > 63) { reason = "shift count must be between 0 and 63"; return false; }
+            out = Value(a >> c);
+            return true;
+          default:
+            reason = "unsupported binary operator in a constant expression";
+            return false;
+        }
+      }
+      const double a = left.number();
+      const double c = right.number();
+      switch (b.op) {
+        case Tok::Plus: out = Value(a + c); return true;
+        case Tok::Minus: out = Value(a - c); return true;
+        case Tok::Star: out = Value(a * c); return true;
+        case Tok::Slash:
+          if (c == 0) { reason = "division by zero in a constant expression"; return false; }
+          out = Value(a / c); return true;
+        case Tok::Percent:
+          if (c == 0) { reason = "division by zero in a constant expression"; return false; }
+          out = Value(std::fmod(a, c)); return true;
+        case Tok::StarStar: out = Value(std::pow(a, c)); return true;
+        default:
+          reason = "unsupported binary operator in a constant expression";
+          return false;
+      }
+  }
+  reason = "expression is not a compile-time constant";
+  return false;
 }
 
 StmtPtr Parser::parseFnDecl() {
@@ -204,7 +523,7 @@ StmtPtr Parser::parseFor() {
 
   consume(Tok::LParen, "expected '(' after 'for'");
   StmtPtr init;
-  if (match(Tok::Let) || match(Tok::Const)) {
+  if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) {
     init = parseVarDecl();  // consumes the ';'
   } else if (match(Tok::Semicolon)) {
     init = nullptr;

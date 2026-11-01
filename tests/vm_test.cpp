@@ -21,7 +21,14 @@ Bytecode compileSource(const std::string& source) {
   auto tokens = lex(source);
   Parser parser(std::move(tokens), "<vm-test>");
   auto program = parser.parseProgram();
-  return compileProgram(program);
+  // Compile-time errors (e.g. reassigning a `let` binding) are reported as
+  // failures, not crashes: abort with a clear message if one occurs here.
+  try {
+    return compileProgram(program);
+  } catch (const CompileError& error) {
+    std::fprintf(stderr, "unexpected compile error: %s\n", error.message.c_str());
+    std::exit(1);
+  }
 }
 
 // Redirects std::cout for as long as the object lives.
@@ -53,9 +60,13 @@ const Value& requireGlobal(const VM& vm, const std::string& name) {
 std::string runtimeError(const std::string& source) {
   Bytecode bytecode = compileSource(source);
   VM vm;
+  // The VM raises compile-time style errors for some runtime failures, so
+  // both exception flavors are treated as "the program failed to run".
   try {
     vm.run(bytecode);
   } catch (const RuntimeError& error) {
+    return error.message;
+  } catch (const CompileError& error) {
     return error.message;
   }
   return "";
@@ -142,7 +153,7 @@ void testStringConcatenation() {
 }
 
 void testGlobalAssignmentAndRead() {
-  Bytecode bytecode = compileSource("let x = 7;\nx = x - 2;\n");
+  Bytecode bytecode = compileSource("var x = 7;\nx = x - 2;\n");
   VM vm;
   vm.run(bytecode);
 
@@ -152,14 +163,14 @@ void testGlobalAssignmentAndRead() {
 
 void testCompoundAssignment() {
   Bytecode bytecode = compileSource(
-      "let x = 1;\n"
+      "var x = 1;\n"
       "x += 2;\n"
       "x *= 3;\n"
       "x -= 1;\n"
       "x /= 2;\n"
-      "let y = 10;\n"
+      "var y = 10;\n"
       "y %= 3;\n"
-      "let z = 2;\n"
+      "var z = 2;\n"
       "z **= 10;\n");
   VM vm;
   vm.run(bytecode);
@@ -176,7 +187,7 @@ void testCompoundAssignment() {
 }
 
 void testNilAndBoolLiterals() {
-  Bytecode bytecode = compileSource("let a = nil;\nlet b = true;\nlet c = false;\nlet d;\n");
+  Bytecode bytecode = compileSource("let a = nil;\nlet b = true;\nlet c = false;\nvar d;\n");
   VM vm;
   vm.run(bytecode);
 
@@ -263,7 +274,7 @@ void testInvalidComparison() {
 
 void testGlobalsPersistBetweenRuns() {
   VM vm;
-  vm.run(compileSource("let x = 5;\n"));
+  vm.run(compileSource("var x = 5;\n"));
   vm.run(compileSource("x = x + 1;\n"));
 
   const Value& x = requireGlobal(vm, "x");
@@ -281,7 +292,7 @@ void testRegisterCount() {
 
 void testIfElseExecution() {
   Bytecode bytecode = compileSource(
-      "let a = 0;\n"
+      "var a = 0;\n"
       "if (true) { a = 1; } else { a = 2; }\n"
       "if (false) { a = 3; } else { a = 4; }\n"
       "if (false) { a = 5; }\n");
@@ -295,7 +306,7 @@ void testIfElseExecution() {
 void testElseIfChain() {
   Bytecode bytecode = compileSource(
       "let x = 2;\n"
-      "let out = \"\";\n"
+      "var out = \"\";\n"
       "if (x == 1) { out = \"one\"; }\n"
       "else if (x == 2) { out = \"two\"; }\n"
       "else { out = \"other\"; }\n");
@@ -325,8 +336,8 @@ void testTruthinessInConditions() {
 
 void testWhileLoop() {
   Bytecode bytecode = compileSource(
-      "let sum = 0;\n"
-      "let i = 0;\n"
+      "var sum = 0;\n"
+      "var i = 0;\n"
       "while (i < 5) { sum += i; i += 1; }\n");
   VM vm;
   vm.run(bytecode);
@@ -337,8 +348,8 @@ void testWhileLoop() {
 
 void testForLoop() {
   Bytecode bytecode = compileSource(
-      "let sum = 0;\n"
-      "for (let i = 1; i <= 4; i += 1) { sum += i; }\n");
+      "var sum = 0;\n"
+      "for (var i = 1; i <= 4; i += 1) { sum += i; }\n");
   VM vm;
   vm.run(bytecode);
 
@@ -350,7 +361,7 @@ void testForLoop() {
 
 void testForWithoutCondition() {
   Bytecode bytecode = compileSource(
-      "let n = 0;\n"
+      "var n = 0;\n"
       "for (;;) { n += 1; if (n >= 3) { break; } }\n");
   VM vm;
   vm.run(bytecode);
@@ -360,7 +371,7 @@ void testForWithoutCondition() {
 
 void testBreakOutOfWhile() {
   Bytecode bytecode = compileSource(
-      "let n = 0;\n"
+      "var n = 0;\n"
       "while (true) { n += 1; if (n == 3) { break; } }\n");
   VM vm;
   vm.run(bytecode);
@@ -370,8 +381,8 @@ void testBreakOutOfWhile() {
 
 void testContinueInWhile() {
   Bytecode bytecode = compileSource(
-      "let sum = 0;\n"
-      "let i = 0;\n"
+      "var sum = 0;\n"
+      "var i = 0;\n"
       "while (i < 5) {\n"
       "  i += 1;\n"
       "  if (i % 2 == 0) { continue; }\n"
@@ -387,8 +398,8 @@ void testContinueInWhile() {
 
 void testContinueInForRunsStep() {
   Bytecode bytecode = compileSource(
-      "let sum = 0;\n"
-      "for (let i = 1; i <= 4; i += 1) {\n"
+      "var sum = 0;\n"
+      "for (var i = 1; i <= 4; i += 1) {\n"
       "  if (i % 2 == 0) { continue; }\n"
       "  sum += i;\n"
       "}\n");
@@ -401,9 +412,9 @@ void testContinueInForRunsStep() {
 
 void testNestedLoops() {
   Bytecode bytecode = compileSource(
-      "let total = 0;\n"
-      "for (let i = 0; i < 3; i += 1) {\n"
-      "  for (let j = 0; j < 3; j += 1) {\n"
+      "var total = 0;\n"
+      "for (var i = 0; i < 3; i += 1) {\n"
+      "  for (var j = 0; j < 3; j += 1) {\n"
       "    if (j == 1) { continue; }\n"
       "    if (i == 2) { break; }\n"
       "    total += 1;\n"
@@ -440,7 +451,7 @@ void testBlockLocalIsNotGlobal() {
 void testLocalCompoundAssignment() {
   Bytecode bytecode = compileSource(
       "{\n"
-      "  let y = 10;\n"
+      "  var y = 10;\n"
       "  y += 5;\n"
       "  y *= 2;\n"
       "  print(y);\n"

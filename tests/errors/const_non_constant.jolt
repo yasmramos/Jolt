@@ -1,0 +1,3 @@
+// expect-exit: 65
+var y = 2;
+const Z = y * 3;

@@ -36,7 +36,7 @@ class Compiler {
  private:
   struct LocalVar {
     int slot = 0;
-    bool isConst = false;
+    bool isImmutable = false;
   };
 
   struct Scope {
@@ -74,9 +74,9 @@ class Compiler {
   bool inGlobalScope() const { return scopes_.size() <= 1; }
   void pushScope();
   void popScope();
-  int declareLocal(const std::string& name, bool isConst);
+  int declareLocal(const std::string& name, bool isImmutable);
   bool resolveLocal(const std::string& name, LocalVar& out) const;
-  void declareGlobal(const std::string& name, bool isConst);
+  void declareGlobal(const std::string& name, bool isImmutable);
 
   int compileExpr(const Expr& expr);
   int compileVariable(const std::string& name);

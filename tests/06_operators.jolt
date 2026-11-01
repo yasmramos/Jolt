@@ -39,12 +39,12 @@ assert_eq(2 in [1, 2], true);
 assert_eq(5 in [1, 2], false);
 
 // Ternary expressions.
-let n = 7;
+var n = 7;
 assert_eq(n % 2 == 0 ? "even" : "odd", "odd");
 assert_eq(n > 5 ? n > 10 ? "big" : "medium" : "small", "medium");
 
 // Compound assignment.
-let x = 10;
+var x = 10;
 x += 5;
 assert_eq(x, 15);
 x -= 3;
@@ -58,20 +58,20 @@ assert_eq(x, 2);
 x **= 5;
 assert_eq(x, 32);
 
-let compound_arr = [1, 2, 3];
+var compound_arr = [1, 2, 3];
 compound_arr[1] += 10;
 assert_eq(compound_arr, [1, 12, 3]);
 
-let obj = {count: 1};
+var obj = {count: 1};
 obj.count += 1;
 assert_eq(obj.count, 2);
 obj["count"] *= 5;
 assert_eq(obj.count, 10);
 
 // Assignment is right-associative and yields its value.
-let a = 0;
-let b = 0;
-let c = (a = b = 3);
+var a = 0;
+var b = 0;
+var c = (a = b = 3);
 assert_eq(a, 3);
 assert_eq(b, 3);
 assert_eq(c, 3);

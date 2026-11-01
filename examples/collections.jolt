@@ -1,26 +1,26 @@
 // Arrays, maps and higher-order functions.
 
-let people = [
+var people = [
   {name: "Ada", age: 36},
   {name: "Grace", age: 45},
   {name: "Alan", age: 41},
 ];
 
-let names = people.map(fn(p) => p.name);
+var names = people.map(fn(p) => p.name);
 print("Names: " + names.join(", "));
 
-let older = people.filter(fn(p) => p.age >= 40);
+var older = people.filter(fn(p) => p.age >= 40);
 for person in older {
   print("${person.name} is ${person.age} years old");
 }
 
-let total = people.reduce(fn(acc, p) => acc + p.age, 0);
-let average = float(total) / len(people);
+var total = people.reduce(fn(acc, p) => acc + p.age, 0);
+var average = float(total) / len(people);
 print("Average age: ${average}");
 
 // Count words with a map.
-let text = "one two two three three three";
-let counts = {};
+var text = "one two two three three three";
+var counts = {};
 for word in text.split(" ") {
   counts[word] = counts.get(word, 0) + 1;
 }
@@ -30,7 +30,7 @@ for entry in counts.entries() {
 }
 
 // Sort without modifying the original.
-let scores = [42, 7, 99, 13];
+var scores = [42, 7, 99, 13];
 print("original: ${scores}");
 print("sorted: ${scores.sorted()}");
 print("reversed: ${scores.reversed()}");

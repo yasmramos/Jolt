@@ -85,7 +85,7 @@ bool isStatementStart(const std::string& text) {
     ++end;
   }
   std::string word = text.substr(0, end);
-  return word == "let" || word == "const" || word == "fn" || word == "if" || word == "while" ||
+  return word == "let" || word == "var" || word == "const" || word == "fn" || word == "if" || word == "while" ||
          word == "for" || word == "return" || word == "break" || word == "continue" ||
          word == "else";
 }

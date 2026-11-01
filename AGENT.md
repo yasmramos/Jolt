@@ -120,7 +120,8 @@ previous one.
   operation, `SETGLOBAL`
 - `LetStmt` → compile the initializer; if there is none, emit an explicit
   `LOADNIL`; then `SETGLOBAL`
-- Compile-time `const` tracking (`consts_`): reassigning a constant throws a
+- Compile-time immutability tracking (`isImmutable` on locals and globals):
+  assigning to a `let` binding throws a
   `CompileError` with the same message as the interpreter
 - `print(expr)` → compile the expression, emit `PRINT`; in the current AST
   `print` is a call, so it is detected as a `CallExpr`
@@ -165,7 +166,8 @@ previous one.
   `SETLOCAL`); `Bytecode::num_locals`
 - Locals live in reference-counted `Cell`s so the PHASE 6 closures capture the
   variable, not just its value
-- Top-level `let`/`const` remain globals (they persist in the REPL)
+- Top-level `var`/`let` remain globals (they persist in the REPL); `const`
+  bindings are folded to literals by the parser and never reach the bytecode
 - `&&`, `||` with real short-circuiting (jumps), ternary with jumps
 - Bitwise operators: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`, `BNOT`
 - `+x` emits no instruction; `~x` requires an integer

@@ -69,7 +69,7 @@ Reserved words:
 
 ```text
 break  const  continue  else  false  fn  for  if  in  let
-nil    return true      while
+nil    return true  var     while
 ```
 
 They cannot be used as names of variables, parameters or unquoted map keys.
@@ -206,12 +206,21 @@ For a shallow copy use `.clone()`. Strings are immutable, so they behave like va
 ### 4.1 Declaration
 
 ```jolt
-let counter;           // initialized to nil
-let name = "Jolt";
-const LIMIT = 10;      // requires a value
+var counter;           // mutable, initialized to nil
+var name = "Jolt";     // mutable binding, initializer optional
+let LIMIT = 10;        // immutable binding evaluated at runtime
+const MAX = 10 * 2;    // immutable binding folded at compile time
 ```
 
-`let` declares a reassignable variable. `const` declares a constant: assigning another value to it is a runtime error.
+| Keyword | Reassignable | Initializer required | Evaluated |
+| --- | --- | --- | --- |
+| `var` | yes | no (defaults to `nil`) | runtime |
+| `let` | no | yes | runtime |
+| `const` | no | yes | compile time |
+
+`var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected (at runtime in the interpreter, at compile time in the bytecode compiler). Use `let` by default for values that never change, and `var` only when reassignment is needed.
+
+`const` is also immutable, but its value must be a compile-time constant expression: literals, arithmetic (`+ - * / %`), unary minus, comparisons and boolean operators over other constants, and references to other top-level `const` names (including forward references, which the parser resolves to a fixed point). The parser folds each `const` initializer to a literal before the program runs, so uses of the name cost nothing at runtime. If an initializer cannot be folded (for example it calls a function or reads a `var`), the parser reports an error instead of silently falling back to runtime evaluation. Nested blocks fold their `const`s eagerly as well.
 
 ### 4.2 Block scope
 
@@ -246,7 +255,7 @@ y = 3; // error: undefined variable 'y'
 
 `fn name(...) { ... }` declarations are hoisted within their block, so they can be called before the line where they appear. This allows recursion and mutual recursion.
 
-`let` and `const` declarations are **not** hoisted: using a variable before its declaration produces an error.
+`var` and `let` declarations are **not** hoisted: using a variable before its declaration produces an error.
 
 ---
 
@@ -402,13 +411,13 @@ let size = n > 100 ? "large" : n > 10 ? "medium" : "small";
 Assignment is an expression and returns the assigned value:
 
 ```jolt
-let x = 0;
+var x = 0;
 let y = (x = 5);
 assert_eq(x, 5);
 assert_eq(y, 5);
 
-let a = 0;
-let b = 0;
+var a = 0;
+var b = 0;
 let c = (a = b = 3); // right-associative
 ```
 
@@ -480,7 +489,7 @@ The brace-less form (`if (x) print(x);`) is not supported.
 ### 6.4 `while`
 
 ```jolt
-let i = 0;
+var i = 0;
 while (i < 5) {
   print(i);
   i += 1;
@@ -490,7 +499,7 @@ while (i < 5) {
 ### 6.5 Classic `for`
 
 ```jolt
-for (let i = 0; i < 5; i += 1) {
+for (var i = 0; i < 5; i += 1) {
   print(i);
 }
 ```
@@ -651,7 +660,7 @@ Functions capture the environment where they are created and keep it alive:
 
 ```jolt
 fn make_counter() {
-  let n = 0;
+  var n = 0;
   return fn() {
     n += 1;
     return n;
@@ -667,7 +676,7 @@ Capture is by reference: if the captured variable changes after the function is 
 
 ```jolt
 fn example() {
-  let state = 1;
+  var state = 1;
   let read = fn() => state;
   state = 2;
   return read;
