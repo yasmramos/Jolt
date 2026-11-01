@@ -1,4 +1,4 @@
-// Tests for the register-based virtual machine (PHASE 3-5).
+// Tests for the register-based virtual machine (PHASE 3-6).
 // Compiles Jolt snippets and runs the resulting bytecode.
 
 // Release builds define NDEBUG, which would compile every assert() out and
@@ -16,8 +16,10 @@
 #include <string>
 #include <utility>
 
+#include "builtins.h"
 #include "compiler.h"
 #include "lexer.h"
+#include "ops.h"
 #include "parser.h"
 #include "vm.h"
 
@@ -554,6 +556,78 @@ void testLogicalEvaluatesRightWhenNeeded() {
   assert(runtimeError("let x = true ? (1 / 0) : 2;\n") == "division by zero");
 }
 
+// ------------------------------------------------- PHASE 6: shared Runtime
+
+void testVmCallsNatives() {
+  VM vm;
+  registerBuiltins(vm);
+
+  const Value* toStr = vm.findGlobal("str");
+  assert(toStr != nullptr && toStr->isFunc());
+  Value result = vm.call(*toStr, {Value(42)}, 1, 1);
+  assert(result.isStr() && result.asStr() == "42");
+
+  // A failing native reports the caller's position, exactly like the
+  // interpreter does, so both engines print the same diagnostic.
+  const Value* assertEq = vm.findGlobal("assertEq");
+  assert(assertEq != nullptr);
+  bool threw = false;
+  try {
+    vm.call(*assertEq, {Value(1), Value(2)}, 7, 9);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message.find("assertion failed") != std::string::npos);
+    assert(error.line == 7 && error.col == 9);
+  }
+  assert(threw);
+}
+
+void testVmCallsBoundMethods() {
+  VM vm;
+  registerBuiltins(vm);
+
+  ArrayPtr array = makeArray({Value(1)});
+  Value push = ops::memberGet(vm, Value(array), "push", 1, 1);
+  assert(push.isFunc());
+  vm.call(push, {Value(2)}, 1, 1);
+
+  assert(array->items.size() == 2);
+  assert(array->items[1].isInt() && array->items[1].asInt() == 2);
+}
+
+void testRuntimeErrorCarriesSourcePosition() {
+  Bytecode bytecode = compileSource("let a = 1;\nlet b = 1 / 0;\n");
+  VM vm;
+  bool threw = false;
+  try {
+    vm.run(bytecode);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message == "division by zero");
+    // The instruction points at the operator, not at the start of the line.
+    assert(error.line == 2);
+    assert(error.col == 11);
+  }
+  assert(threw);
+}
+
+void testVmRejectsUserFunctionCallsForNow() {
+  // Until CALL/RETURN land (slice 6a), the VM must refuse to enter a Jolt
+  // function instead of silently running the AST.
+  VM vm;
+  auto function = makeRef<Function>();
+  function->name = "user";
+  bool threw = false;
+  try {
+    vm.call(Value(function), {}, 3, 4);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message.find("cannot call") != std::string::npos);
+    assert(error.line == 3 && error.col == 4);
+  }
+  assert(threw);
+}
+
 }  // namespace
 
 int main() {
@@ -595,6 +669,10 @@ int main() {
   testLogicalShortCircuit();
   testLogicalOperandValues();
   testLogicalEvaluatesRightWhenNeeded();
+  testVmCallsNatives();
+  testVmCallsBoundMethods();
+  testRuntimeErrorCarriesSourcePosition();
+  testVmRejectsUserFunctionCallsForNow();
 
   std::puts("vm tests passed");
   return 0;

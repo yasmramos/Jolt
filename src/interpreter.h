@@ -8,6 +8,7 @@
 
 #include "ast.h"
 #include "errors.h"
+#include "runtime.h"
 #include "value.h"
 
 struct Binding {
@@ -119,7 +120,7 @@ struct ReturnSignal {
   Value value;
 };
 
-class Interpreter {
+class Interpreter : public Runtime {
  public:
   explicit Interpreter(std::string sourceName = "<script>");
 
@@ -129,31 +130,23 @@ class Interpreter {
   Value eval(const Expr& expr);
   Value evalRepl(const ExprPtr& expr);
 
-  Value call(const Value& callee, std::vector<Value> args, int line, int col);
+  Value call(const Value& callee, std::vector<Value> args, int line, int col) override;
 
-  void defineGlobal(const std::string& name, Value value, bool isImmutable = false);
-  void addNative(const std::string& name, NativeFn fn);
+  void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
 
-  [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const;
+  [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const override;
   [[noreturn]] void failHere(const std::string& message) const;
 
   // Helpers shared with the builtin library.
-  Value indexGet(const Value& object, const Value& index, int line, int col);
-  void indexSet(const Value& object, const Value& index, Value value, int line, int col);
-  Value memberGet(const Value& object, const std::string& name, int line, int col);
-  void memberSet(const Value& object, const std::string& name, Value value, int line, int col);
-  Value binary(Tok op, const Value& left, const Value& right, int line, int col);
-  bool lessThan(const Value& left, const Value& right, int line, int col);
+  Value indexGet(const Value& object, const Value& index, int line, int col) override;
+  void indexSet(const Value& object, const Value& index, Value value, int line, int col) override;
+  Value memberGet(const Value& object, const std::string& name, int line, int col) override;
+  void memberSet(const Value& object, const std::string& name, Value value, int line, int col) override;
+  Value binary(Tok op, const Value& left, const Value& right, int line, int col) override;
+  bool lessThan(const Value& left, const Value& right, int line, int col) override;
 
-  std::string sourceName;
-  std::vector<std::string> scriptArgs;
   std::shared_ptr<Env> globals;
   std::shared_ptr<Env> env;
-  std::vector<Frame> stack;
-  int maxDepth = 2000;
-  int depth = 0;
-  int currentLine = 1;
-  int currentCol = 1;
 
  private:
   // Anchors that keep hoisted-function environment chains alive for the

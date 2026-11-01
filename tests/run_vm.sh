@@ -29,6 +29,8 @@ fi
     src/parser.cpp \
     src/bytecode.cpp \
     src/compiler.cpp \
-    src/vm.cpp
+    src/vm.cpp \
+    src/ops.cpp \
+    src/builtins.cpp
 
 ./build/vm_test

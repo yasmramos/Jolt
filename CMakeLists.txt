@@ -28,6 +28,7 @@ add_executable(jolt
   ${JOLT_CORE_SOURCES}
   src/compiler.cpp
   src/vm.cpp
+  src/ops.cpp
   src/interpreter.cpp
   src/builtins.cpp
   src/main.cpp
@@ -72,6 +73,8 @@ if(BUILD_TESTING)
     ${JOLT_CORE_SOURCES}
     src/compiler.cpp
     src/vm.cpp
+    src/ops.cpp
+    src/builtins.cpp
     tests/vm_test.cpp
   )
   target_include_directories(vm_test PRIVATE src include)

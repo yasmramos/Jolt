@@ -64,6 +64,10 @@ struct Instruction {
   int b = 0;
   int c = 0;
   int jump = 0;
+  // Source position, used only for runtime diagnostics. Native codegen in
+  // PHASE 7 ignores these fields.
+  int line = 0;
+  int col = 0;
 };
 
 struct Bytecode {

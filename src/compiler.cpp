@@ -189,6 +189,8 @@ int Compiler::emit(OpCode op, int a, int b, int c) {
   instruction.a = a;
   instruction.b = b;
   instruction.c = c;
+  instruction.line = currentLine_;
+  instruction.col = currentCol_;
   return bytecodeEmit(bc_, instruction);
 }
 
@@ -197,6 +199,8 @@ int Compiler::emitJump(OpCode op, int a) {
   instruction.op = op;
   instruction.a = a;
   instruction.jump = -1;  // pending backpatching
+  instruction.line = currentLine_;
+  instruction.col = currentCol_;
   return bytecodeEmit(bc_, instruction);
 }
 
@@ -303,6 +307,8 @@ void Compiler::compileScopedBlock(const Stmt& stmt) {
 }
 
 void Compiler::compileStmt(const Stmt& stmt) {
+  currentLine_ = stmt.line;
+  currentCol_ = stmt.col;
   std::visit(
       Overloaded{
           [&](const ExprStmt& s) {
@@ -526,6 +532,8 @@ int Compiler::compileTernary(const TernaryExpr& ternary) {
 }
 
 int Compiler::compileExpr(const Expr& expr) {
+  currentLine_ = expr.line;
+  currentCol_ = expr.col;
   return std::visit(
       Overloaded{
           [&](const LiteralExpr& literal) -> int {
@@ -597,6 +605,9 @@ int Compiler::compileExpr(const Expr& expr) {
             // destination; the right one is a temporary freed afterwards.
             int left = compileExpr(*binary.lhs);
             int right = compileExpr(*binary.rhs);
+            // Point runtime errors at the operator, like the interpreter.
+            currentLine_ = binary.opLine;
+            currentCol_ = binary.opCol;
             emit(op, left, left, right);
             freeReg();
             return left;

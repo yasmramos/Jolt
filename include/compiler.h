@@ -59,6 +59,11 @@ class Compiler {
   std::vector<Loop> loops_;
   std::unordered_set<std::string> globalConsts_;
 
+  // Position of the node being compiled; stamped onto every emitted
+  // instruction so the VM can report runtime errors with line/column.
+  int currentLine_ = 1;
+  int currentCol_ = 1;
+
   int allocReg();
   void freeReg(int count = 1);
 
