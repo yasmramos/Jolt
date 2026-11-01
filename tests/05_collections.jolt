@@ -1,151 +1,151 @@
 // Arrays, maps and ranges.
 
 var arr = [1, 2, 3];
-assert_eq(arr, [1, 2, 3]);
-assert_eq(arr.length, 3);
-assert_eq(len(arr), 3);
-assert_eq(arr[0], 1);
-assert_eq(arr[-1], 3);
+assertEq(arr, [1, 2, 3]);
+assertEq(arr.length, 3);
+assertEq(len(arr), 3);
+assertEq(arr[0], 1);
+assertEq(arr[-1], 3);
 arr[0] = 10;
-assert_eq(arr, [10, 2, 3]);
+assertEq(arr, [10, 2, 3]);
 
 var built = [];
 built.push(1);
 built.push(2, 3);
-assert_eq(built, [1, 2, 3]);
-assert_eq(built.pop(), 3);
-assert_eq(built, [1, 2]);
-assert_eq(built.shift(), 1);
-assert_eq(built, [2]);
+assertEq(built, [1, 2, 3]);
+assertEq(built.pop(), 3);
+assertEq(built, [1, 2]);
+assertEq(built.shift(), 1);
+assertEq(built, [2]);
 built.unshift(0);
-assert_eq(built, [0, 2]);
+assertEq(built, [0, 2]);
 built.insert(1, 1);
-assert_eq(built, [0, 1, 2]);
-assert_eq(built.remove_at(1), 1);
-assert_eq(built, [0, 2]);
+assertEq(built, [0, 1, 2]);
+assertEq(built.removeAt(1), 1);
+assertEq(built, [0, 2]);
 
 var s = [0, 1, 2, 3, 4];
-assert_eq(s.slice(1, 3), [1, 2]);
-assert_eq(s.slice(3), [3, 4]);
-assert_eq(s.slice(-2), [3, 4]);
-assert_eq(s.slice(2, 99), [2, 3, 4]);
-assert_eq(s.slice(3, 1), []);
+assertEq(s.slice(1, 3), [1, 2]);
+assertEq(s.slice(3), [3, 4]);
+assertEq(s.slice(-2), [3, 4]);
+assertEq(s.slice(2, 99), [2, 3, 4]);
+assertEq(s.slice(3, 1), []);
 
-assert_eq([1, 2].concat([3, 4]), [1, 2, 3, 4]);
-assert_eq(["a", "b"].join("-"), "a-b");
-assert_eq([1, 2, 3].join(), "123");
+assertEq([1, 2].concat([3, 4]), [1, 2, 3, 4]);
+assertEq(["a", "b"].join("-"), "a-b");
+assertEq([1, 2, 3].join(), "123");
 
 var unsorted = [3, 1, 2];
-assert_eq(unsorted.sorted(), [1, 2, 3]);
-assert_eq(unsorted, [3, 1, 2]);
+assertEq(unsorted.sorted(), [1, 2, 3]);
+assertEq(unsorted, [3, 1, 2]);
 unsorted.sort();
-assert_eq(unsorted, [1, 2, 3]);
-assert_eq([3, 1, 2].sorted(fn(a, b) => a > b), [3, 2, 1]);
-assert_eq(["b", "a", "c"].sorted(), ["a", "b", "c"]);
+assertEq(unsorted, [1, 2, 3]);
+assertEq([3, 1, 2].sorted((a, b) => a > b), [3, 2, 1]);
+assertEq(["b", "a", "c"].sorted(), ["a", "b", "c"]);
 
-assert_eq([1, 2, 3].reversed(), [3, 2, 1]);
-assert_eq([1, 2].contains(2), true);
-assert_eq([1, 2].contains(3), false);
-assert_eq([1, 2, 1].index_of(1), 0);
-assert_eq([1, 2].index_of(9), -1);
+assertEq([1, 2, 3].reversed(), [3, 2, 1]);
+assertEq([1, 2].contains(2), true);
+assertEq([1, 2].contains(3), false);
+assertEq([1, 2, 1].indexOf(1), 0);
+assertEq([1, 2].indexOf(9), -1);
 
-assert_eq([1, 2, 3].map(fn(x) => x + 1), [2, 3, 4]);
-assert_eq([1, 2, 3, 4].filter(fn(x) => x % 2 == 0), [2, 4]);
-assert_eq([1, 2, 3, 4].reduce(fn(acc, x) => acc + x), 10);
-assert_eq([1, 2, 3, 4].reduce(fn(acc, x) => acc + x, 100), 110);
+assertEq([1, 2, 3].map(x => x + 1), [2, 3, 4]);
+assertEq([1, 2, 3, 4].filter(x => x % 2 == 0), [2, 4]);
+assertEq([1, 2, 3, 4].reduce((acc, x) => acc + x), 10);
+assertEq([1, 2, 3, 4].reduce((acc, x) => acc + x, 100), 110);
 
 var seen = [];
-[1, 2].each(fn(x) {
+[1, 2].each(x => {
   seen.push(x * 10);
 });
-assert_eq(seen, [10, 20]);
+assertEq(seen, [10, 20]);
 
-assert_eq([1, 2, 3].find(fn(x) => x > 1), 2);
-assert_eq([1, 2].find(fn(x) => x > 9), nil);
-assert_eq([1, 2, 3].any(fn(x) => x == 3), true);
-assert_eq([1, 2, 3].any(fn(x) => x > 9), false);
-assert_eq([1, 2, 3].all(fn(x) => x > 0), true);
-assert_eq([1, 2, 3].all(fn(x) => x > 1), false);
-assert_eq([1, 2, 3].sum(), 6);
-assert_eq([1, 2.5].sum(), 3.5);
+assertEq([1, 2, 3].find(x => x > 1), 2);
+assertEq([1, 2].find(x => x > 9), nil);
+assertEq([1, 2, 3].any(x => x == 3), true);
+assertEq([1, 2, 3].any(x => x > 9), false);
+assertEq([1, 2, 3].all(x => x > 0), true);
+assertEq([1, 2, 3].all(x => x > 1), false);
+assertEq([1, 2, 3].sum(), 6);
+assertEq([1, 2.5].sum(), 3.5);
 
-var clone_src = [1, 2];
-var clone_dst = clone_src.clone();
-clone_dst.push(3);
-assert_eq(clone_dst, [1, 2, 3]);
-assert_eq(clone_src, [1, 2]);
+var cloneSrc = [1, 2];
+var cloneDst = cloneSrc.clone();
+cloneDst.push(3);
+assertEq(cloneDst, [1, 2, 3]);
+assertEq(cloneSrc, [1, 2]);
 
 var clearing = [1, 2];
 clearing.clear();
-assert_eq(clearing, []);
-assert_eq(clearing.length, 0);
+assertEq(clearing, []);
+assertEq(clearing.length, 0);
 
 // Maps preserve insertion order.
 var person = {name: "Ada", age: 36};
-assert_eq(person.name, "Ada");
-assert_eq(person["age"], 36);
-assert_eq(person.length, 2);
-assert_eq(len(person), 2);
+assertEq(person.name, "Ada");
+assertEq(person["age"], 36);
+assertEq(person.length, 2);
+assertEq(len(person), 2);
 
 person.age = 37;
-assert_eq(person.age, 37);
+assertEq(person.age, 37);
 person["city"] = "London";
-assert_eq(person.city, "London");
+assertEq(person.city, "London");
 
-assert_eq(person.missing, nil);
-assert_eq(person["missing"], nil);
-assert_eq(person.has("name"), true);
-assert_eq(person.has("missing"), false);
-assert_eq(person.get("age"), 37);
-assert_eq(person.get("missing"), nil);
-assert_eq(person.get("missing", 0), 0);
+assertEq(person.missing, nil);
+assertEq(person["missing"], nil);
+assertEq(person.has("name"), true);
+assertEq(person.has("missing"), false);
+assertEq(person.get("age"), 37);
+assertEq(person.get("missing"), nil);
+assertEq(person.get("missing", 0), 0);
 
-assert_eq(person.keys(), ["name", "age", "city"]);
-assert_eq(person.values(), ["Ada", 37, "London"]);
-assert_eq(person.entries(), [["name", "Ada"], ["age", 37], ["city", "London"]]);
+assertEq(person.keys(), ["name", "age", "city"]);
+assertEq(person.values(), ["Ada", 37, "London"]);
+assertEq(person.entries(), [["name", "Ada"], ["age", 37], ["city", "London"]]);
 
-assert_eq(person.delete("city"), true);
-assert_eq(person.delete("city"), false);
-assert_eq(person.has("city"), false);
+assertEq(person.delete("city"), true);
+assertEq(person.delete("city"), false);
+assertEq(person.has("city"), false);
 
 var base = {a: 1};
 var merged = base.merge({b: 2, a: 3});
-assert_eq(merged, {a: 3, b: 2});
-assert_eq(base, {a: 3, b: 2});
+assertEq(merged, {a: 3, b: 2});
+assertEq(base, {a: 3, b: 2});
 
 var copy = {x: 1}.clone();
 copy.x = 2;
-assert_eq(copy, {x: 2});
+assertEq(copy, {x: 2});
 
 var empty = {a: 1};
 empty.clear();
-assert_eq(empty, {});
-assert_eq(empty.length, 0);
-assert_eq(empty.has("a"), false);
+assertEq(empty, {});
+assertEq(empty.length, 0);
+assertEq(empty.has("a"), false);
 
 var literal = {"quoted key": 1, plain: 2};
-assert_eq(literal["quoted key"], 1);
-assert_eq(literal.plain, 2);
+assertEq(literal["quoted key"], 1);
+assertEq(literal.plain, 2);
 
 // A real "length" key wins over the built-in member.
-var with_length = {length: 99, x: 1};
-assert_eq(with_length.length, 99);
+var withLength = {length: 99, x: 1};
+assertEq(withLength.length, 99);
 
-var map_keys = [];
+var mapKeys = [];
 for key in {b: 1, a: 2} {
-  map_keys.push(key);
+  mapKeys.push(key);
 }
-assert_eq(map_keys, ["b", "a"]);
+assertEq(mapKeys, ["b", "a"]);
 
 // Map keys: scalar literals are canonicalized to strings, and computed
 // keys use the [expr] syntax.
-fn key_of(n) { return "k" + str(n); }
-var keyed = {1: "one", true: "yes", nil: "nothing", [2 + 2]: "four", [key_of(2)]: "two"};
-assert_eq(keyed["1"], "one");
-assert_eq(keyed["true"], "yes");
-assert_eq(keyed["nil"], "nothing");
-assert_eq(keyed["4"], "four");
-assert_eq(keyed["k2"], "two");
+fn keyOf(n) { return "k" + str(n); }
+var keyed = {1: "one", true: "yes", nil: "nothing", [2 + 2]: "four", [keyOf(2)]: "two"};
+assertEq(keyed["1"], "one");
+assertEq(keyed["true"], "yes");
+assertEq(keyed["nil"], "nothing");
+assertEq(keyed["4"], "four");
+assertEq(keyed["k2"], "two");
 
 // Range iteration is lazy: huge ranges never materialize an array.
 var counted = 0;
@@ -153,42 +153,42 @@ for i in 0..1000000000 {
   counted = counted + 1;
   if (i == 2) { break; }
 }
-assert_eq(counted, 3);
+assertEq(counted, 3);
 
 var skipped = [];
 for j in 5..=1 {
   if (j == 3) { continue; }
   skipped.push(j);
 }
-assert_eq(skipped, [5, 4, 2, 1]);
+assertEq(skipped, [5, 4, 2, 1]);
 
 // Ranges.
 var r = 1..5;
-assert_eq(type(r), "range");
-assert_eq(r.length, 4);
-assert_eq(len(r), 4);
-assert_eq(r.to_array(), [1, 2, 3, 4]);
-assert_eq((1..=5).to_array(), [1, 2, 3, 4, 5]);
-assert_eq((5..1).to_array(), [5, 4, 3, 2]);
-assert_eq((5..=1).to_array(), [5, 4, 3, 2, 1]);
-assert_eq(r.contains(1), true);
-assert_eq(r.contains(4), true);
-assert_eq(r.contains(5), false);
-assert_eq(0..0, 0..0);
-assert_eq(0..0 == 0..=0, false);
-assert_eq(range(3).to_array(), [0, 1, 2]);
-assert_eq(range(2, 5).to_array(), [2, 3, 4]);
+assertEq(type(r), "range");
+assertEq(r.length, 4);
+assertEq(len(r), 4);
+assertEq(r.toArray(), [1, 2, 3, 4]);
+assertEq((1..=5).toArray(), [1, 2, 3, 4, 5]);
+assertEq((5..1).toArray(), [5, 4, 3, 2]);
+assertEq((5..=1).toArray(), [5, 4, 3, 2, 1]);
+assertEq(r.contains(1), true);
+assertEq(r.contains(4), true);
+assertEq(r.contains(5), false);
+assertEq(0..0, 0..0);
+assertEq(0..0 == 0..=0, false);
+assertEq(range(3).toArray(), [0, 1, 2]);
+assertEq(range(2, 5).toArray(), [2, 3, 4]);
 
 // Nested structures, deep equality and shared references.
 var nested = {list: [1, [2, 3]], inner: {ok: true}};
-assert_eq(nested.list[1][0], 2);
-assert_eq(nested.inner.ok, true);
-assert_eq(nested, {list: [1, [2, 3]], inner: {ok: true}});
-assert_eq([1, [2]].contains([2]), true);
+assertEq(nested.list[1][0], 2);
+assertEq(nested.inner.ok, true);
+assertEq(nested, {list: [1, [2, 3]], inner: {ok: true}});
+assertEq([1, [2]].contains([2]), true);
 
 var alias = [1];
 var same = alias;
 same.push(2);
-assert_eq(alias, [1, 2]);
+assertEq(alias, [1, 2]);
 
 print("collections ok");

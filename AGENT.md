@@ -99,11 +99,11 @@ previous one.
   `MOVE`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `NEG`, `NOT`, `EQ`, `NEQ`,
   `LT`, `LTE`, `GT`, `GTE`, `SETGLOBAL`, `GETGLOBAL`, `PRINT`, `HALT`
 - Define `struct Instruction { OpCode op; int a, b, c; int jump; }`
-- Define `struct Bytecode` with `code`, `numbers`, `strings` and `num_registers`
+- Define `struct Bytecode` with `code`, `numbers`, `strings` and `numRegisters`
 - `numbers` is a `std::vector<Value>` to preserve the difference between `int` and `float`
 - `LOADK` loads numeric constants and `LOADKS` string constants (separate
   opcodes, without using `c` as a discriminator)
-- Functions: `bytecode_init`, `bytecode_emit`, `bytecode_free` (declared in
+- Functions: `bytecodeInit`, `bytecodeEmit`, `bytecodeFree` (declared in
   `include/bytecode.h`, implemented in `src/bytecode.cpp`)
 
 ### PHASE 2 — `src/compiler.cpp` (AST → bytecode) ✅
@@ -126,14 +126,14 @@ previous one.
 - `print(expr)` → compile the expression, emit `PRINT`; in the current AST
   `print` is a call, so it is detected as a `CallExpr`
 - Register allocation with a counter that goes up and down
-- Update `num_registers` when reserving registers
+- Update `numRegisters` when reserving registers
 - Reuse of constants in the number and string pools; `int` and `float` are
   distinct constants
 - Nodes not yet supported throw `CompileError` with line/column
 
 ### PHASE 3 — `src/vm.cpp` (run bytecode) ✅
 - Loop `while (pc < count)` + `switch` on the opcode
-- `std::vector<Value> registers_` sized by `num_registers`
+- `std::vector<Value> registers_` sized by `numRegisters`
 - Global variable table `std::unordered_map<std::string, Value>`
 - Numeric fast paths in `ADD`, `SUB`, `MUL`, `DIV` without walking variants
 - `ADD` also concatenates strings; `DIV` and `MOD` detect division by zero
@@ -163,7 +163,7 @@ previous one.
 - `if`/`else` (including `else if`), `while`, classic `for`, `break` and
   `continue` (compile-time error outside a loop)
 - Block scopes and local variables with slots (`DECLLOCAL`, `GETLOCAL`,
-  `SETLOCAL`); `Bytecode::num_locals`
+  `SETLOCAL`); `Bytecode::numLocals`
 - Locals live in reference-counted `Cell`s so the PHASE 6 closures capture the
   variable, not just its value
 - Top-level `var`/`let` remain globals (they persist in the REPL); `const`
@@ -206,7 +206,10 @@ Phase 7: ⬜ pending
 ## 5. Code rules
 
 1. **Pure C++17**, no external dependencies (standard library only).
-2. **Names**: `snake_case` for functions and variables.
+2. **Names**: `camelCase` for functions, variables and members (private data
+   members end with `_`), `PascalCase` for types, and `UPPER_CASE` for opcodes
+   and constants. The Jolt standard library follows the same rule
+   (`startsWith`, `readFile`, `assertEq`).
 3. **Structures**: `struct` for data and `enum class` for opcodes.
 4. **Memory**: RAII and standard containers (`std::vector`, `std::string`); no `malloc`/`free`.
 5. **Errors**: diagnostic structs with line/column; the CLI prints them to `stderr`.

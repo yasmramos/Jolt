@@ -456,12 +456,65 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
 
 StmtPtr Parser::parseFnDecl() {
   const Token& keyword = previous();
+  if (check(Tok::LParen)) {
+    error(peek(),
+          "'fn' declares a named function; write an anonymous function as a lambda: "
+          "'x => expr' or '(a, b) => expr'");
+  }
   const Token& name = consume(Tok::Ident, "expected a function name");
   auto params = parseParams();
-  auto body = parseBlock();
-  match(Tok::Semicolon);
+  StmtPtr body;
+  if (check(Tok::Arrow)) {
+    const Token& arrow = advance();
+    const bool isBlock = check(Tok::LBrace);
+    body = parseFunctionBody(arrow);
+    // An expression body is a statement of its own and needs a terminator.
+    if (isBlock) {
+      match(Tok::Semicolon);
+    } else {
+      consume(Tok::Semicolon, "expected ';' after the function body");
+    }
+  } else {
+    body = parseBlock();
+    match(Tok::Semicolon);
+  }
   return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(body)}, keyword.line,
                   keyword.col);
+}
+
+StmtPtr Parser::parseFunctionBody(const Token& arrow) {
+  if (check(Tok::LBrace)) return parseBlock();
+  auto result = parseExpression();
+  std::vector<StmtPtr> statements;
+  statements.push_back(makeStmt(ReturnStmt{std::move(result)}, arrow.line, arrow.col));
+  return makeStmt(BlockStmt{std::move(statements)}, arrow.line, arrow.col);
+}
+
+bool Parser::atLambda() const {
+  if (check(Tok::Ident)) return peek(1).type == Tok::Arrow;
+  if (!check(Tok::LParen)) return false;
+  // `(` [ident {, ident} [,]] `)` `=>`. Parameters are plain identifiers, so
+  // this cannot be confused with a parenthesized expression.
+  size_t i = 1;
+  while (peek(i).type == Tok::Ident) {
+    ++i;
+    if (peek(i).type != Tok::Comma) break;
+    ++i;
+  }
+  return peek(i).type == Tok::RParen && peek(i + 1).type == Tok::Arrow;
+}
+
+ExprPtr Parser::parseLambda() {
+  const Token& first = peek();
+  std::vector<std::string> params;
+  if (check(Tok::Ident)) {
+    params.push_back(advance().lexeme);
+  } else {
+    params = parseParams();
+  }
+  const Token& arrow = consume(Tok::Arrow, "expected '=>' after the lambda parameters");
+  auto body = parseFunctionBody(arrow);
+  return makeExpr(LambdaExpr{std::move(params), std::move(body)}, first.line, first.col);
 }
 
 std::vector<std::string> Parser::parseParams() {
@@ -793,6 +846,7 @@ ExprPtr Parser::parsePrimary() {
   if (match(Tok::True)) return makeExpr(LiteralExpr{Value(true)}, token.line, token.col);
   if (match(Tok::False)) return makeExpr(LiteralExpr{Value(false)}, token.line, token.col);
   if (match(Tok::Nil)) return makeExpr(LiteralExpr{Value()}, token.line, token.col);
+  if (atLambda()) return parseLambda();
   if (match(Tok::Ident)) {
     return makeExpr(VariableExpr{token.lexeme}, token.line, token.col);
   }
@@ -858,22 +912,10 @@ ExprPtr Parser::parsePrimary() {
     consume(Tok::RBrace, "expected '}' to close the map literal");
     return makeExpr(MapExpr{std::move(entries)}, token.line, token.col);
   }
-  if (match(Tok::Fn)) {
-    const Token& fnToken = previous();
-    std::string name;
-    if (check(Tok::Ident)) name = advance().lexeme;
-    auto params = parseParams();
-    StmtPtr body;
-    if (match(Tok::Arrow)) {
-      auto result = parseExpression();
-      std::vector<StmtPtr> statements;
-      statements.push_back(makeStmt(ReturnStmt{std::move(result)}, fnToken.line, fnToken.col));
-      body = makeStmt(BlockStmt{std::move(statements)}, fnToken.line, fnToken.col);
-    } else {
-      body = parseBlock();
-    }
-    return makeExpr(LambdaExpr{std::move(name), std::move(params), std::move(body)}, fnToken.line,
-                    fnToken.col);
+  if (check(Tok::Fn)) {
+    error(peek(),
+          "'fn' only declares named functions; write a lambda as 'x => expr' or "
+          "'(a, b) => expr'");
   }
 
   error(token, "expected an expression");

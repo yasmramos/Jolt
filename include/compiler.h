@@ -50,10 +50,10 @@ class Compiler {
   };
 
   Bytecode bc_;
-  int next_reg_ = 0;  // next free temporary register
-  int max_reg_ = 0;   // maximum number of registers in use at once
-  int next_local_ = 0;
-  int max_local_ = 0;
+  int nextReg_ = 0;  // next free temporary register
+  int maxReg_ = 0;   // maximum number of registers in use at once
+  int nextLocal_ = 0;
+  int maxLocal_ = 0;
 
   std::vector<Scope> scopes_;
   std::vector<Loop> loops_;

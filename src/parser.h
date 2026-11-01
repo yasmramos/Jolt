@@ -67,6 +67,9 @@ class Parser {
   StmtPtr parseStatement();
   StmtPtr parseVarDecl();
   StmtPtr parseFnDecl();
+  // Body that follows a `=>`: a `{ ... }` block, or a single expression that
+  // is desugared into a block holding one `return`. `arrow` is the `=>` token.
+  StmtPtr parseFunctionBody(const Token& arrow);
   StmtPtr parseIf();
   StmtPtr parseWhile();
   StmtPtr parseFor();
@@ -92,6 +95,9 @@ class Parser {
   ExprPtr parseUnary();
   ExprPtr parsePostfix();
   ExprPtr parsePrimary();
+  // True when the upcoming tokens start a lambda: `x =>` or `(a, b) =>`.
+  bool atLambda() const;
+  ExprPtr parseLambda();
 
   ExprPtr buildString(const Token& token);
   std::vector<std::string> parseParams();

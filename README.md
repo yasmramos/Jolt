@@ -19,7 +19,7 @@ for language in languages {
 
 - Dynamic types: `nil`, `bool`, `int` (64-bit), `float`, `string`, `array`, `map`, `function` and `range`.
 - Variables with `var` (mutable), `let` (immutable, runtime) and `const` (immutable, folded at compile time), block scope and real closures.
-- First-class functions, recursion, anonymous functions and `=>` lambdas.
+- First-class functions, recursion and `=>` lambdas (`x => x * 2`).
 - String interpolation with `"${expression}"` and UTF-8 support.
 - Ordered arrays and maps that preserve insertion order.
 - Ascending and descending ranges: `1..5`, `0..=10`, `5..0`.
@@ -134,7 +134,7 @@ Type :help for help, :quit to exit.
 jolt> let x = 21
 jolt> x * 2
 42
-jolt> let double = fn(n) => n * 2
+jolt> let double = n => n * 2
 jolt> double(x)
 42
 ```
@@ -180,15 +180,15 @@ let name = "world";
 const VERSION = "0.1.0";
 
 // Functions and closures
-fn make_counter() {
+fn makeCounter() {
   var n = 0;
-  return fn() {
+  return () => {
     n += 1;
     return n;
   };
 }
 
-let counter = make_counter();
+let counter = makeCounter();
 print(counter()); // 1
 print(counter()); // 2
 
@@ -205,10 +205,10 @@ for i in 1..=3 {
 
 // Collections
 let numbers = [1, 2, 3, 4, 5];
-let even_squares = numbers
-  .filter(fn(n) => n % 2 == 0)
-  .map(fn(n) => n * n);
-print(even_squares); // [4, 16]
+let evenSquares = numbers
+  .filter(n => n % 2 == 0)
+  .map(n => n * n);
+print(evenSquares); // [4, 16]
 
 let person = {name: "Ada", age: 36};
 person.age += 1;
@@ -235,7 +235,7 @@ Linux, macOS or MSYS2:
 ./tests/run_vm.sh
 ```
 
-The positive tests use `assert` and `assert_eq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of assignments to immutable `let` bindings. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
+The positive tests use `assert` and `assertEq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of assignments to immutable `let` bindings. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
 
 ## Limitations and roadmap
 

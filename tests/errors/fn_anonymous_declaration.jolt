@@ -1,0 +1,3 @@
+// expect-exit: 65
+// `fn` declares a named function; it cannot be anonymous.
+fn (x) { return x; }

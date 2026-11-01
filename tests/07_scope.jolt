@@ -1,26 +1,26 @@
 // Scoping, shadowing, closures and hoisting.
 
 var global = "g";
-assert_eq(global, "g");
+assertEq(global, "g");
 
 {
   var local = "l";
-  assert_eq(local, "l");
+  assertEq(local, "l");
   var global = "shadow";
-  assert_eq(global, "shadow");
+  assertEq(global, "shadow");
 }
-assert_eq(global, "g");
+assertEq(global, "g");
 
-fn reads_global() {
+fn readsGlobal() {
   return global;
 }
-assert_eq(reads_global(), "g");
+assertEq(readsGlobal(), "g");
 
 fn compute() {
   var hidden = 42;
   return hidden;
 }
-assert_eq(compute(), 42);
+assertEq(compute(), 42);
 
 // Nested blocks can read bindings from their parents.
 var depth = 0;
@@ -31,7 +31,7 @@ var depth = 0;
     depth = a + b;
   }
 }
-assert_eq(depth, 3);
+assertEq(depth, 3);
 
 // Shadowing creates a new binding instead of mutating the outer one.
 var x = 1;
@@ -39,13 +39,13 @@ var x = 1;
   var x = 2;
   {
     var x = 3;
-    assert_eq(x, 3);
+    assertEq(x, 3);
   }
-  assert_eq(x, 2);
+  assertEq(x, 2);
   x = 20;
-  assert_eq(x, 20);
+  assertEq(x, 20);
 }
-assert_eq(x, 1);
+assertEq(x, 1);
 
 // Assignment walks up to the nearest existing binding.
 var value = "outer";
@@ -53,23 +53,23 @@ fn update() {
   value = "inner";
 }
 update();
-assert_eq(value, "inner");
+assertEq(value, "inner");
 
 // Variables without an initializer start as nil.
 var nothing;
-assert_eq(nothing, nil);
+assertEq(nothing, nil);
 var later;
 later = 5;
-assert_eq(later, 5);
+assertEq(later, 5);
 
 // Function declarations are hoisted within their block.
-assert_eq(early(), "hoisted");
+assertEq(early(), "hoisted");
 fn early() {
   return "hoisted";
 }
 
 {
-  assert_eq(inner(), 1);
+  assertEq(inner(), 1);
   fn inner() {
     return 1;
   }
@@ -81,37 +81,37 @@ fn outer() {
     return 7;
   }
 }
-assert_eq(outer(), 7);
+assertEq(outer(), 7);
 
 // Closures capture bindings by reference.
-fn make_getter() {
+fn makeGetter() {
   var state = 1;
-  var get = fn() => state;
+  var get = () => state;
   state = 2;
   return get;
 }
-assert_eq(make_getter()(), 2);
+assertEq(makeGetter()(), 2);
 
-fn make_pair() {
+fn makePair() {
   var n = 5;
   return {
-    get: fn() => n,
-    set: fn(v) { n = v; },
+    get: () => n,
+    set: v => { n = v; },
   };
 }
-var pair = make_pair();
-assert_eq(pair.get(), 5);
+var pair = makePair();
+assertEq(pair.get(), 5);
 pair.set(9);
-assert_eq(pair.get(), 9);
+assertEq(pair.get(), 9);
 
 // Each for-in iteration has its own variable binding.
 var fns = [];
 for i in 0..3 {
-  fns.push(fn() => i);
+  fns.push(() => i);
 }
-assert_eq(fns[0](), 0);
-assert_eq(fns[1](), 1);
-assert_eq(fns[2](), 2);
+assertEq(fns[0](), 0);
+assertEq(fns[1](), 1);
+assertEq(fns[2](), 2);
 
 // A block may shadow a function name.
 fn named() {
@@ -119,8 +119,8 @@ fn named() {
 }
 {
   var named = "var";
-  assert_eq(named, "var");
+  assertEq(named, "var");
 }
-assert_eq(named(), "fn");
+assertEq(named(), "fn");
 
 print("scope ok");

@@ -1,0 +1,77 @@
+// Lambda syntax: `x => expr`, `(a, b) => expr` and block bodies.
+
+// One parameter needs no parentheses; zero or several do.
+let inc = x => x + 1;
+let answer = () => 42;
+let add = (a, b) => a + b;
+assertEq(inc(1), 2);
+assertEq(answer(), 42);
+assertEq(add(2, 3), 5);
+
+// A trailing comma is allowed in the parameter list.
+let mul = (a, b,) => a * b;
+assertEq(mul(3, 4), 12);
+
+// Block bodies need an explicit return; without one the result is nil.
+let sub = (a, b) => {
+  return a - b;
+};
+let noReturn = x => {
+  let unused = x;
+};
+assertEq(sub(5, 2), 3);
+assertEq(noReturn(1), nil);
+assertEq(type(() => {}), "function");
+
+// A lambda that returns a map literal wraps it in parentheses.
+let wrap = x => ({value: x});
+assertEq(wrap(7), {value: 7});
+
+// Lambdas nest and curry.
+let adder = a => b => a + b;
+assertEq(adder(1)(2), 3);
+
+// A parenthesized lambda can be called right away.
+assertEq(((x) => x * 2)(21), 42);
+
+// Plain parentheses still group expressions.
+assertEq((1 + 2) * 3, 9);
+let n = 4;
+assertEq((n) * 2, 8);
+
+// The body extends as far as an expression can, including a ternary.
+let sign = x => x < 0 ? -1 : x > 0 ? 1 : 0;
+assertEq(sign(-5), -1);
+assertEq(sign(0), 0);
+assertEq(sign(9), 1);
+
+// Lambdas as arguments and inside collections.
+assertEq([1, 2, 3].map(x => x * x), [1, 4, 9]);
+assertEq([1, 2, 3, 4].reduce((acc, x) => acc + x, 0), 10);
+let table = {double: x => x * 2, negate: x => -x};
+assertEq(table.double(4), 8);
+assertEq(table.negate(4), -4);
+
+// A lambda bound to a variable can call itself.
+let fact = k => k <= 1 ? 1 : k * fact(k - 1);
+assertEq(fact(5), 120);
+
+// Declared functions accept the short `=>` form, with an expression or a block.
+fn square(x) => x * x;
+fn cube(x) => {
+  return x * x * x;
+}
+assertEq(square(5), 25);
+assertEq(cube(3), 27);
+
+// Closures still capture variables by reference.
+fn makeCounter() {
+  var count = 0;
+  return () => {
+    count += 1;
+    return count;
+  };
+}
+let counter = makeCounter();
+assertEq(counter(), 1);
+assertEq(counter(), 2);

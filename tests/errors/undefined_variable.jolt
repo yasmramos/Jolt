@@ -1,2 +1,2 @@
 // expect-exit: 70
-print(no_existe);
+print(noExiste);

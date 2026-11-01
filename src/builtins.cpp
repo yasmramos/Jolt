@@ -181,15 +181,15 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     });
     return true;
   }
-  if (name == "remove_at") {
-    out = makeNative("array.remove_at", [array](Interpreter& in, Args args) -> Value {
+  if (name == "removeAt") {
+    out = makeNative("array.removeAt", [array](Interpreter& in, Args args) -> Value {
       ArrayPtr self = array;
-      need(in, "remove_at", args, 1);
-      int64_t index = wantInt(in, "remove_at", args[0], "index");
+      need(in, "removeAt", args, 1);
+      int64_t index = wantInt(in, "removeAt", args[0], "index");
       int64_t length = static_cast<int64_t>(self->items.size());
       if (index < 0) index += length;
       if (index < 0 || index >= length) {
-        in.fail("remove_at() index out of range (length " + std::to_string(length) + ")");
+        in.fail("removeAt() index out of range (length " + std::to_string(length) + ")");
       }
       Value value = std::move(self->items[static_cast<size_t>(index)]);
       self->items.erase(self->items.begin() + index);
@@ -278,10 +278,10 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     });
     return true;
   }
-  if (name == "index_of") {
-    out = makeNative("array.index_of", [array](Interpreter& in, Args args) -> Value {
+  if (name == "indexOf") {
+    out = makeNative("array.indexOf", [array](Interpreter& in, Args args) -> Value {
       ArrayPtr self = array;
-      need(in, "index_of", args, 1);
+      need(in, "indexOf", args, 1);
       for (size_t i = 0; i < self->items.size(); ++i) {
         if (self->items[i].equals(args[0])) return Value(static_cast<int64_t>(i));
       }
@@ -454,18 +454,18 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     });
     return true;
   }
-  if (name == "trim_start") {
-    out = makeNative("string.trim_start", [text](Interpreter& in, Args args) -> Value {
-      need(in, "trim_start", args, 0);
+  if (name == "trimStart") {
+    out = makeNative("string.trimStart", [text](Interpreter& in, Args args) -> Value {
+      need(in, "trimStart", args, 0);
       size_t start = 0;
       while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) ++start;
       return Value(text.substr(start));
     });
     return true;
   }
-  if (name == "trim_end") {
-    out = makeNative("string.trim_end", [text](Interpreter& in, Args args) -> Value {
-      need(in, "trim_end", args, 0);
+  if (name == "trimEnd") {
+    out = makeNative("string.trimEnd", [text](Interpreter& in, Args args) -> Value {
+      need(in, "trimEnd", args, 0);
       size_t end = text.size();
       while (end > 0 && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
       return Value(text.substr(0, end));
@@ -539,12 +539,12 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     });
     return true;
   }
-  if (name == "replace_first") {
-    out = makeNative("string.replace_first", [text](Interpreter& in, Args args) -> Value {
-      need(in, "replace_first", args, 2);
-      std::string from = wantString(in, "replace_first", args[0], "search text");
-      std::string to = wantString(in, "replace_first", args[1], "replacement text");
-      if (from.empty()) in.fail("replace_first() search text cannot be empty");
+  if (name == "replaceFirst") {
+    out = makeNative("string.replaceFirst", [text](Interpreter& in, Args args) -> Value {
+      need(in, "replaceFirst", args, 2);
+      std::string from = wantString(in, "replaceFirst", args[0], "search text");
+      std::string to = wantString(in, "replaceFirst", args[1], "replacement text");
+      if (from.empty()) in.fail("replaceFirst() search text cannot be empty");
       size_t position = text.find(from);
       if (position == std::string::npos) return Value(text);
       std::string result = text;
@@ -553,18 +553,18 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     });
     return true;
   }
-  if (name == "starts_with") {
-    out = makeNative("string.starts_with", [text](Interpreter& in, Args args) -> Value {
-      need(in, "starts_with", args, 1);
-      std::string prefix = wantString(in, "starts_with", args[0], "prefix");
+  if (name == "startsWith") {
+    out = makeNative("string.startsWith", [text](Interpreter& in, Args args) -> Value {
+      need(in, "startsWith", args, 1);
+      std::string prefix = wantString(in, "startsWith", args[0], "prefix");
       return Value(startsWith(text, prefix));
     });
     return true;
   }
-  if (name == "ends_with") {
-    out = makeNative("string.ends_with", [text](Interpreter& in, Args args) -> Value {
-      need(in, "ends_with", args, 1);
-      std::string suffix = wantString(in, "ends_with", args[0], "suffix");
+  if (name == "endsWith") {
+    out = makeNative("string.endsWith", [text](Interpreter& in, Args args) -> Value {
+      need(in, "endsWith", args, 1);
+      std::string suffix = wantString(in, "endsWith", args[0], "suffix");
       return Value(text.size() >= suffix.size() &&
                    text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0);
     });
@@ -578,10 +578,10 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     });
     return true;
   }
-  if (name == "index_of") {
-    out = makeNative("string.index_of", [text](Interpreter& in, Args args) -> Value {
-      need(in, "index_of", args, 1);
-      std::string needle = wantString(in, "index_of", args[0], "text");
+  if (name == "indexOf") {
+    out = makeNative("string.indexOf", [text](Interpreter& in, Args args) -> Value {
+      need(in, "indexOf", args, 1);
+      std::string needle = wantString(in, "indexOf", args[0], "text");
       size_t found = text.find(needle);
       if (found == std::string::npos) return Value(static_cast<int64_t>(-1));
       return Value(utf8Length(text.substr(0, found)));
@@ -644,8 +644,8 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     });
     return true;
   }
-  if (name == "pad_start" || name == "pad_end") {
-    bool atStart = name == "pad_start";
+  if (name == "padStart" || name == "padEnd") {
+    bool atStart = name == "padStart";
     std::string methodName = name;
     out = makeNative("string." + methodName, [text, atStart, methodName](Interpreter& in,
                                                                         Args args) -> Value {
@@ -784,9 +784,9 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
 bool bindRange(Interpreter& in, RangePtr range, const std::string& name, Value& out) {
   (void)in;
 
-  if (name == "to_array") {
-    out = makeNative("range.to_array", [range](Interpreter& in, Args args) -> Value {
-      need(in, "to_array", args, 0);
+  if (name == "toArray") {
+    out = makeNative("range.toArray", [range](Interpreter& in, Args args) -> Value {
+      need(in, "toArray", args, 0);
       if (range->length() > 10000000) in.fail("range is too large to convert to an array");
       std::vector<Value> items;
       if (range->start <= range->end) {
@@ -1071,8 +1071,8 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("assert_eq", [](Interpreter& in, Args args) -> Value {
-    needBetween(in, "assert_eq", args, 2, 3);
+  in.addNative("assertEq", [](Interpreter& in, Args args) -> Value {
+    needBetween(in, "assertEq", args, 2, 3);
     if (!args[0].equals(args[1])) {
       std::string message = args.size() > 2 ? args[2].toString() : "assertion failed";
       in.fail(message + ": expected " + args[0].repr() + ", got " + args[1].repr());
@@ -1098,18 +1098,18 @@ void registerBuiltins(Interpreter& in) {
     return Value(makeArray(std::move(items)));
   });
 
-  in.addNative("read_file", [](Interpreter& in, Args args) -> Value {
-    need(in, "read_file", args, 1);
-    std::string path = wantString(in, "read_file", args[0], "path");
+  in.addNative("readFile", [](Interpreter& in, Args args) -> Value {
+    need(in, "readFile", args, 1);
+    std::string path = wantString(in, "readFile", args[0], "path");
     std::string contents;
     if (!readSourceFile(path, contents)) in.fail("cannot read file '" + path + "'");
     return Value(std::move(contents));
   });
 
-  in.addNative("write_file", [](Interpreter& in, Args args) -> Value {
-    need(in, "write_file", args, 2);
-    std::string path = wantString(in, "write_file", args[0], "path");
-    std::string contents = wantString(in, "write_file", args[1], "contents");
+  in.addNative("writeFile", [](Interpreter& in, Args args) -> Value {
+    need(in, "writeFile", args, 2);
+    std::string path = wantString(in, "writeFile", args[0], "path");
+    std::string contents = wantString(in, "writeFile", args[1], "contents");
     std::ofstream file(path, std::ios::binary);
     if (!file) in.fail("cannot write file '" + path + "'");
     file << contents;
@@ -1117,9 +1117,9 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("file_exists", [](Interpreter& in, Args args) -> Value {
-    need(in, "file_exists", args, 1);
-    std::string path = wantString(in, "file_exists", args[0], "path");
+  in.addNative("fileExists", [](Interpreter& in, Args args) -> Value {
+    need(in, "fileExists", args, 1);
+    std::string path = wantString(in, "fileExists", args[0], "path");
     std::ifstream file(path, std::ios::binary);
     return Value(static_cast<bool>(file));
   });

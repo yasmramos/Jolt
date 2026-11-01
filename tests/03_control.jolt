@@ -4,14 +4,14 @@ var result = "";
 if (true) {
   result = "a";
 }
-assert_eq(result, "a");
+assertEq(result, "a");
 
 if (false) {
   result = "b";
 } else {
   result = "c";
 }
-assert_eq(result, "c");
+assertEq(result, "c");
 
 var grade = 75;
 var label = "";
@@ -22,14 +22,14 @@ if (grade >= 90) {
 } else {
   label = "C";
 }
-assert_eq(label, "B");
+assertEq(label, "B");
 
-assert_eq(true ? 1 : 2, 1);
-assert_eq(false ? 1 : 2, 2);
-assert_eq(1 == 1 ? "yes" : "no", "yes");
+assertEq(true ? 1 : 2, 1);
+assertEq(false ? 1 : 2, 2);
+assertEq(1 == 1 ? "yes" : "no", "yes");
 
 var n = 7;
-assert_eq(n > 5 ? n > 10 ? "big" : "medium" : "small", "medium");
+assertEq(n > 5 ? n > 10 ? "big" : "medium" : "small", "medium");
 
 // Truthiness: only false and nil are falsey.
 var truthy = 0;
@@ -38,7 +38,7 @@ if ("") { truthy += 1; }
 if ([]) { truthy += 1; }
 if (nil) { truthy += 100; }
 if (false) { truthy += 100; }
-assert_eq(truthy, 3);
+assertEq(truthy, 3);
 
 var sum = 0;
 var i = 1;
@@ -46,7 +46,7 @@ while (i <= 10) {
   sum += i;
   i += 1;
 }
-assert_eq(sum, 55);
+assertEq(sum, 55);
 
 sum = 0;
 for (var j = 0; j < 10; j += 1) {
@@ -58,7 +58,7 @@ for (var j = 0; j < 10; j += 1) {
   }
   sum += j;
 }
-assert_eq(sum, 16);
+assertEq(sum, 16);
 
 // An empty C-style for-loop needs an explicit break.
 var guard = 0;
@@ -68,7 +68,7 @@ for (;;) {
     break;
   }
 }
-assert_eq(guard, 3);
+assertEq(guard, 3);
 
 var evens = 0;
 var k = 0;
@@ -82,38 +82,38 @@ while (true) {
   }
   evens += 1;
 }
-assert_eq(evens, 5);
-assert_eq(k, 11);
+assertEq(evens, 5);
+assertEq(k, 11);
 
 var items = [];
 for x in [10, 20, 30] {
   items.push(x);
 }
-assert_eq(items, [10, 20, 30]);
+assertEq(items, [10, 20, 30]);
 
 var word = "";
 for ch in "abc" {
   word += ch.upper();
 }
-assert_eq(word, "ABC");
+assertEq(word, "ABC");
 
 var keys = [];
 for key in {a: 1, b: 2} {
   keys.push(key);
 }
-assert_eq(keys, ["a", "b"]);
+assertEq(keys, ["a", "b"]);
 
 var total = 0;
 for v in 1..=5 {
   total += v;
 }
-assert_eq(total, 15);
+assertEq(total, 15);
 
 var down = [];
 for v in 5..0 {
   down.push(v);
 }
-assert_eq(down, [5, 4, 3, 2, 1]);
+assertEq(down, [5, 4, 3, 2, 1]);
 
 // Nested loops and the scope of break/continue.
 var pairs = [];
@@ -125,7 +125,7 @@ for a in 0..2 {
     pairs.push(str(a) + ":" + str(b));
   }
 }
-assert_eq(["0:0", "1:0"], pairs);
+assertEq(["0:0", "1:0"], pairs);
 
 var count = 0;
 for a in 0..3 {
@@ -136,23 +136,23 @@ for a in 0..3 {
     count += 1;
   }
 }
-assert_eq(count, 3);
+assertEq(count, 3);
 
 // Assignment is an expression that yields the assigned value.
 var x = 0;
 var y = (x = 5);
-assert_eq(x, 5);
-assert_eq(y, 5);
+assertEq(x, 5);
+assertEq(y, 5);
 
 var data = [0, 0];
 var old = (data[0] = 9);
-assert_eq(data[0], 9);
-assert_eq(old, 9);
+assertEq(data[0], 9);
+assertEq(old, 9);
 
 var rec = {value: 1};
 var prev = (rec.value = 7);
-assert_eq(rec.value, 7);
-assert_eq(prev, 7);
+assertEq(rec.value, 7);
+assertEq(prev, 7);
 
 // Logical operators short-circuit and return one of their operands.
 var calls = 0;
@@ -160,18 +160,18 @@ fn bump() {
   calls += 1;
   return true;
 }
-assert_eq(false && bump(), false);
-assert_eq(calls, 0);
-assert_eq(true || bump(), true);
-assert_eq(calls, 0);
-assert_eq(true && bump(), true);
-assert_eq(calls, 1);
-assert_eq(false || bump(), true);
-assert_eq(calls, 2);
+assertEq(false && bump(), false);
+assertEq(calls, 0);
+assertEq(true || bump(), true);
+assertEq(calls, 0);
+assertEq(true && bump(), true);
+assertEq(calls, 1);
+assertEq(false || bump(), true);
+assertEq(calls, 2);
 
-assert_eq(nil || "fallback", "fallback");
-assert_eq("value" || "fallback", "value");
-assert_eq(nil && 1, nil);
-assert_eq(0 || 5, 0);
+assertEq(nil || "fallback", "fallback");
+assertEq("value" || "fallback", "value");
+assertEq(nil && 1, nil);
+assertEq(0 || 5, 0);
 
 print("control ok");

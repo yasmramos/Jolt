@@ -1,109 +1,109 @@
 // Operator precedence, bitwise operators and assignments.
 
-assert_eq(2 + 3 * 4, 14);
-assert_eq((2 + 3) * 4, 20);
-assert_eq(2 * 3 + 4 * 5, 26);
-assert_eq(10 - 2 - 3, 5);
-assert_eq(100 / 10 / 2, 5);
-assert_eq(2 ** 3 ** 2, 512);
-assert_eq(-2 ** 2, -4);
-assert_eq(1 + 2 < 4 && 3 * 2 == 6, true);
-assert_eq(1 + 2 << 3, 24);
-assert_eq(1 << 2 + 1, 8);
+assertEq(2 + 3 * 4, 14);
+assertEq((2 + 3) * 4, 20);
+assertEq(2 * 3 + 4 * 5, 26);
+assertEq(10 - 2 - 3, 5);
+assertEq(100 / 10 / 2, 5);
+assertEq(2 ** 3 ** 2, 512);
+assertEq(-2 ** 2, -4);
+assertEq(1 + 2 < 4 && 3 * 2 == 6, true);
+assertEq(1 + 2 << 3, 24);
+assertEq(1 << 2 + 1, 8);
 
-assert_eq(6 & 3, 2);
-assert_eq(6 | 3, 7);
-assert_eq(6 ^ 3, 5);
-assert_eq(~0, -1);
-assert_eq(1 << 4, 16);
-assert_eq(256 >> 3, 32);
-assert_eq(5 & 3 | 8, 9);
-assert_eq(1 | 2 ^ 3, 1);
+assertEq(6 & 3, 2);
+assertEq(6 | 3, 7);
+assertEq(6 ^ 3, 5);
+assertEq(~0, -1);
+assertEq(1 << 4, 16);
+assertEq(256 >> 3, 32);
+assertEq(5 & 3 | 8, 9);
+assertEq(1 | 2 ^ 3, 1);
 
-assert_eq(1 + 2.5, 3.5);
-assert_eq(2 * 1.5, 3.0);
-assert_eq(7 % 2.5, 2.0);
-assert_eq(5 / 2, 2);
-assert_eq(5 / 2.0, 2.5);
+assertEq(1 + 2.5, 3.5);
+assertEq(2 * 1.5, 3.0);
+assertEq(7 % 2.5, 2.0);
+assertEq(5 / 2, 2);
+assertEq(5 / 2.0, 2.5);
 
 // Membership.
-assert_eq(2 in 1..5, true);
-assert_eq(5 in 1..5, false);
-assert_eq(5 in 1..=5, true);
-assert_eq(3 in 1..5 && 2 in [1, 2, 3], true);
-assert_eq("ell" in "hello", true);
-assert_eq("z" in "hello", false);
-assert_eq("a" in {a: 1}, true);
-assert_eq("b" in {a: 1}, false);
-assert_eq(2 in [1, 2], true);
-assert_eq(5 in [1, 2], false);
+assertEq(2 in 1..5, true);
+assertEq(5 in 1..5, false);
+assertEq(5 in 1..=5, true);
+assertEq(3 in 1..5 && 2 in [1, 2, 3], true);
+assertEq("ell" in "hello", true);
+assertEq("z" in "hello", false);
+assertEq("a" in {a: 1}, true);
+assertEq("b" in {a: 1}, false);
+assertEq(2 in [1, 2], true);
+assertEq(5 in [1, 2], false);
 
 // Ternary expressions.
 var n = 7;
-assert_eq(n % 2 == 0 ? "even" : "odd", "odd");
-assert_eq(n > 5 ? n > 10 ? "big" : "medium" : "small", "medium");
+assertEq(n % 2 == 0 ? "even" : "odd", "odd");
+assertEq(n > 5 ? n > 10 ? "big" : "medium" : "small", "medium");
 
 // Compound assignment.
 var x = 10;
 x += 5;
-assert_eq(x, 15);
+assertEq(x, 15);
 x -= 3;
-assert_eq(x, 12);
+assertEq(x, 12);
 x *= 2;
-assert_eq(x, 24);
+assertEq(x, 24);
 x /= 4;
-assert_eq(x, 6);
+assertEq(x, 6);
 x %= 4;
-assert_eq(x, 2);
+assertEq(x, 2);
 x **= 5;
-assert_eq(x, 32);
+assertEq(x, 32);
 
-var compound_arr = [1, 2, 3];
-compound_arr[1] += 10;
-assert_eq(compound_arr, [1, 12, 3]);
+var compoundArr = [1, 2, 3];
+compoundArr[1] += 10;
+assertEq(compoundArr, [1, 12, 3]);
 
 var obj = {count: 1};
 obj.count += 1;
-assert_eq(obj.count, 2);
+assertEq(obj.count, 2);
 obj["count"] *= 5;
-assert_eq(obj.count, 10);
+assertEq(obj.count, 10);
 
 // Assignment is right-associative and yields its value.
 var a = 0;
 var b = 0;
 var c = (a = b = 3);
-assert_eq(a, 3);
-assert_eq(b, 3);
-assert_eq(c, 3);
+assertEq(a, 3);
+assertEq(b, 3);
+assertEq(c, 3);
 
 // Unary operators.
-assert_eq(!true, false);
-assert_eq(!nil, true);
-assert_eq(!0, false);
-assert_eq(-(-5), 5);
-assert_eq(+(3), 3);
-assert_eq(~~5, 5);
+assertEq(!true, false);
+assertEq(!nil, true);
+assertEq(!0, false);
+assertEq(-(-5), 5);
+assertEq(+(3), 3);
+assertEq(~~5, 5);
 
 // Comparisons.
-assert_eq("apple" < "banana", true);
-assert_eq("b" > "a", true);
-assert_eq(false < true, true);
-assert_eq(2 <= 2, true);
-assert_eq(3 >= 4, false);
-assert_eq(1 != 2, true);
+assertEq("apple" < "banana", true);
+assertEq("b" > "a", true);
+assertEq(false < true, true);
+assertEq(2 <= 2, true);
+assertEq(3 >= 4, false);
+assertEq(1 != 2, true);
 
 // Equality is structural for collections and numeric across int/float.
-assert_eq(1 == 1.0, true);
-assert_eq(1 != 1.0, false);
-assert_eq(0 == false, false);
-assert_eq(nil == nil, true);
-assert_eq([1, [2]] == [1, [2]], true);
-assert_eq({a: 1} == {a: 1}, true);
-assert_eq({a: 1} == {a: 2}, false);
-assert_eq("x" == "x", true);
-assert_eq(nil == 0, false);
+assertEq(1 == 1.0, true);
+assertEq(1 != 1.0, false);
+assertEq(0 == false, false);
+assertEq(nil == nil, true);
+assertEq([1, [2]] == [1, [2]], true);
+assertEq({a: 1} == {a: 1}, true);
+assertEq({a: 1} == {a: 2}, false);
+assertEq("x" == "x", true);
+assertEq(nil == 0, false);
 
-assert_eq("a" + "b", "ab");
-assert_eq([1] + [2], [1, 2]);
+assertEq("a" + "b", "ab");
+assertEq([1] + [2], [1, 2]);
 
 print("operators ok");

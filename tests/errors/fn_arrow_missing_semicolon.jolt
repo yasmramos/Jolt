@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A declaration with an expression body needs a terminating semicolon.
+fn square(x) => x * x
+print(square(2));

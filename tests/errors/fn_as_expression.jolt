@@ -1,0 +1,3 @@
+// expect-exit: 65
+// The old anonymous form is rejected: use a lambda.
+let f = fn(x) => x;
