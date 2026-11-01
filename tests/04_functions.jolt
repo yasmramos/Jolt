@@ -63,35 +63,30 @@ assert_eq(is_even(10), true);
 assert_eq(is_odd(10), false);
 
 // Functions are first-class values.
-var double = fn(x) { return x * 2; };
+var double = x => { return x * 2; };
 assert_eq(double(21), 42);
 
-var triple = fn(x) => x * 3;
+var triple = x => x * 3;
 assert_eq(triple(4), 12);
 
-var join = fn(a, b) => str(a) + "-" + str(b);
+var join = (a, b) => str(a) + "-" + str(b);
 assert_eq(join(1, 2), "1-2");
 
 var ops = {
-  add: fn(a, b) => a + b,
-  mul: fn(a, b) => a * b,
+  add: (a, b) => a + b,
+  mul: (a, b) => a * b,
 };
 assert_eq(ops.add(2, 3), 5);
 assert_eq(ops["mul"](2, 3), 6);
 
-// Named lambdas can call themselves, even when stored in a variable.
-var power = fn power_of(base, exp) {
-  if (exp == 0) {
-    return 1;
-  }
-  return base * power_of(base, exp - 1);
-};
+// A lambda bound to a variable can call itself recursively.
+var power = (base, exp) => exp == 0 ? 1 : base * power(base, exp - 1);
 assert_eq(power(2, 10), 1024);
 
 // Closures keep the captured environment alive.
 fn make_counter() {
   var count = 0;
-  return fn() {
+  return () => {
     count += 1;
     return count;
   };
@@ -106,7 +101,7 @@ assert_eq(other(), 1);
 assert_eq(counter(), 4);
 
 fn make_adder(n) {
-  return fn(x) => x + n;
+  return x => x + n;
 }
 var add5 = make_adder(5);
 var add10 = make_adder(10);
@@ -117,12 +112,12 @@ assert_eq(add10(1), 11);
 fn apply(f, x) {
   return f(x);
 }
-assert_eq(apply(fn(x) => x * x, 9), 81);
+assert_eq(apply(x => x * x, 9), 81);
 
 var numbers = [1, 2, 3, 4];
-assert_eq(numbers.map(fn(x) => x * 2), [2, 4, 6, 8]);
-assert_eq(numbers.map(fn(x) => x * 2).filter(fn(x) => x > 4), [6, 8]);
-assert_eq(numbers.reduce(fn(acc, x) => acc + x, 0), 10);
+assert_eq(numbers.map(x => x * 2), [2, 4, 6, 8]);
+assert_eq(numbers.map(x => x * 2).filter(x => x > 4), [6, 8]);
+assert_eq(numbers.reduce((acc, x) => acc + x, 0), 10);
 
 // Parameters shadow outer variables without touching them.
 var value = 10;

@@ -601,6 +601,14 @@ fn add(a, b) {
 print(add(2, 3)); // 5
 ```
 
+A function whose body is a single expression can use the short form with `=>`. It needs a terminating `;`:
+
+```jolt
+fn square(x) => x * x;
+
+print(square(4)); // 16
+```
+
 The number of arguments must match the number of parameters exactly. There are no default parameters or variadic arguments in user functions (native functions such as `print` are variadic).
 
 Parameters are local. Arrays and maps are passed by reference; reassigning the parameter inside the function does not change the caller's variable.
@@ -615,44 +623,40 @@ fn replace(arr) {
 }
 ```
 
-### 7.2 Anonymous functions and lambdas
+### 7.2 Lambdas
 
-A function is a value:
-
+`fn` always declares a named function. An anonymous function is written as a **lambda** with `=>`, and a function is a value:
 ```jolt
-let double = fn(x) {
+let double = x => {
   return x * 2;
 };
 
-let triple = fn(x) => x * 3;
+let triple = x => x * 3;
 
-let anonymous = fn() {
+let anonymous = () => {
   print("hello");
 };
 ```
 
-The `fn(params) => expression` form is sugar for a function that returns that expression.
+A single parameter needs no parentheses (`x => ...`); zero or several do (`() => ...`, `(a, b) => ...`). The body is either an expression, which becomes the return value, or a `{ ... }` block. Because a `{` after `=>` starts a block, a lambda that returns a map literal wraps it in parentheses: `x => ({value: x})`.
 
-They can also be passed as arguments:
-
-```jolt
-let squares = [1, 2, 3].map(fn(x) => x * x);
-```
-
-### 7.3 Self-named functions
-
-A lambda can have a name so that it can call itself recursively:
+Lambdas can be passed as arguments:
 
 ```jolt
-let power = fn power_of(base, exp) {
-  if (exp == 0) {
-    return 1;
-  }
-  return base * power_of(base, exp - 1);
-};
+let squares = [1, 2, 3].map(x => x * x);
 ```
 
-The name only exists inside the function body, not in the outer scope.
+### 7.3 Recursive lambdas
+
+A lambda bound to a variable can call itself through that variable, because the name is resolved when the lambda is called:
+
+```jolt
+let power = (base, exp) => exp == 0 ? 1 : base * power(base, exp - 1);
+
+print(power(2, 10)); // 1024
+```
+
+For anything longer than a one-liner, prefer a declared function (`fn power(base, exp) { ... }`), which is also hoisted.
 
 ### 7.4 Closures
 
@@ -661,7 +665,7 @@ Functions capture the environment where they are created and keep it alive:
 ```jolt
 fn make_counter() {
   var n = 0;
-  return fn() {
+  return () => {
     n += 1;
     return n;
   };
@@ -677,7 +681,7 @@ Capture is by reference: if the captured variable changes after the function is 
 ```jolt
 fn example() {
   var state = 1;
-  let read = fn() => state;
+  let read = () => state;
   state = 2;
   return read;
 }
@@ -745,13 +749,13 @@ numbers.push(4);
 | `reversed()` | Returns a reversed copy. |
 | `contains(value)` | Checks structural equality. |
 | `index_of(value)` | Returns the first index or `-1`. |
-| `map(fn)` | Returns an array with the results of `fn(element)`. |
-| `filter(fn)` | Returns the elements for which `fn` is truthy. |
-| `reduce(fn, initial?)` | Accumulates with `fn(accumulator, element)`. |
-| `each(fn)` | Calls `fn(element)` for each element and returns the array. |
-| `find(fn)` | Returns the first element that satisfies `fn`, or `nil`. |
-| `any(fn)` | `true` if any element satisfies `fn`. |
-| `all(fn)` | `true` if all elements satisfy `fn`. |
+| `map(f)` | Returns an array with the results of `f(element)`. |
+| `filter(f)` | Returns the elements for which `f` is truthy. |
+| `reduce(f, initial?)` | Accumulates with `f(accumulator, element)`. |
+| `each(f)` | Calls `f(element)` for each element and returns the array. |
+| `find(f)` | Returns the first element that satisfies `f`, or `nil`. |
+| `any(f)` | `true` if any element satisfies `f`. |
+| `all(f)` | `true` if all elements satisfy `f`. |
 | `sum()` | Sum of an array of numbers. |
 | `clear()` | Empties the array and returns it. |
 | `clone()` | Shallow copy. |
@@ -767,9 +771,9 @@ Details:
 ```jolt
 let nums = [3, 1, 2];
 assert_eq(nums.sorted(), [1, 2, 3]);
-assert_eq(nums.sorted(fn(a, b) => a > b), [3, 2, 1]);
-assert_eq(nums.map(fn(n) => n * 2), [6, 2, 4]);
-assert_eq(nums.reduce(fn(a, n) => a + n, 0), 6);
+assert_eq(nums.sorted((a, b) => a > b), [3, 2, 1]);
+assert_eq(nums.map(n => n * 2), [6, 2, 4]);
+assert_eq(nums.reduce((a, n) => a + n, 0), 6);
 ```
 
 ---
@@ -1099,7 +1103,7 @@ Example:
 
 ```text
 jolt> let x = 10
-jolt> let double = fn(n) => n * 2
+jolt> let double = n => n * 2
 jolt> double(x)
 20
 jolt> _
@@ -1178,7 +1182,7 @@ let text = "one two two three three three four four four four";
 let counts = count_words(text);
 
 let pairs = counts.entries();
-pairs.sort(fn(a, b) => a[1] > b[1]);
+pairs.sort((a, b) => a[1] > b[1]);
 
 for pair in pairs {
   print("${pair[0]}: ${pair[1]}");

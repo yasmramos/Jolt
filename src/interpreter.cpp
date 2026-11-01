@@ -512,8 +512,7 @@ Value Interpreter::eval(const Expr& expr) {
             return Value(makeRange(start.asInt(), end.asInt(), e.inclusive));
           },
           [&](const LambdaExpr& e) {
-            std::string name = e.name.empty() ? "<lambda>" : e.name;
-            return Value(makeFunction(name, e.params, e.body, env));
+            return Value(makeFunction("<lambda>", e.params, e.body, env));
           },
       },
       expr.node);

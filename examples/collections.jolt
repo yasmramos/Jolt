@@ -6,15 +6,15 @@ var people = [
   {name: "Alan", age: 41},
 ];
 
-var names = people.map(fn(p) => p.name);
+var names = people.map(p => p.name);
 print("Names: " + names.join(", "));
 
-var older = people.filter(fn(p) => p.age >= 40);
+var older = people.filter(p => p.age >= 40);
 for person in older {
   print("${person.name} is ${person.age} years old");
 }
 
-var total = people.reduce(fn(acc, p) => acc + p.age, 0);
+var total = people.reduce((acc, p) => acc + p.age, 0);
 var average = float(total) / len(people);
 print("Average age: ${average}");
 

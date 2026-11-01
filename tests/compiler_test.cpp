@@ -401,7 +401,7 @@ void testUnsupportedConstructs() {
   expectCompileError("let m = {a: 1};\n", "map literal");
   expectCompileError("let s = \"a${b}\";\n", "string interpolation");
   expectCompileError("let r = 1..2;\n", "range");
-  expectCompileError("let f = fn (x) { return x; };\n", "lambda");
+  expectCompileError("let f = x => x;\n", "lambda");
   expectCompileError("for (x in 1..2) { print(x); }\n", "for-in loop");
   expectCompileError("let x = 1 in 2;\n", "in operator");
   expectCompileError("return 1;\n", "return statement");

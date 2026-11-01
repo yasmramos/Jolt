@@ -122,18 +122,11 @@ struct RangeExpr {
 };
 
 struct LambdaExpr {
-  // Convention: `body` is always a BlockStmt. An expression-bodied lambda
-  // (fn x => x * 2) is desugared by the parser into a BlockStmt containing a
-  // single ReturnStmt, so evaluators only ever see statement bodies and an
-  // implicit "no return" yields nil. `name` may be empty for anonymous
-  // lambdas; it is only used for diagnostics and function values.
-  //
-  // First-class functions: LambdaExpr fulfills both roles -- anonymous lambda
-  // and named function expression. There is no separate FnExpr node: a bare
-  // `fn(x) {...}` produces a callable Function value exactly like a named
-  // `fn add(x, y) {...}` would; FnDeclStmt is only syntactic sugar for
-  // "LambdaExpr with a non-empty name bound in the enclosing scope".
-  std::string name;
+  // Always anonymous: `x => x * 2`, `(a, b) => a + b`, `() => { ... }`.
+  // Convention: `body` is always a BlockStmt. An expression-bodied lambda is
+  // desugared by the parser into a BlockStmt containing a single ReturnStmt,
+  // so evaluators only ever see statement bodies and an implicit "no return"
+  // yields nil. Named functions are declared with FnDeclStmt (`fn name() {}`).
   std::vector<std::string> params;
   StmtPtr body;
 };

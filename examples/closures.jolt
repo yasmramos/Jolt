@@ -3,12 +3,12 @@
 fn make_counter(start) {
   var count = start;
   return {
-    next: fn() {
+    next: () => {
       count += 1;
       return count;
     },
-    current: fn() => count,
-    reset: fn() {
+    current: () => count,
+    reset: () => {
       count = start;
     },
   };

@@ -40,7 +40,7 @@ assert_eq(unsorted.sorted(), [1, 2, 3]);
 assert_eq(unsorted, [3, 1, 2]);
 unsorted.sort();
 assert_eq(unsorted, [1, 2, 3]);
-assert_eq([3, 1, 2].sorted(fn(a, b) => a > b), [3, 2, 1]);
+assert_eq([3, 1, 2].sorted((a, b) => a > b), [3, 2, 1]);
 assert_eq(["b", "a", "c"].sorted(), ["a", "b", "c"]);
 
 assert_eq([1, 2, 3].reversed(), [3, 2, 1]);
@@ -49,23 +49,23 @@ assert_eq([1, 2].contains(3), false);
 assert_eq([1, 2, 1].index_of(1), 0);
 assert_eq([1, 2].index_of(9), -1);
 
-assert_eq([1, 2, 3].map(fn(x) => x + 1), [2, 3, 4]);
-assert_eq([1, 2, 3, 4].filter(fn(x) => x % 2 == 0), [2, 4]);
-assert_eq([1, 2, 3, 4].reduce(fn(acc, x) => acc + x), 10);
-assert_eq([1, 2, 3, 4].reduce(fn(acc, x) => acc + x, 100), 110);
+assert_eq([1, 2, 3].map(x => x + 1), [2, 3, 4]);
+assert_eq([1, 2, 3, 4].filter(x => x % 2 == 0), [2, 4]);
+assert_eq([1, 2, 3, 4].reduce((acc, x) => acc + x), 10);
+assert_eq([1, 2, 3, 4].reduce((acc, x) => acc + x, 100), 110);
 
 var seen = [];
-[1, 2].each(fn(x) {
+[1, 2].each(x => {
   seen.push(x * 10);
 });
 assert_eq(seen, [10, 20]);
 
-assert_eq([1, 2, 3].find(fn(x) => x > 1), 2);
-assert_eq([1, 2].find(fn(x) => x > 9), nil);
-assert_eq([1, 2, 3].any(fn(x) => x == 3), true);
-assert_eq([1, 2, 3].any(fn(x) => x > 9), false);
-assert_eq([1, 2, 3].all(fn(x) => x > 0), true);
-assert_eq([1, 2, 3].all(fn(x) => x > 1), false);
+assert_eq([1, 2, 3].find(x => x > 1), 2);
+assert_eq([1, 2].find(x => x > 9), nil);
+assert_eq([1, 2, 3].any(x => x == 3), true);
+assert_eq([1, 2, 3].any(x => x > 9), false);
+assert_eq([1, 2, 3].all(x => x > 0), true);
+assert_eq([1, 2, 3].all(x => x > 1), false);
 assert_eq([1, 2, 3].sum(), 6);
 assert_eq([1, 2.5].sum(), 3.5);
 

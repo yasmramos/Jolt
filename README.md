@@ -19,7 +19,7 @@ for language in languages {
 
 - Dynamic types: `nil`, `bool`, `int` (64-bit), `float`, `string`, `array`, `map`, `function` and `range`.
 - Variables with `var` (mutable), `let` (immutable, runtime) and `const` (immutable, folded at compile time), block scope and real closures.
-- First-class functions, recursion, anonymous functions and `=>` lambdas.
+- First-class functions, recursion and `=>` lambdas (`x => x * 2`).
 - String interpolation with `"${expression}"` and UTF-8 support.
 - Ordered arrays and maps that preserve insertion order.
 - Ascending and descending ranges: `1..5`, `0..=10`, `5..0`.
@@ -134,7 +134,7 @@ Type :help for help, :quit to exit.
 jolt> let x = 21
 jolt> x * 2
 42
-jolt> let double = fn(n) => n * 2
+jolt> let double = n => n * 2
 jolt> double(x)
 42
 ```
@@ -182,7 +182,7 @@ const VERSION = "0.1.0";
 // Functions and closures
 fn make_counter() {
   var n = 0;
-  return fn() {
+  return () => {
     n += 1;
     return n;
   };
@@ -206,8 +206,8 @@ for i in 1..=3 {
 // Collections
 let numbers = [1, 2, 3, 4, 5];
 let even_squares = numbers
-  .filter(fn(n) => n % 2 == 0)
-  .map(fn(n) => n * n);
+  .filter(n => n % 2 == 0)
+  .map(n => n * n);
 print(even_squares); // [4, 16]
 
 let person = {name: "Ada", age: 36};
