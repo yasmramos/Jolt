@@ -220,7 +220,7 @@ void Interpreter::exec(const Stmt& stmt) {
           [&](const ExprStmt& s) { eval(*s.expr); },
           [&](const LetStmt& s) {
             Value value = s.init ? eval(*s.init) : Value();
-            env->define(s.name, std::move(value), s.isImmutable);
+            env->define(s.name, std::move(value), s.kind != Tok::Var);
           },
           [&](const FnDeclStmt& s) {
             env->define(s.name, Value(makeFunction(s.name, s.params, s.body, env)), false);

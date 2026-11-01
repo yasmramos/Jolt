@@ -18,7 +18,7 @@ for language in languages {
 ## Features
 
 - Dynamic types: `nil`, `bool`, `int` (64-bit), `float`, `string`, `array`, `map`, `function` and `range`.
-- Variables with `var` (mutable) and `let` (immutable), block scope and real closures.
+- Variables with `var` (mutable), `let` (immutable, runtime) and `const` (immutable, folded at compile time), block scope and real closures.
 - First-class functions, recursion, anonymous functions and `=>` lambdas.
 - String interpolation with `"${expression}"` and UTF-8 support.
 - Ordered arrays and maps that preserve insertion order.
@@ -175,9 +175,9 @@ jolt examples/fizzbuzz.jolt
 ## The language in a minute
 
 ```jolt
-// Variables: let is immutable, var is mutable
+// Variables: var is mutable, let is immutable, const is a compile-time constant
 let name = "world";
-let VERSION = "0.1.0";
+const VERSION = "0.1.0";
 
 // Functions and closures
 fn make_counter() {

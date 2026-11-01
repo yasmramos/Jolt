@@ -166,7 +166,8 @@ previous one.
   `SETLOCAL`); `Bytecode::num_locals`
 - Locals live in reference-counted `Cell`s so the PHASE 6 closures capture the
   variable, not just its value
-- Top-level `var`/`let` remain globals (they persist in the REPL)
+- Top-level `var`/`let` remain globals (they persist in the REPL); `const`
+  bindings are folded to literals by the parser and never reach the bytecode
 - `&&`, `||` with real short-circuiting (jumps), ternary with jumps
 - Bitwise operators: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`, `BNOT`
 - `+x` emits no instruction; `~x` requires an integer

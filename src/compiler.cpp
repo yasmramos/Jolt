@@ -344,11 +344,11 @@ void Compiler::compileLet(const LetStmt& s) {
   if (inGlobalScope()) {
     // Top level: global variable (persists in the REPL).
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
-    declareGlobal(s.name, s.isImmutable);
+    declareGlobal(s.name, s.kind != Tok::Var);
   } else {
     // Nested block: frame-local variable. The declaration happens after the
     // initializer is compiled, exactly like `Env::define`.
-    int slot = declareLocal(s.name, s.isImmutable);
+    int slot = declareLocal(s.name, s.kind != Tok::Var);
     emit(OpCode::DECLLOCAL, reg, slot);
   }
   freeReg();

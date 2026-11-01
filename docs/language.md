@@ -68,7 +68,7 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  continue  else  false  fn  for  if  in  let
+break  const  continue  else  false  fn  for  if  in  let
 nil    return true  var     while
 ```
 
@@ -206,12 +206,21 @@ For a shallow copy use `.clone()`. Strings are immutable, so they behave like va
 ### 4.1 Declaration
 
 ```jolt
-var counter;           // initialized to nil
+var counter;           // mutable, initialized to nil
 var name = "Jolt";     // mutable binding, initializer optional
-let LIMIT = 10;        // immutable binding, initializer required
+let LIMIT = 10;        // immutable binding evaluated at runtime
+const MAX = 10 * 2;    // immutable binding folded at compile time
 ```
 
-`var` declares a mutable variable. `let` declares an immutable binding: it requires an initializer and assigning another value to it later is rejected (at runtime in the interpreter, at compile time in the bytecode compiler). Use `let` by default for values that never change, and `var` only when reassignment is needed.
+| Keyword | Reassignable | Initializer required | Evaluated |
+| --- | --- | --- | --- |
+| `var` | yes | no (defaults to `nil`) | runtime |
+| `let` | no | yes | runtime |
+| `const` | no | yes | compile time |
+
+`var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected (at runtime in the interpreter, at compile time in the bytecode compiler). Use `let` by default for values that never change, and `var` only when reassignment is needed.
+
+`const` is also immutable, but its value must be a compile-time constant expression: literals, arithmetic (`+ - * / %`), unary minus, comparisons and boolean operators over other constants, and references to other top-level `const` names (including forward references, which the parser resolves to a fixed point). The parser folds each `const` initializer to a literal before the program runs, so uses of the name cost nothing at runtime. If an initializer cannot be folded (for example it calls a function or reads a `var`), the parser reports an error instead of silently falling back to runtime evaluation. Nested blocks fold their `const`s eagerly as well.
 
 ### 4.2 Block scope
 

@@ -160,13 +160,18 @@ struct ExprStmt {
 };
 
 struct LetStmt {
-  // Declaration keyword semantics: `var` declares a mutable binding and its
-  // initializer is optional (`var x;` binds nil); `let` declares an immutable
-  // binding (constant) and always requires an initializer. The parser enforces
-  // both rules, so the interpreter/compiler only need to honor `isImmutable`.
+  // Declaration keyword semantics, modeled as a single enum so no invalid
+  // state (e.g. "mutable and constant at once") can be represented:
+  //   Var   -> mutable binding; the initializer is optional (binds nil).
+  //   Let   -> immutable binding evaluated at runtime; requires an initializer.
+  //   Const -> immutable binding whose value is known at compile time;
+  //            requires an initializer with a constant expression
+  //            (literals, or references to previously declared consts).
+  // The parser enforces every rule above, so the interpreter/compiler only
+  // need to honor `kind != Tok::Var` for immutability.
   std::string name;
-  ExprPtr init;  // may be null only when isImmutable == false
-  bool isImmutable = false;  // true for `let`, false for `var`
+  ExprPtr init;               // may be null only when kind == Tok::Var
+  Tok kind = Tok::Var;        // Var | Let | Const
 };
 
 struct FnDeclStmt {

@@ -13,8 +13,9 @@ enum class Tok {
   Str,
   Ident,
   // keywords
-  Let,
   Var,
+  Let,
+  Const,
   Fn,
   If,
   Else,
