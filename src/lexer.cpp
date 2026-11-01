@@ -24,10 +24,27 @@ const Keyword kKeywords[] = {
     {"false", Tok::False},   {"nil", Tok::Nil},
 };
 
+// Folds CRLF and lone CR to LF, as Lua does when loading a chunk. Without this
+// a multi-line string literal would contain "\r\n" or "\r" on Windows and
+// "\n" elsewhere, making programs platform-dependent.
+std::string normalizeNewlines(const std::string& source) {
+  std::string normalized;
+  normalized.reserve(source.size());
+  for (size_t i = 0; i < source.size(); ++i) {
+    if (source[i] == '\r') {
+      if (i + 1 < source.size() && source[i + 1] == '\n') ++i;
+      normalized += '\n';
+    } else {
+      normalized += source[i];
+    }
+  }
+  return normalized;
+}
+
 class Lexer {
  public:
   Lexer(const std::string& source, int startLine, int startCol)
-      : src_(source), line_(startLine), col_(startCol) {}
+      : src_(normalizeNewlines(source)), line_(startLine), col_(startCol) {}
 
   std::vector<Token> run() {
     std::vector<Token> tokens;
@@ -46,7 +63,7 @@ class Lexer {
   }
 
  private:
-  const std::string& src_;
+  std::string src_;
   size_t pos_ = 0;
   int line_;
   int col_;

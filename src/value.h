@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-class Interpreter;
+class Runtime;
 struct Env;
 struct Stmt;
 
@@ -144,7 +144,7 @@ using ArrayPtr = Ref<Array>;
 using MapPtr = Ref<Map>;
 using FuncPtr = Ref<Function>;
 using RangePtr = Ref<Range>;
-using NativeFn = std::function<Value(Interpreter&, std::vector<Value>&)>;
+using NativeFn = std::function<Value(Runtime&, std::vector<Value>&)>;
 
 enum class VType : std::uint8_t { Nil, Bool, Int, Float, Str, Array, Map, Func, Range };
 

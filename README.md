@@ -219,6 +219,19 @@ The full reference is in **[docs/language.md](docs/language.md)**.
 
 ## Tests
 
+The simplest way to run everything (all `.jolt` scripts, the error cases, the
+examples and both C++ suites) is CTest:
+
+```sh
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cmake
+ctest --test-dir build-cmake --output-on-failure
+```
+
+With a multi-config generator (for example Visual Studio) add
+`-C Release` to the `ctest` invocation. The same tests are available through
+the helper scripts below.
+
 Windows:
 
 ```bat

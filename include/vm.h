@@ -5,17 +5,23 @@
 #include <vector>
 
 #include "bytecode.h"
+#include "runtime.h"
 #include "value.h"
 
-// Register-based virtual machine (PHASE 3-5).
+// Register-based virtual machine (PHASE 3-6).
 //
 // Executes the bytecode produced by the compiler. All registers and global
-// variables are `Value`; there are no per-type arrays. Arithmetic has fast
-// paths for integers and floats.
+// variables are `Value`; there are no per-type arrays. Arithmetic and every
+// other value operation go through `ops.h`, the same code the AST interpreter
+// uses, so both engines agree by construction.
 //
 // Globals persist across `run()` calls (useful for a REPL); registers and
 // locals are reset at the start of every execution.
-class VM {
+//
+// The standard library is not registered automatically: the CLI calls
+// `registerBuiltins(vm)` explicitly, which keeps the VM linkable without the
+// AST interpreter (the bytecode test suites need only the compiler and VM).
+class VM : public Runtime {
  public:
   VM() = default;
 
@@ -32,6 +38,18 @@ class VM {
   // Number of local cells reserved by the last execution.
   int localCount() const { return static_cast<int>(locals_.size()); }
 
+  Value call(const Value& callee, std::vector<Value> args, int line, int col) override;
+  void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
+
+  [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const override;
+
+  Value indexGet(const Value& object, const Value& index, int line, int col) override;
+  void indexSet(const Value& object, const Value& index, Value value, int line, int col) override;
+  Value memberGet(const Value& object, const std::string& name, int line, int col) override;
+  void memberSet(const Value& object, const std::string& name, Value value, int line, int col) override;
+  Value binary(Tok op, const Value& left, const Value& right, int line, int col) override;
+  bool lessThan(const Value& left, const Value& right, int line, int col) override;
+
  private:
   std::vector<Value> registers_;
   std::vector<CellPtr> locals_;
@@ -40,4 +58,7 @@ class VM {
   Value& getReg(int index);
   void setReg(int index, Value value);
   CellPtr& localAt(int index);
+
+  const Value& constantAt(const Bytecode& bytecode, int index) const;
+  const std::string& nameAt(const Bytecode& bytecode, int index) const;
 };

@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "interpreter.h"
+#include "runtime.h"
 #include "util.h"
 
 using Args = std::vector<Value>&;
@@ -22,30 +22,30 @@ namespace {
 
 // ------------------------------------------------------------ arg checking
 
-[[noreturn]] void arityError(Interpreter& in, const std::string& fn, size_t expected, Args args) {
+[[noreturn]] void arityError(Runtime& in, const std::string& fn, size_t expected, Args args) {
   in.fail(fn + "() expects " + std::to_string(expected) + " argument" +
           (expected == 1 ? "" : "s") + ", got " + std::to_string(args.size()));
 }
 
-void need(Interpreter& in, const std::string& fn, Args args, size_t expected) {
+void need(Runtime& in, const std::string& fn, Args args, size_t expected) {
   if (args.size() != expected) arityError(in, fn, expected, args);
 }
 
-void needAtLeast(Interpreter& in, const std::string& fn, Args args, size_t least) {
+void needAtLeast(Runtime& in, const std::string& fn, Args args, size_t least) {
   if (args.size() < least) {
     in.fail(fn + "() expects at least " + std::to_string(least) + " argument" +
             (least == 1 ? "" : "s") + ", got " + std::to_string(args.size()));
   }
 }
 
-void needBetween(Interpreter& in, const std::string& fn, Args args, size_t least, size_t most) {
+void needBetween(Runtime& in, const std::string& fn, Args args, size_t least, size_t most) {
   if (args.size() < least || args.size() > most) {
     in.fail(fn + "() expects between " + std::to_string(least) + " and " + std::to_string(most) +
             " arguments, got " + std::to_string(args.size()));
   }
 }
 
-int64_t wantInt(Interpreter& in, const std::string& fn, const Value& value,
+int64_t wantInt(Runtime& in, const std::string& fn, const Value& value,
                 const std::string& what = "argument") {
   if (!value.isInt()) {
     in.fail(fn + "() expects an integer " + what + ", got '" + value.typeName() + "'");
@@ -53,7 +53,7 @@ int64_t wantInt(Interpreter& in, const std::string& fn, const Value& value,
   return value.asInt();
 }
 
-double wantNumber(Interpreter& in, const std::string& fn, const Value& value,
+double wantNumber(Runtime& in, const std::string& fn, const Value& value,
                   const std::string& what = "argument") {
   if (!value.isNumber()) {
     in.fail(fn + "() expects a number " + what + ", got '" + value.typeName() + "'");
@@ -61,7 +61,7 @@ double wantNumber(Interpreter& in, const std::string& fn, const Value& value,
   return value.number();
 }
 
-std::string wantString(Interpreter& in, const std::string& fn, const Value& value,
+std::string wantString(Runtime& in, const std::string& fn, const Value& value,
                        const std::string& what = "argument") {
   if (!value.isStr()) {
     in.fail(fn + "() expects a string " + what + ", got '" + value.typeName() + "'");
@@ -69,7 +69,7 @@ std::string wantString(Interpreter& in, const std::string& fn, const Value& valu
   return value.asStr();
 }
 
-Value invoke(Interpreter& in, const Value& fn, std::vector<Value> args,
+Value invoke(Runtime& in, const Value& fn, std::vector<Value> args,
              const std::string& who = "callback") {
   if (!fn.isFunc()) {
     in.fail(who + " must be a function, got '" + fn.typeName() + "'");
@@ -101,7 +101,7 @@ uint32_t decodeFirstCodePoint(const std::string& ch) {
   return b0;
 }
 
-void sortItems(Interpreter& in, std::vector<Value>& items, const Value* comparator,
+void sortItems(Runtime& in, std::vector<Value>& items, const Value* comparator,
                const std::string& who) {
   int line = in.currentLine;
   int col = in.currentCol;
@@ -121,14 +121,14 @@ void sortItems(Interpreter& in, std::vector<Value>& items, const Value* comparat
 
 // --------------------------------------------------------------- array methods
 
-bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& name, Value& out) {
+bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, Value& out) {
   // Bound methods own their receiver, so a method called on a temporary
   // (`[1, 2].concat(...)`) keeps it alive for the whole call. The only cycle
   // this creates is a method stored inside its own receiver (`a.f = a.push`).
   ArrayPtr array = strongArray;
 
   if (name == "push") {
-    out = makeNative("array.push", [array](Interpreter&, Args args) -> Value {
+    out = makeNative("array.push", [array](Runtime&, Args args) -> Value {
       ArrayPtr self = array;
       for (auto& arg : args) self->items.push_back(arg);
       return Value(self);
@@ -136,7 +136,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "pop") {
-    out = makeNative("array.pop", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.pop", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "pop", args, 0);
       if (self->items.empty()) return Value();
@@ -147,7 +147,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "shift") {
-    out = makeNative("array.shift", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.shift", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "shift", args, 0);
       if (self->items.empty()) return Value();
@@ -158,7 +158,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "unshift") {
-    out = makeNative("array.unshift", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.unshift", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "unshift", args, 1);
       self->items.insert(self->items.begin(), args[0]);
@@ -167,7 +167,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "insert") {
-    out = makeNative("array.insert", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.insert", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "insert", args, 2);
       int64_t index = wantInt(in, "insert", args[0], "index");
@@ -182,7 +182,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "removeAt") {
-    out = makeNative("array.removeAt", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.removeAt", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "removeAt", args, 1);
       int64_t index = wantInt(in, "removeAt", args[0], "index");
@@ -198,7 +198,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "slice") {
-    out = makeNative("array.slice", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.slice", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       needBetween(in, "slice", args, 0, 2);
       int64_t length = static_cast<int64_t>(self->items.size());
@@ -214,10 +214,10 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "concat") {
-    out = makeNative("array.concat", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.concat", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "concat", args, 1);
-      if (!args[0].isArray()) in.fail("concat() expects an self");
+      if (!args[0].isArray()) in.fail("concat() expects an array");
       std::vector<Value> items = self->items;
       items.insert(items.end(), args[0].arr().items.begin(), args[0].arr().items.end());
       return Value(makeArray(std::move(items)));
@@ -225,7 +225,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "join") {
-    out = makeNative("array.join", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.join", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       needBetween(in, "join", args, 0, 1);
       std::string separator = args.empty() ? "" : args[0].toString();
@@ -239,7 +239,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "sort") {
-    out = makeNative("array.sort", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.sort", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       needBetween(in, "sort", args, 0, 1);
       sortItems(in, self->items, args.empty() ? nullptr : &args[0], "sort");
@@ -248,7 +248,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "sorted") {
-    out = makeNative("array.sorted", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.sorted", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       needBetween(in, "sorted", args, 0, 1);
       std::vector<Value> items = self->items;
@@ -258,7 +258,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "reversed") {
-    out = makeNative("array.reversed", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.reversed", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "reversed", args, 0);
       std::vector<Value> items = self->items;
@@ -268,7 +268,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "contains") {
-    out = makeNative("array.contains", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.contains", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "contains", args, 1);
       for (const auto& item : self->items) {
@@ -279,7 +279,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "indexOf") {
-    out = makeNative("array.indexOf", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.indexOf", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "indexOf", args, 1);
       for (size_t i = 0; i < self->items.size(); ++i) {
@@ -290,7 +290,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "map") {
-    out = makeNative("array.map", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.map", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "map", args, 1);
       std::vector<Value> result;
@@ -301,7 +301,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "filter") {
-    out = makeNative("array.filter", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.filter", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "filter", args, 1);
       std::vector<Value> result;
@@ -313,7 +313,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "reduce") {
-    out = makeNative("array.reduce", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.reduce", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       needBetween(in, "reduce", args, 1, 2);
       size_t index = 0;
@@ -321,7 +321,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
       if (args.size() == 2) {
         accumulator = args[1];
       } else {
-        if (self->items.empty()) in.fail("reduce() of an empty self needs an initial value");
+        if (self->items.empty()) in.fail("reduce() of an empty array needs an initial value");
         accumulator = self->items[0];
         index = 1;
       }
@@ -333,7 +333,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "each") {
-    out = makeNative("array.each", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.each", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "each", args, 1);
       for (const auto& item : self->items) invoke(in, args[0], {item}, "each()");
@@ -342,7 +342,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "find") {
-    out = makeNative("array.find", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.find", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "find", args, 1);
       for (const auto& item : self->items) {
@@ -353,7 +353,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "any") {
-    out = makeNative("array.any", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.any", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "any", args, 1);
       for (const auto& item : self->items) {
@@ -364,7 +364,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "all") {
-    out = makeNative("array.all", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.all", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "all", args, 1);
       for (const auto& item : self->items) {
@@ -375,14 +375,14 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "sum") {
-    out = makeNative("array.sum", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.sum", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "sum", args, 0);
       bool allInts = true;
       int64_t intTotal = 0;
       double floatTotal = 0;
       for (const auto& item : self->items) {
-        if (!item.isNumber()) in.fail("sum() expects an self of numbers");
+        if (!item.isNumber()) in.fail("sum() expects an array of numbers");
         if (item.isInt() && allInts) {
           intTotal = static_cast<int64_t>(static_cast<uint64_t>(intTotal) +
                                           static_cast<uint64_t>(item.asInt()));
@@ -397,7 +397,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "clear") {
-    out = makeNative("array.clear", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.clear", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "clear", args, 0);
       self->items.clear();
@@ -406,7 +406,7 @@ bool bindArray(Interpreter& in, const ArrayPtr& strongArray, const std::string& 
     return true;
   }
   if (name == "clone") {
-    out = makeNative("array.clone", [array](Interpreter& in, Args args) -> Value {
+    out = makeNative("array.clone", [array](Runtime& in, Args args) -> Value {
       ArrayPtr self = array;
       need(in, "clone", args, 0);
       return Value(makeArray(self->items));
@@ -428,34 +428,34 @@ std::string asciiUpper(std::string text) {
   return text;
 }
 
-bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Value& out) {
+bool bindString(Runtime& in, StringPtr receiver, const std::string& name, Value& out) {
   // The captured object is a RefCounted string; work on its payload directly.
   const std::string& text = receiver->value;
   (void)in;
 
   if (name == "upper") {
-    out = makeNative("string.upper", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.upper", [text](Runtime& in, Args args) -> Value {
       need(in, "upper", args, 0);
       return Value(asciiUpper(text));
     });
     return true;
   }
   if (name == "lower") {
-    out = makeNative("string.lower", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.lower", [text](Runtime& in, Args args) -> Value {
       need(in, "lower", args, 0);
       return Value(asciiLower(text));
     });
     return true;
   }
   if (name == "trim") {
-    out = makeNative("string.trim", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.trim", [text](Runtime& in, Args args) -> Value {
       need(in, "trim", args, 0);
       return Value(trim(text));
     });
     return true;
   }
   if (name == "trimStart") {
-    out = makeNative("string.trimStart", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.trimStart", [text](Runtime& in, Args args) -> Value {
       need(in, "trimStart", args, 0);
       size_t start = 0;
       while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) ++start;
@@ -464,7 +464,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "trimEnd") {
-    out = makeNative("string.trimEnd", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.trimEnd", [text](Runtime& in, Args args) -> Value {
       need(in, "trimEnd", args, 0);
       size_t end = text.size();
       while (end > 0 && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
@@ -473,7 +473,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "split") {
-    out = makeNative("string.split", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.split", [text](Runtime& in, Args args) -> Value {
       needBetween(in, "split", args, 0, 1);
       std::vector<Value> items;
       if (args.empty()) {
@@ -502,7 +502,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "lines") {
-    out = makeNative("string.lines", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.lines", [text](Runtime& in, Args args) -> Value {
       need(in, "lines", args, 0);
       std::vector<Value> items;
       std::string current;
@@ -524,7 +524,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "replace") {
-    out = makeNative("string.replace", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.replace", [text](Runtime& in, Args args) -> Value {
       need(in, "replace", args, 2);
       std::string from = wantString(in, "replace", args[0], "search text");
       std::string to = wantString(in, "replace", args[1], "replacement text");
@@ -540,7 +540,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "replaceFirst") {
-    out = makeNative("string.replaceFirst", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.replaceFirst", [text](Runtime& in, Args args) -> Value {
       need(in, "replaceFirst", args, 2);
       std::string from = wantString(in, "replaceFirst", args[0], "search text");
       std::string to = wantString(in, "replaceFirst", args[1], "replacement text");
@@ -554,7 +554,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "startsWith") {
-    out = makeNative("string.startsWith", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.startsWith", [text](Runtime& in, Args args) -> Value {
       need(in, "startsWith", args, 1);
       std::string prefix = wantString(in, "startsWith", args[0], "prefix");
       return Value(startsWith(text, prefix));
@@ -562,7 +562,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "endsWith") {
-    out = makeNative("string.endsWith", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.endsWith", [text](Runtime& in, Args args) -> Value {
       need(in, "endsWith", args, 1);
       std::string suffix = wantString(in, "endsWith", args[0], "suffix");
       return Value(text.size() >= suffix.size() &&
@@ -571,7 +571,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "contains") {
-    out = makeNative("string.contains", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.contains", [text](Runtime& in, Args args) -> Value {
       need(in, "contains", args, 1);
       std::string needle = wantString(in, "contains", args[0], "text");
       return Value(text.find(needle) != std::string::npos);
@@ -579,7 +579,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "indexOf") {
-    out = makeNative("string.indexOf", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.indexOf", [text](Runtime& in, Args args) -> Value {
       need(in, "indexOf", args, 1);
       std::string needle = wantString(in, "indexOf", args[0], "text");
       size_t found = text.find(needle);
@@ -589,7 +589,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "substr") {
-    out = makeNative("string.substr", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.substr", [text](Runtime& in, Args args) -> Value {
       needBetween(in, "substr", args, 1, 2);
       auto chars = utf8Chars(text);
       int64_t length = static_cast<int64_t>(chars.size());
@@ -611,7 +611,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "chars") {
-    out = makeNative("string.chars", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.chars", [text](Runtime& in, Args args) -> Value {
       need(in, "chars", args, 0);
       std::vector<Value> items;
       for (auto& ch : utf8Chars(text)) items.emplace_back(std::move(ch));
@@ -620,7 +620,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "repeat") {
-    out = makeNative("string.repeat", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.repeat", [text](Runtime& in, Args args) -> Value {
       need(in, "repeat", args, 1);
       int64_t count = wantInt(in, "repeat", args[0], "count");
       if (count < 0) in.fail("repeat() count cannot be negative");
@@ -636,7 +636,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
     return true;
   }
   if (name == "reversed") {
-    out = makeNative("string.reversed", [text](Interpreter& in, Args args) -> Value {
+    out = makeNative("string.reversed", [text](Runtime& in, Args args) -> Value {
       need(in, "reversed", args, 0);
       auto chars = utf8Chars(text);
       std::reverse(chars.begin(), chars.end());
@@ -647,7 +647,7 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
   if (name == "padStart" || name == "padEnd") {
     bool atStart = name == "padStart";
     std::string methodName = name;
-    out = makeNative("string." + methodName, [text, atStart, methodName](Interpreter& in,
+    out = makeNative("string." + methodName, [text, atStart, methodName](Runtime& in,
                                                                         Args args) -> Value {
       needBetween(in, methodName, args, 1, 2);
       int64_t width = wantInt(in, methodName, args[0], "width");
@@ -672,11 +672,11 @@ bool bindString(Interpreter& in, StringPtr receiver, const std::string& name, Va
 
 // ----------------------------------------------------------------- map methods
 
-bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, Value& out) {
+bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& out) {
   // Bound methods own their receiver, see bindArray above.
   MapPtr map = strongMap;
   if (name == "keys") {
-    out = makeNative("map.keys", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.keys", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "keys", args, 0);
       std::vector<Value> items;
@@ -686,7 +686,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "values") {
-    out = makeNative("map.values", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.values", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "values", args, 0);
       std::vector<Value> items;
@@ -696,7 +696,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "entries") {
-    out = makeNative("map.entries", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.entries", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "entries", args, 0);
       std::vector<Value> items;
@@ -708,7 +708,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "has") {
-    out = makeNative("map.has", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.has", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "has", args, 1);
       std::string key = wantString(in, "has", args[0], "key");
@@ -717,7 +717,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "get") {
-    out = makeNative("map.get", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.get", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       needBetween(in, "get", args, 1, 2);
       std::string key = wantString(in, "get", args[0], "key");
@@ -728,7 +728,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "set") {
-    out = makeNative("map.set", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.set", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "set", args, 2);
       std::string key = wantString(in, "set", args[0], "key");
@@ -738,7 +738,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "delete") {
-    out = makeNative("map.delete", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.delete", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "delete", args, 1);
       std::string key = wantString(in, "delete", args[0], "key");
@@ -747,7 +747,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "clear") {
-    out = makeNative("map.clear", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.clear", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "clear", args, 0);
       self->clear();
@@ -756,7 +756,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "merge") {
-    out = makeNative("map.merge", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.merge", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "merge", args, 1);
       if (!args[0].isMap()) in.fail("merge() expects a map");
@@ -767,7 +767,7 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
     return true;
   }
   if (name == "clone") {
-    out = makeNative("map.clone", [map](Interpreter& in, Args args) -> Value {
+    out = makeNative("map.clone", [map](Runtime& in, Args args) -> Value {
       MapPtr self = map;
       need(in, "clone", args, 0);
       auto copy = makeMap();
@@ -781,11 +781,11 @@ bool bindMap(Interpreter& in, const MapPtr& strongMap, const std::string& name, 
 
 // --------------------------------------------------------------- range methods
 
-bool bindRange(Interpreter& in, RangePtr range, const std::string& name, Value& out) {
+bool bindRange(Runtime& in, RangePtr range, const std::string& name, Value& out) {
   (void)in;
 
   if (name == "toArray") {
-    out = makeNative("range.toArray", [range](Interpreter& in, Args args) -> Value {
+    out = makeNative("range.toArray", [range](Runtime& in, Args args) -> Value {
       need(in, "toArray", args, 0);
       if (range->length() > 10000000) in.fail("range is too large to convert to an array");
       std::vector<Value> items;
@@ -803,7 +803,7 @@ bool bindRange(Interpreter& in, RangePtr range, const std::string& name, Value& 
     return true;
   }
   if (name == "contains") {
-    out = makeNative("range.contains", [range](Interpreter& in, Args args) -> Value {
+    out = makeNative("range.contains", [range](Runtime& in, Args args) -> Value {
       need(in, "contains", args, 1);
       Value receiver = Value(range);
       return in.binary(Tok::In, args[0], receiver, in.currentLine, in.currentCol);
@@ -815,7 +815,7 @@ bool bindRange(Interpreter& in, RangePtr range, const std::string& name, Value& 
 
 }  // namespace
 
-bool bindMethod(Interpreter& interp, const Value& receiver, const std::string& name, Value& out) {
+bool bindMethod(Runtime& interp, const Value& receiver, const std::string& name, Value& out) {
   // Every binder captures its receiver by value, so the produced method owns
   // it and stays valid even when the receiver was a temporary.
   if (receiver.isArray()) return bindArray(interp, receiver.arrayPtr(), name, out);
@@ -827,11 +827,11 @@ bool bindMethod(Interpreter& interp, const Value& receiver, const std::string& n
 
 // ------------------------------------------------------------------- builtins
 
-void registerBuiltins(Interpreter& in) {
+void registerBuiltins(Runtime& in) {
   static std::mt19937_64 engine(std::random_device{}());
   static auto startTime = std::chrono::steady_clock::now();
 
-  in.addNative("print", [](Interpreter&, Args args) -> Value {
+  in.addNative("print", [](Runtime&, Args args) -> Value {
     for (size_t i = 0; i < args.size(); ++i) {
       if (i) std::cout << ' ';
       std::cout << args[i].toString();
@@ -841,7 +841,7 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("write", [](Interpreter&, Args args) -> Value {
+  in.addNative("write", [](Runtime&, Args args) -> Value {
     for (size_t i = 0; i < args.size(); ++i) {
       if (i) std::cout << ' ';
       std::cout << args[i].toString();
@@ -850,7 +850,7 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("eprint", [](Interpreter&, Args args) -> Value {
+  in.addNative("eprint", [](Runtime&, Args args) -> Value {
     for (size_t i = 0; i < args.size(); ++i) {
       if (i) std::cerr << ' ';
       std::cerr << args[i].toString();
@@ -860,7 +860,7 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("input", [](Interpreter& in, Args args) -> Value {
+  in.addNative("input", [](Runtime& in, Args args) -> Value {
     needBetween(in, "input", args, 0, 1);
     if (!args.empty()) {
       std::cout << args[0].toString();
@@ -872,7 +872,7 @@ void registerBuiltins(Interpreter& in) {
     return Value(std::move(line));
   });
 
-  in.addNative("len", [](Interpreter& in, Args args) -> Value {
+  in.addNative("len", [](Runtime& in, Args args) -> Value {
     need(in, "len", args, 1);
     const Value& value = args[0];
     if (value.isStr()) return Value(utf8Length(value.asStr()));
@@ -882,22 +882,22 @@ void registerBuiltins(Interpreter& in) {
     in.fail("len() is not defined for values of type '" + std::string(value.typeName()) + "'");
   });
 
-  in.addNative("type", [](Interpreter& in, Args args) -> Value {
+  in.addNative("type", [](Runtime& in, Args args) -> Value {
     need(in, "type", args, 1);
     return Value(std::string(args[0].typeName()));
   });
 
-  in.addNative("str", [](Interpreter& in, Args args) -> Value {
+  in.addNative("str", [](Runtime& in, Args args) -> Value {
     need(in, "str", args, 1);
     return Value(args[0].toString());
   });
 
-  in.addNative("repr", [](Interpreter& in, Args args) -> Value {
+  in.addNative("repr", [](Runtime& in, Args args) -> Value {
     need(in, "repr", args, 1);
     return Value(args[0].repr());
   });
 
-  in.addNative("int", [](Interpreter& in, Args args) -> Value {
+  in.addNative("int", [](Runtime& in, Args args) -> Value {
     need(in, "int", args, 1);
     const Value& value = args[0];
     if (value.isInt()) return value;
@@ -924,7 +924,7 @@ void registerBuiltins(Interpreter& in) {
     in.fail("cannot convert '" + std::string(value.typeName()) + "' to int");
   });
 
-  in.addNative("float", [](Interpreter& in, Args args) -> Value {
+  in.addNative("float", [](Runtime& in, Args args) -> Value {
     need(in, "float", args, 1);
     const Value& value = args[0];
     if (value.isFloat()) return value;
@@ -943,12 +943,12 @@ void registerBuiltins(Interpreter& in) {
     in.fail("cannot convert '" + std::string(value.typeName()) + "' to float");
   });
 
-  in.addNative("bool", [](Interpreter& in, Args args) -> Value {
+  in.addNative("bool", [](Runtime& in, Args args) -> Value {
     need(in, "bool", args, 1);
     return Value(args[0].truthy());
   });
 
-  in.addNative("chr", [](Interpreter& in, Args args) -> Value {
+  in.addNative("chr", [](Runtime& in, Args args) -> Value {
     need(in, "chr", args, 1);
     int64_t code = wantInt(in, "chr", args[0]);
     if (code < 0 || code > 0x10FFFF) in.fail("chr() code point out of range");
@@ -957,7 +957,7 @@ void registerBuiltins(Interpreter& in) {
     return Value(std::move(text));
   });
 
-  in.addNative("ord", [](Interpreter& in, Args args) -> Value {
+  in.addNative("ord", [](Runtime& in, Args args) -> Value {
     need(in, "ord", args, 1);
     std::string text = wantString(in, "ord", args[0]);
     auto chars = utf8Chars(text);
@@ -965,7 +965,7 @@ void registerBuiltins(Interpreter& in) {
     return Value(static_cast<int64_t>(decodeFirstCodePoint(chars[0])));
   });
 
-  in.addNative("abs", [](Interpreter& in, Args args) -> Value {
+  in.addNative("abs", [](Runtime& in, Args args) -> Value {
     need(in, "abs", args, 1);
     if (args[0].isInt()) {
       int64_t value = args[0].asInt();
@@ -975,39 +975,39 @@ void registerBuiltins(Interpreter& in) {
     in.fail("abs() expects a number");
   });
 
-  in.addNative("floor", [](Interpreter& in, Args args) -> Value {
+  in.addNative("floor", [](Runtime& in, Args args) -> Value {
     need(in, "floor", args, 1);
     if (args[0].isInt()) return args[0];
     return Value(std::floor(wantNumber(in, "floor", args[0])));
   });
 
-  in.addNative("ceil", [](Interpreter& in, Args args) -> Value {
+  in.addNative("ceil", [](Runtime& in, Args args) -> Value {
     need(in, "ceil", args, 1);
     if (args[0].isInt()) return args[0];
     return Value(std::ceil(wantNumber(in, "ceil", args[0])));
   });
 
-  in.addNative("round", [](Interpreter& in, Args args) -> Value {
+  in.addNative("round", [](Runtime& in, Args args) -> Value {
     need(in, "round", args, 1);
     if (args[0].isInt()) return args[0];
     return Value(std::round(wantNumber(in, "round", args[0])));
   });
 
-  in.addNative("sqrt", [](Interpreter& in, Args args) -> Value {
+  in.addNative("sqrt", [](Runtime& in, Args args) -> Value {
     need(in, "sqrt", args, 1);
     double value = wantNumber(in, "sqrt", args[0]);
     if (value < 0) in.fail("sqrt() of a negative number");
     return Value(std::sqrt(value));
   });
 
-  in.addNative("pow", [](Interpreter& in, Args args) -> Value {
+  in.addNative("pow", [](Runtime& in, Args args) -> Value {
     need(in, "pow", args, 2);
     double base = wantNumber(in, "pow", args[0]);
     double exponent = wantNumber(in, "pow", args[1]);
     return Value(std::pow(base, exponent));
   });
 
-  in.addNative("min", [](Interpreter& in, Args args) -> Value {
+  in.addNative("min", [](Runtime& in, Args args) -> Value {
     needAtLeast(in, "min", args, 1);
     Value best = args[0];
     for (size_t i = 1; i < args.size(); ++i) {
@@ -1016,7 +1016,7 @@ void registerBuiltins(Interpreter& in) {
     return best;
   });
 
-  in.addNative("max", [](Interpreter& in, Args args) -> Value {
+  in.addNative("max", [](Runtime& in, Args args) -> Value {
     needAtLeast(in, "max", args, 1);
     Value best = args[0];
     for (size_t i = 1; i < args.size(); ++i) {
@@ -1025,14 +1025,14 @@ void registerBuiltins(Interpreter& in) {
     return best;
   });
 
-  in.addNative("clamp", [](Interpreter& in, Args args) -> Value {
+  in.addNative("clamp", [](Runtime& in, Args args) -> Value {
     need(in, "clamp", args, 3);
     if (in.lessThan(args[0], args[1], in.currentLine, in.currentCol)) return args[1];
     if (in.lessThan(args[2], args[0], in.currentLine, in.currentCol)) return args[2];
     return args[0];
   });
 
-  in.addNative("random", [](Interpreter& in, Args args) -> Value {
+  in.addNative("random", [](Runtime& in, Args args) -> Value {
     needBetween(in, "random", args, 0, 2);
     if (args.empty()) {
       std::uniform_real_distribution<double> distribution(0.0, 1.0);
@@ -1051,19 +1051,19 @@ void registerBuiltins(Interpreter& in) {
     return Value(distribution(engine));
   });
 
-  in.addNative("seed", [](Interpreter& in, Args args) -> Value {
+  in.addNative("seed", [](Runtime& in, Args args) -> Value {
     need(in, "seed", args, 1);
     engine.seed(static_cast<uint64_t>(wantInt(in, "seed", args[0])));
     return Value();
   });
 
-  in.addNative("clock", [](Interpreter& in, Args args) -> Value {
+  in.addNative("clock", [](Runtime& in, Args args) -> Value {
     need(in, "clock", args, 0);
     auto now = std::chrono::steady_clock::now();
     return Value(std::chrono::duration<double>(now - startTime).count());
   });
 
-  in.addNative("assert", [](Interpreter& in, Args args) -> Value {
+  in.addNative("assert", [](Runtime& in, Args args) -> Value {
     needBetween(in, "assert", args, 1, 2);
     if (!args[0].truthy()) {
       in.fail(args.size() > 1 ? args[1].toString() : "assertion failed");
@@ -1071,7 +1071,7 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("assertEq", [](Interpreter& in, Args args) -> Value {
+  in.addNative("assertEq", [](Runtime& in, Args args) -> Value {
     needBetween(in, "assertEq", args, 2, 3);
     if (!args[0].equals(args[1])) {
       std::string message = args.size() > 2 ? args[2].toString() : "assertion failed";
@@ -1080,25 +1080,25 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("panic", [](Interpreter& in, Args args) -> Value {
+  in.addNative("panic", [](Runtime& in, Args args) -> Value {
     needBetween(in, "panic", args, 0, 1);
     in.fail(args.empty() ? "panic" : args[0].toString());
   });
 
-  in.addNative("exit", [](Interpreter& in, Args args) -> Value {
+  in.addNative("exit", [](Runtime& in, Args args) -> Value {
     needBetween(in, "exit", args, 0, 1);
     int code = args.empty() ? 0 : static_cast<int>(wantInt(in, "exit", args[0]));
     std::exit(code);
   });
 
-  in.addNative("args", [](Interpreter& in, Args args) -> Value {
+  in.addNative("args", [](Runtime& in, Args args) -> Value {
     need(in, "args", args, 0);
     std::vector<Value> items;
     for (const auto& arg : in.scriptArgs) items.emplace_back(arg);
     return Value(makeArray(std::move(items)));
   });
 
-  in.addNative("readFile", [](Interpreter& in, Args args) -> Value {
+  in.addNative("readFile", [](Runtime& in, Args args) -> Value {
     need(in, "readFile", args, 1);
     std::string path = wantString(in, "readFile", args[0], "path");
     std::string contents;
@@ -1106,7 +1106,7 @@ void registerBuiltins(Interpreter& in) {
     return Value(std::move(contents));
   });
 
-  in.addNative("writeFile", [](Interpreter& in, Args args) -> Value {
+  in.addNative("writeFile", [](Runtime& in, Args args) -> Value {
     need(in, "writeFile", args, 2);
     std::string path = wantString(in, "writeFile", args[0], "path");
     std::string contents = wantString(in, "writeFile", args[1], "contents");
@@ -1117,14 +1117,14 @@ void registerBuiltins(Interpreter& in) {
     return Value();
   });
 
-  in.addNative("fileExists", [](Interpreter& in, Args args) -> Value {
+  in.addNative("fileExists", [](Runtime& in, Args args) -> Value {
     need(in, "fileExists", args, 1);
     std::string path = wantString(in, "fileExists", args[0], "path");
     std::ifstream file(path, std::ios::binary);
     return Value(static_cast<bool>(file));
   });
 
-  in.addNative("range", [](Interpreter& in, Args args) -> Value {
+  in.addNative("range", [](Runtime& in, Args args) -> Value {
     needBetween(in, "range", args, 1, 2);
     int64_t start = 0;
     int64_t end = 0;
