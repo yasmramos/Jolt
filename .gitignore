@@ -32,3 +32,4 @@ LSan.*
 
 # Native codegen scratch build directory
 build-native-test/
+build-fix/
