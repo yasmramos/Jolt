@@ -47,6 +47,26 @@ struct CoutCapture {
   ~CoutCapture() { std::cout.rdbuf(previous); }
 };
 
+// Host double used to prove that the engine writes through `Platform` instead
+// of touching std::cout/std::cerr directly.
+struct StringPlatform final : Platform {
+  std::string out;
+  std::string err;
+
+  void write(int fd, const char* data, std::size_t length) override {
+    if (fd == kStdout) out.append(data, length);
+  }
+  void writeErr(const char* data, std::size_t length) override { err.append(data, length); }
+  void flush(int) override {}
+  std::size_t read(int, char*, std::size_t) override { return 0; }
+  int open(const char*, OpenMode) override { return kInvalidFd; }
+  void close(int) override {}
+  bool seek(int, std::int64_t, SeekOrigin) override { return false; }
+  [[noreturn]] void exit(int) override { std::abort(); }
+  void* alloc(std::size_t, std::size_t) override { return nullptr; }
+  void dealloc(void*) override {}
+};
+
 std::string runAndCapture(const std::string& source) {
   Bytecode bytecode = compileSource(source);
   VM vm;
@@ -261,6 +281,27 @@ void testComparisons() {
 void testPrint() {
   std::string output = runAndCapture("print(1 + 2);\nprint(\"hola\");\nprint(true);\n");
   assert(output == "3\nhola\ntrue\n");
+}
+
+void testPrintUsesInjectedPlatform() {
+  Bytecode bytecode = compileSource("print(1 + 2);\n");
+  StringPlatform platform;
+  VM vm(platform);
+  vm.run(bytecode);
+
+  assert(platform.out == "3\n");
+  assert(platform.err.empty());
+}
+
+void testBuiltinIoUsesInjectedPlatform() {
+  Bytecode bytecode = compileSource("print(1, 2);\nwrite(\"a\");\neprint(\"e\");\n");
+  StringPlatform platform;
+  VM vm(platform);
+  registerBuiltins(vm);
+  vm.run(bytecode);
+
+  assert(platform.out == "1 2\na");
+  assert(platform.err == "e\n");
 }
 
 void testDivisionByZero() {
@@ -860,6 +901,8 @@ int main() {
   testUnaryOperators();
   testComparisons();
   testPrint();
+  testPrintUsesInjectedPlatform();
+  testBuiltinIoUsesInjectedPlatform();
   testDivisionByZero();
   testModuloByZero();
   testUndefinedGlobal();
