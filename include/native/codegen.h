@@ -61,7 +61,7 @@ class CodeGen {
   void bind(Label label);
 
   // Data movement.
-  void movImm(X64Reg dst, std::int64_t value);            // mov reg, imm (sign-extended) or movabs
+  void movImm(X64Reg dst, std::int64_t value);  // mov r/m64, imm32 (sign-extended) or movabs
   void movReg(X64Reg dst, X64Reg src);                    // mov reg, reg
   void movToMem(X64Reg base, std::int64_t disp, X64Reg src);
   void movFromMem(X64Reg dst, X64Reg base, std::int64_t disp);
@@ -124,15 +124,17 @@ class CodeGen {
   };
 
   std::vector<std::uint8_t> code_;
-  std::vector<std::size_t> labelOffset_;  // label id -> offset, max until bound
+  std::vector<std::size_t> labelOffset_;  // label id -> offset, kUnbound until bound
+  std::vector<bool> labelBound_;          // label id -> bound (offset 0 is valid)
   std::vector<PendingFixup> fixups_;
 
   static std::uint8_t enc(X64Reg reg) { return static_cast<std::uint8_t>(reg); }
 
   void rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t index, std::uint8_t rm);
-  static bool ripForm(bool hasIndex, std::uint8_t rm);
-  void modRmDisp(std::uint8_t modBits, std::uint8_t regField, bool hasIndex, std::uint8_t index,
-                 std::uint8_t rm, std::int64_t disp);
+  // ModRM (+ SIB + disp8/disp32) for [base+disp] memory operands. Never
+  // emits the RIP form; `leaRip()` handles that addressing explicitly.
+  void modRmDisp(std::uint8_t regField, bool hasIndex, std::uint8_t index, std::uint8_t rm,
+                 std::int64_t disp);
   void aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src);
   void unaryAlu(std::uint8_t ext, X64Reg dst);
   void shiftCl(std::uint8_t ext, X64Reg dst);

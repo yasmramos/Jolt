@@ -31,6 +31,7 @@ CodeGen::Label CodeGen::newLabel() {
   Label label;
   label.id = static_cast<int>(labelOffset_.size());
   labelOffset_.push_back(kUnbound);
+  labelBound_.push_back(false);
   return label;
 }
 
@@ -38,21 +39,27 @@ void CodeGen::bind(Label label) {
   if (label.id < 0 || static_cast<std::size_t>(label.id) >= labelOffset_.size()) {
     throw std::logic_error("codegen: binding an unknown label");
   }
-  if (labelOffset_[static_cast<std::size_t>(label.id)] != kUnbound) {
+  if (labelBound_[static_cast<std::size_t>(label.id)]) {
     throw std::logic_error("codegen: label bound twice");
   }
   labelOffset_[static_cast<std::size_t>(label.id)] = code_.size();
+  labelBound_[static_cast<std::size_t>(label.id)] = true;
   resolveFixups();
 }
 
 void CodeGen::resolveFixups() {
   std::vector<PendingFixup> remaining;
   for (const PendingFixup& fixup : fixups_) {
-    std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
-    if (target == kUnbound) {
+    if (!labelBound_[static_cast<std::size_t>(fixup.labelId)]) {
+      // The label is not bound yet: keep the placeholder and retry when the
+      // next bind() runs. (An offset of 0 is a valid binding, so the pending
+      // state cannot be inferred from `labelOffset_` alone.)
       remaining.push_back(fixup);
       continue;
     }
+    std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
+    // Bound: patch the displacement and retire the fixup (a label can only
+    // be bound once, enforced in bind(), so it will never need re-patching).
     // The displacement is relative to the end of the instruction, which is
     // four bytes after the start of the patch slot.
     std::int32_t distance = static_cast<std::int32_t>(target - (fixup.patchAt + 4));
@@ -79,57 +86,51 @@ void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t ind
 // disp8 when it fits (mod=01), disp32 otherwise (mod=10), no displacement
 // for [reg] (mod=00, except rbp/r12 which always need disp8, and rsp/r12 as
 // base which require a SIB byte).
-void CodeGen::modRmDisp(std::uint8_t modBits, std::uint8_t regField, bool hasIndex,
-                        std::uint8_t index, std::uint8_t rm, std::int64_t disp) {
-  (void)modBits;  // caller-provided hint is recomputed below from the value
-  const bool baseNeedsDisp = (rm & 7) == 5;   // rbp/r12: mod=00 means disp32-RIP
-  const bool baseIsRsp = (rm & 7) == 4;        // rsp/r12: requires SIB
-  bool needsSib = baseIsRsp || hasIndex;
-  std::int8_t lowRm = static_cast<std::int8_t>(rm & 7);
+//
+// RIP-relative addressing is never produced here: base registers are always
+// real GPRs, so rm=101 means rbp/r12, not [rip+disp]. `leaRip()` emits the
+// RIP form explicitly.
+void CodeGen::modRmDisp(std::uint8_t regField, bool hasIndex, std::uint8_t index,
+                        std::uint8_t rm, std::int64_t disp) {
+  const bool baseNeedsDisp = (rm & 7) == 5;  // rbp/r12: mod=00 would mean disp32
+  const bool baseIsRspOrR12 = (rm & 7) == 4;  // requires a SIB byte as base
+  const bool needsSib = baseIsRspOrR12 || hasIndex;
+  const std::uint8_t lowRm = static_cast<std::uint8_t>(rm & 7);
 
-  std::uint8_t mod = 0x00;
-  if (disp == 0 && !baseNeedsDisp && !needsSib) {
-    mod = 0x00;  // [reg]
+  std::uint8_t mod;
+  if (disp == 0 && !baseNeedsDisp) {
+    mod = 0x00;  // [reg] or [reg+index] without displacement
   } else if (disp >= -128 && disp <= 127) {
     mod = 0x01;  // disp8
   } else {
     mod = 0x10;  // disp32
   }
 
-  if (ripForm(hasIndex, rm)) {
-    // [rip + disp]: mod=00 rm=101 without SIB; the displacement is always
-    // 32 bits, so the mod hint computed above is overridden here.
-    put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (regField << 3) | 0x05));
-    put32(code_, static_cast<std::int32_t>(disp));
-    return;
-  }
   if (needsSib) {
     // ModRM selects the SIB form (rm=100); the SIB byte carries scale=00,
     // the index (rsp/100 means "no index") and the base register.
-    std::uint8_t idx = hasIndex ? (index & 7) : 0x04;
+    const std::uint8_t idx = hasIndex ? static_cast<std::uint8_t>(index & 7) : 0x04;
     put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | 0x04));
     put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (idx << 3) | lowRm));
   } else {
-    put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | rm));
+    put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | lowRm));
   }
   if (mod == 0x01) {
     put8(code_, static_cast<std::uint8_t>(static_cast<std::int8_t>(disp)));
-  } else if (mod != 0x00) {
+  } else if (mod == 0x10) {
     put32(code_, static_cast<std::int32_t>(disp));
   }
-}
-
-bool CodeGen::ripForm(bool hasIndex, std::uint8_t rm) {
-  // [rip + disp32]: rm = 101 without SIB.
-  return rm == 5 && !hasIndex;
 }
 
 void CodeGen::movImm(X64Reg dst, std::int64_t value) {
   std::uint8_t d = enc(dst);
   if (value >= -2147483648LL && value <= 2147483647LL) {
+    // mov r/m64, imm32: opcode C7 /0. The destination goes in the ModRM rm
+    // field and the reg field is the /0 extension, so the byte is 0xC0|rm
+    // (REX.B above selects r8-r15 for both fields).
     rex(true, 0, false, 0, d);
     put8(code_, 0xC7);
-    put8(code_, static_cast<std::uint8_t>(0xC0 | (d & 0x07)));  // ModRM reg=/0, rm=dst
+    put8(code_, static_cast<std::uint8_t>(0xC0 | (d & 0x07)));
     put32(code_, static_cast<std::int32_t>(value));
     return;
   }
@@ -149,7 +150,7 @@ void CodeGen::movToMem(X64Reg base, std::int64_t disp, X64Reg src) {
   std::uint8_t s = enc(src);
   rex(true, s, false, 0, b);
   put8(code_, 0x89);
-  modRmDisp(disp == 0 && (b & 7) != 5 ? 0x00 : 0x10, s, false, 0, b, disp);
+  modRmDisp(s, false, 0, b, disp);
 }
 
 void CodeGen::movFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
@@ -157,14 +158,14 @@ void CodeGen::movFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
   std::uint8_t d = enc(dst);
   rex(true, d, false, 0, b);
   put8(code_, 0x8B);
-  modRmDisp(disp == 0 && (b & 7) != 5 ? 0x00 : 0x10, d, false, 0, b, disp);
+  modRmDisp(d, false, 0, b, disp);
 }
 
 void CodeGen::movImmToMem(X64Reg base, std::int64_t disp, std::int64_t value) {
   std::uint8_t b = enc(base);
   rex(true, 0, false, 0, b);
   put8(code_, 0xC7);
-  modRmDisp(disp == 0 && (b & 7) != 5 ? 0x00 : 0x10, 0, false, 0, b, disp);
+  modRmDisp(0, false, 0, b, disp);
   put32(code_, static_cast<std::int32_t>(value));
 }
 
@@ -270,8 +271,7 @@ void CodeGen::sseMemOp(std::uint8_t prefix, std::uint8_t opcode, int xmm, X64Reg
   if (prefix != 0) put8(code_, prefix);
   put8(code_, 0x0F);
   put8(code_, opcode);
-  bool zeroDisp = disp == 0 && (b & 7) != 5;
-  modRmDisp(zeroDisp ? 0x00 : 0x10, d, false, 0, b, disp);
+  modRmDisp(d, false, 0, b, disp);
 }
 
 void CodeGen::movsdToXmm(int xmm, X64Reg base, std::int64_t disp) {
