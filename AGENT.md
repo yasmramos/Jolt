@@ -40,6 +40,9 @@ runtime to install); end users never install Jolt or any runtime.
 | `vm.cpp` | `Bytecode*` | execution | ✅ PHASE 5 |
 | `main.cpp` | CLI | full pipeline | ⬜ PHASE 4 (VM as the engine) |
 | `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
+| `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime: values and lexical `Env` | ✅ PHASE 6 groundwork |
+| `gc.cpp` | tracked `GcNode`s | reclamation of reference cycles | ✅ PHASE 6 groundwork |
+| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a (emitter only) |
 
 ---
 
@@ -196,7 +199,7 @@ previous one.
 - Do **NOT** add `OP_IF` or `OP_WHILE` (high level)
 - `in` and `for-in` are left for PHASE 6 (they depend on collections)
 
-### PHASE 6 — Functions, collections and library ⬜ ← NEXT
+### PHASE 6 — Functions, collections and library 🔶 in progress ← NEXT
 - `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
 - Call stack in the VM and registers per frame
 - `Bytecode` evolves into **per-function protos** with child protos (Lua style)
@@ -206,8 +209,9 @@ previous one.
   re-entering the AST
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
+- Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. The compiler still rejects collections, lambdas, general calls and `for-in` with a `(Phase 6)` message.
 
-### PHASE 7 — Bytecode → native backend (AOT, freestanding) ⬜
+### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
   x86-64 following the bytecode→ASM mapping table of §3.
 - **Own machine-code and static ELF executable emitter** (~500-1000 lines:
@@ -240,6 +244,7 @@ previous one.
   `docs/ARCHITECTURE_ANALYSIS.md`); other targets (macOS/Windows via libc or
   stubs).
 - Afterwards, LuaJIT's JIT as a reference.
+- **In the tree now**: the x86-64 instruction emitter (`include/native/codegen.h`, `src/native/codegen.cpp`): labels with backpatching, `mov`/`lea`, integer ALU, shifts, compares, `jmp`/`jcc`, SSE2 float ops, `push`/`pop`, `call rel32`, `syscall` and `ret`, covered by the byte-exact tests in `tests/codegen_test.cpp` (the mmap/execution checks run on Linux x86-64 only). Still missing: opcode→emitter lowering, the ELF/freestanding emitter, `_start`, the arena allocator, the `Platform` layer and `jolt build`.
 
 ### Current status
 Phase 1: ✅ completed and reviewed
@@ -247,8 +252,8 @@ Phase 2: ✅ completed
 Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
-Phase 6: ⬜ pending ← NEXT
-Phase 7: ⬜ pending
+Phase 6: 🔶 in progress ← NEXT (shared runtime and cycle collector in place; collections, lambdas and `for-in` are still missing from the compiler)
+Phase 7: 🔶 in progress (7a: x86-64 instruction emitter with tests; no ELF emitter, freestanding runtime or `jolt build` yet)
 Distribution model: freestanding AOT native binary (PHASE 7, Linux x86-64).
 VM = dev engine only. AST interpreter removed after 6f parity gate.
 
