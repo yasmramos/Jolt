@@ -21,10 +21,13 @@ programming language with a Lua-style internal architecture.
 ## 2. Mandatory architecture
 
 ```text
-.jolt → LEXER → PARSER → AST → COMPILER → BYTECODE → VM
-                                                  ↓
-                                   (future) NATIVE COMPILER
+.jolt → LEXER → PARSER → AST → COMPILER → BYTECODE ─┬─→ VM (dev engine)
+                                                     └─→ AOT BACKEND → freestanding static native binary
 ```
+
+The VM is a development tool (REPL, fast iteration, differential testing).
+`jolt build` produces a self-contained freestanding binary (no libc, no
+runtime to install); end users never install Jolt or any runtime.
 
 ### Modules and responsibilities
 
@@ -81,6 +84,20 @@ and propose an alternative.
 > **Do NOT repeat Java's mistake**: high-level bytecode that later turns out
 > to be impossible to compile to native code efficiently. Jolt's bytecode
 > must be born with future native compilation in mind.
+
+### Design rules for the AOT backend
+
+1. **No VM-only features.** Every language feature must be compilable by the
+   AOT backend. Runtime `eval`/`load` of bytecode is forbidden unless the
+   produced binary embeds the compiler itself (same pitfall as GraalVM: a
+   dynamic escape hatch that defeats static compilation).
+2. **The bytecode must carry enough information for AOT.** Instructions stay
+   annotatable with provable types so the backend can emit typed fast paths
+   instead of falling back to full dynamic dispatch.
+3. **The embeddable runtime cannot call libc.** The runtime that ships inside
+   AOT binaries may only reach the outside world through the `Platform`
+   interface (see PHASE 7): write, read, alloc, exit and file I/O go through
+   it, never through libc or libstdc++ symbols.
 
 ### Expected bytecode → ASM mapping
 
@@ -150,15 +167,17 @@ previous one.
 - `run()` resets the registers and keeps the globals between executions
 - Each opcode: 2-3 lines of C++
 
-### PHASE 4 — `src/main.cpp` (VM as the only engine) ⬜ (runs after PHASE 6)
+### PHASE 4 — `src/main.cpp` (VM as the dev engine) ⬜ (runs after PHASE 6)
 - Lua/LuaJIT model: `jolt`, `jolt -e` and the REPL **always** compile to
-  bytecode and run on the VM. The AST is never executed in production.
+  bytecode and run on the VM as the **development mode**. The AST is never
+  executed in production.
 - REPL with **a single persistent VM**: each input is compiled to a chunk and
   run on the same globals.
 - Temporary `--ast` only for differential tests (comparing AST vs VM); it is
   removed from the binary once parity is reached.
 - `jolt -c file.jolt` compiles without running.
-- `jolt build file.jolt` (future) → generate C++ + g++
+- `jolt build file.jolt` → PHASE 7 AOT backend: freestanding static native
+  binary (no libc), no Jolt installation needed by end users.
 
 ### PHASE 5 — Control flow and locals ✅
 - Opcodes: `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`
@@ -188,20 +207,50 @@ previous one.
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
 
-### PHASE 7 — Bytecode → C++ compiler (future) ⬜
-- Translate each instruction into one line of C++
-- `g++ -O2` produces the native binary
-- Evaluate `union`/`variant` for `Instruction` and drop `jump` when unused
-- Afterwards, LuaJIT's JIT as a reference
+### PHASE 7 — Bytecode → native backend (AOT, freestanding) ⬜
+- New module `src/native/` + `include/native/`: lowering of every opcode to
+  x86-64 following the bytecode→ASM mapping table of §3.
+- **Own machine-code and static ELF executable emitter** (~500-1000 lines:
+  ELF header, program headers, `.text`, `.rodata`, entry point), keeping the
+  zero-dependency rule of §5.1/§8. LIEF, AsmJit and LLVM were evaluated and
+  rejected: LIEF is built to parse/modify binaries (not generate them), and
+  AsmJit/LLVM break the no-external-dependencies rule.
+- **Freestanding**: its own `_start` entry point (argc/argv read from the
+  stack, `exit` via syscall), direct syscalls (`write`, `read`, `openat`,
+  `close`, `mmap`, `brk`, `exit_group`), a custom arena/bump allocator on top
+  of `mmap`, and no libc or libstdc++ linked into the generated binary —
+  `ldd` must report "not a dynamic executable". Custom dtoa/formatting for
+  printing floats with `PRINT`.
+- **Platform layer**: extract a minimal `Platform` interface from
+  `vm.cpp`/runtime (write, read, alloc, exit, file I/O) with two
+  implementations: `PlatformPosix` (dev engine; may use libc) and
+  `PlatformFreestanding` (AOT; direct syscalls only). The `Runtime` of slice
+  6a.0 (PHASE 6) must be built on this interface from the start.
+- Initial target: Linux x86-64 only (direct syscalls = one concrete ABI).
+- Subslices:
+  - **7a** — "hello world" spike: hand-written `_start` + `write` syscall →
+    static freestanding ELF → `./hello` runs, no libc.
+  - **7b** — lowering of opcodes that need no runtime (int/float arithmetic,
+    jumps, comparisons).
+  - **7c** — freestanding embedded runtime calls (strings, `PRINT`,
+    collections on top of the custom allocator).
+  - **7d** — `jolt build` wired into the CLI.
+- Deferred: per-instruction type annotations for fast paths without dynamic
+  dispatch (bridge toward the speculative work in
+  `docs/ARCHITECTURE_ANALYSIS.md`); other targets (macOS/Windows via libc or
+  stubs).
+- Afterwards, LuaJIT's JIT as a reference.
 
 ### Current status
 Phase 1: ✅ completed and reviewed
 Phase 2: ✅ completed
 Phase 3: ✅ completed
-Phase 4: ⬜ pending (VM as the only engine; requires PHASE 6)
+Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ⬜ pending ← NEXT
 Phase 7: ⬜ pending
+Distribution model: freestanding AOT native binary (PHASE 7, Linux x86-64).
+VM = dev engine only. AST interpreter removed after 6f parity gate.
 
 
 ---
@@ -299,7 +348,8 @@ The agent **must NOT** propose or implement:
 - The "dual" approach (AST interpreter as an alternative engine) is **NOT**
   preserved. Once the VM covers the language (PHASE 4), the AST interpreter
   leaves the binary and stays only in tests, and is retired afterwards.
-- The phases run in order: 5 ✅, 6, then 4 (VM as the only engine) and 7.
+- The phases run in order: 5 ✅, 6, then 4 (VM as the dev engine) and 7 (AOT
+  native backend).
 
 ---
 

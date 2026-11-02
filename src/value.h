@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "gc.h"
+
 class Runtime;
 struct Env;
 struct Stmt;
@@ -67,6 +69,17 @@ class Ref {
   friend Ref<U> makeRef(Args&&... args);
 
  public:
+  // Creates a handle to an object known only by address and adds a strong
+  // reference to it. The cycle collector uses this to pin the objects it is
+  // about to clear; everything else gets its handles from `makeRef` or by
+  // copying an existing one.
+  static Ref retaining(T* ptr) noexcept {
+    Ref handle;
+    handle.ptr_ = ptr;
+    handle.retain();
+    return handle;
+  }
+
   Ref(const Ref& other) noexcept : ptr_(other.ptr_) { retain(); }
   Ref(Ref&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
 
@@ -122,10 +135,11 @@ Ref<T> makeRef(Args&&... args) {
   static_assert(std::is_base_of<RefCounted, T>::value,
                 "Ref<T> targets must derive from RefCounted");
   T* object = new T(std::forward<Args>(args)...);
-  // The lambda converts `void*` to `T*` and deletes through the concrete
-  // type, so members are destroyed correctly regardless of how the object is
-  // later referenced. Marked non-capturing: stored as a plain function ptr.
-  object->destroy = [](void* p) { delete static_cast<T*>(p); };
+  // The hook receives the `RefCounted` subobject and converts it back to `T`
+  // in two steps, so it stays correct even when `T` has other base classes
+  // (such as GcNode). It deletes through the concrete type, so members are
+  // destroyed properly however the object is later referenced.
+  object->destroy = [](void* p) { delete static_cast<T*>(static_cast<RefCounted*>(p)); };
   // The adopting constructor does not retain, so seed the count with the
   // single strong reference owned by the returned handle. Without this the
   // first copy of the handle brings the count to 1 and the original's
@@ -369,17 +383,25 @@ struct Cell : RefCounted {
 
 using CellPtr = Ref<Cell>;
 
-struct Array : RefCounted {
+// Containers and functions can end up owning themselves, so they are tracked
+// by the cycle collector (gc.h). Their inspection tables live in value.cpp.
+extern const GcNode::Ops arrayGcOps;
+extern const GcNode::Ops mapGcOps;
+extern const GcNode::Ops functionGcOps;
+
+struct Array : RefCounted, GcNode {
   std::vector<Value> items;
 
-  Array() = default;
-  explicit Array(std::vector<Value> init) : items(std::move(init)) {}
+  Array() : GcNode(arrayGcOps) {}
+  explicit Array(std::vector<Value> init) : GcNode(arrayGcOps), items(std::move(init)) {}
 };
 
 // Insertion-ordered string-keyed map.
-struct Map : RefCounted {
+struct Map : RefCounted, GcNode {
   std::vector<std::pair<std::string, Value>> entries;
   std::unordered_map<std::string, size_t> index;
+
+  Map() : GcNode(mapGcOps) {}
 
   bool has(const std::string& key) const;
   const Value* get(const std::string& key) const;
@@ -391,7 +413,9 @@ struct Map : RefCounted {
   size_t size() const { return entries.size(); }
 };
 
-struct Function : RefCounted {
+struct Function : RefCounted, GcNode {
+  Function() : GcNode(functionGcOps) {}
+
   std::string name;
   std::vector<std::string> params;
   std::shared_ptr<Stmt> body;
@@ -418,6 +442,20 @@ inline Array& Value::arr() const { return *data.array; }
 inline Map& Value::map() const { return *data.map; }
 inline Function& Value::func() const { return *data.function; }
 inline Range& Value::range() const { return *data.range; }
+
+// Reports the tracked object that `value` owns, if any, to a collector visitor.
+// Strings and ranges cannot hold references, so they are not tracked. Cells
+// will be added with the PHASE 6 closures, the first place they can be part of
+// a cycle.
+inline void gcVisit(const Value& value, GcNode::Visitor visitor, void* context) {
+  if (value.isArray()) {
+    visitor(value.arr(), context);
+  } else if (value.isMap()) {
+    visitor(value.map(), context);
+  } else if (value.isFunc()) {
+    visitor(value.func(), context);
+  }
+}
 
 ArrayPtr makeArray(std::vector<Value> items = {});
 MapPtr makeMap();

@@ -9,8 +9,8 @@ closures over `Cell`, a `Runtime` interface so builtins can call VM functions
 without re-entering the AST, arrays/maps with indexing and members, ranges,
 string interpolation and `for-in`.
 
-Non-goals: PHASE 4 (VM as the only engine) and PHASE 7 (bytecode -> C++). They
-come after parity is proven.
+Non-goals: PHASE 4 (VM as the dev engine) and PHASE 7 (bytecode -> native AOT
+backend). They come after parity is proven.
 
 ---
 
@@ -178,6 +178,16 @@ engines, `map`/`filter`/`sort` call back through `Runtime::call`, and
 move to `src/ops.{h,cpp}` and both engines call it, which also removes the
 duplicated arithmetic in `vm.cpp`.
 
+> **PHASE 7 note:** the `Runtime` introduced in slice 6a.0 must be designed as
+> a linkable, embeddable component (no dependency on the compiler front-end or
+> the VM) and must reach the outside world only through the minimal `Platform`
+> interface (write, read, alloc, exit, file I/O). The AOT backend statically
+> links this same runtime into every generated binary, which is **freestanding
+> — no libc**: there it runs on `PlatformFreestanding` (direct syscalls), while
+> the dev engine uses `PlatformPosix`. Anything that keeps the runtime tied to
+> the VM or to libc would have to be refactored later. See PHASE 7 in
+> `AGENT.md`.
+
 ## 3. Final opcode set (39 + `IN` = 40)
 
 ```
@@ -221,6 +231,7 @@ engines for the same file; it grows one directory per slice and is what makes
 | Native re-entrancy (builtin -> VM -> builtin) | `VM::call` runs a nested frame with a return barrier; test `map` with a VM lambda |
 | `Edge: mutation during for-in` | Iterate live containers by index (document it), except ranges which are lazy |
 | Performance regression from cells | Accepted in PHASE 6; measured in the benchmark noted in `docs/PROJECT_ANALYSIS.md` |
+| Closures over `Cell` form cycles (a recursive local function: cell -> closure -> cell) | Make `Cell` and the VM closure a `GcNode` and add their hooks next to the others in `src/value.cpp`; `src/gc.h` is engine-agnostic, so this is not a GC redesign. Add the cases to `tests/gc_test.cpp` |
 
 ## 6. What NOT to do
 

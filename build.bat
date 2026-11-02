@@ -5,6 +5,8 @@ cd /d "%~dp0"
 if not exist build mkdir build
 
 g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe ^
+    src\gc.cpp ^
+    src\env.cpp ^
     src\value.cpp ^
     src\lexer.cpp ^
     src\parser.cpp ^

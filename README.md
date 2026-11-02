@@ -238,6 +238,7 @@ Windows:
 powershell -ExecutionPolicy Bypass -File tests\run.ps1
 powershell -ExecutionPolicy Bypass -File tests\run_compiler.ps1
 powershell -ExecutionPolicy Bypass -File tests\run_vm.ps1
+powershell -ExecutionPolicy Bypass -File tests\run_gc.ps1
 ```
 
 Linux, macOS or MSYS2:
@@ -246,6 +247,7 @@ Linux, macOS or MSYS2:
 ./tests/run.sh
 ./tests/run_compiler.sh
 ./tests/run_vm.sh
+./tests/run_gc.sh
 ```
 
 The positive tests use `assert` and `assertEq`; a script exits with a non-zero code if any assertion fails. The tests in `tests/errors/` check compile-time and runtime errors: they declare the expected exit code on their first line with `// expect-exit: N`. The bytecode compiler tests (`compiler_test.cpp`) verify the instruction sequence, the constant pools, the `nil`/boolean literals, the unary and compound operators, the comparisons, the `if`/`while`/`for` jumps with backpatching, the local slots and the rejection of assignments to immutable `let` bindings. The VM tests (`vm_test.cpp`) compile snippets to bytecode and check the execution of integer and float arithmetic, `%`, `**`, comparisons, unary operators, globals, strings, compound assignment, `if`/`else`, loops, `break`/`continue`, block shadowing, bitwise operators, `&&`/`||` short-circuiting, the ternary operator and runtime errors.
@@ -264,7 +266,7 @@ Current limitations:
 - There is no slicing syntax (`s[1:3]`); use `substr`, `slice`, etc.
 - `upper` and `lower` only transform ASCII letters.
 - The maximum call depth is 2000.
-- There is no explicit garbage collection: reference counting is used, so cyclic references can retain memory.
+- Memory is managed with reference counting plus a cycle collector (`src/gc.h`) that reclaims unreachable cycles, such as a function stored in the scope it closes over. A cycle that runs through state captured by a native method (`a.f = a.push`) is never collected.
 
 Ideas for future versions:
 

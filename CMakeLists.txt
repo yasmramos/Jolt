@@ -16,7 +16,16 @@ else()
   set(JOLT_WARNINGS -Wall -Wextra)
 endif()
 
+# Testing aid: run the cycle collector at every safe point instead of only when
+# enough objects were allocated. Slow; meant for sanitizer runs.
+option(JOLT_GC_STRESS "Collect cycles at every safe point (testing only)" OFF)
+if(JOLT_GC_STRESS)
+  add_compile_definitions(JOLT_GC_STRESS)
+endif()
+
 set(JOLT_CORE_SOURCES
+  src/gc.cpp
+  src/env.cpp
   src/value.cpp
   src/lexer.cpp
   src/parser.cpp
@@ -80,6 +89,16 @@ if(BUILD_TESTING)
   target_include_directories(vm_test PRIVATE src include)
   target_compile_options(vm_test PRIVATE ${JOLT_WARNINGS})
   add_test(NAME vm_test COMMAND vm_test)
+
+  add_executable(gc_test
+    src/gc.cpp
+    src/env.cpp
+    src/value.cpp
+    tests/gc_test.cpp
+  )
+  target_include_directories(gc_test PRIVATE src include)
+  target_compile_options(gc_test PRIVATE ${JOLT_WARNINGS})
+  add_test(NAME gc_test COMMAND gc_test)
 
   file(GLOB jolt_tests CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.jolt"

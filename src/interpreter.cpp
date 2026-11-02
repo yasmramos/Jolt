@@ -48,90 +48,21 @@ Tok baseAssignOp(Tok op) {
 
 }  // namespace
 
-// ----------------------------------------------------------------------- Env
-
-namespace {
-
-// Builds a scope whose entire visible chain is kept alive strongly. Used
-// for function calls and loop iterations, where closures may outlive the
-// scope: a captured environment must stay reachable (including its own
-// ancestors) even after the temporary shared pointers that created it are
-// gone. Because nothing points back from the ancestors to the new scope,
-// this flattened list cannot form a reference cycle.
-std::shared_ptr<Env> createLinkedScope(const std::shared_ptr<Env>& outer) {
-  auto scope = std::make_shared<Env>();
-  if (outer) {
-    std::unordered_set<const Env*> seen;
-    // Hold one strong reference to `outer` while walking so that weak
-    // parent links along the way can still be locked even if the chain was
-    // previously kept alive only by temporary owners.
-    std::vector<std::shared_ptr<Env>> pending{outer};
-    while (!pending.empty()) {
-      std::shared_ptr<Env> current = std::move(pending.back());
-      pending.pop_back();
-      if (!seen.insert(current.get()).second) continue;
-      scope->strongAncestors.push_back(current);
-      for (const auto& ancestor : current->strongAncestors) pending.push_back(ancestor);
-      if (auto parent_ = current->parent.lock()) pending.push_back(std::move(parent_));
-    }
-  }
-  return scope;
-}
-
-}  // namespace
-
-Binding* Env::find(const std::string& name) {
-  // Scope chains mix two kinds of links: block scopes keep a weak `parent`
-  // (a collected parent simply means the name is no longer visible), while
-  // call/loop scopes flatten their whole lexical chain into `strongAncestors`
-  // so closures can outlive them. A BFS over both covers every visible scope.
-  std::vector<std::shared_ptr<Env>> stack{shared_from_this()};
-  std::unordered_set<const Env*> visited;
-  while (!stack.empty()) {
-    std::shared_ptr<Env> current = std::move(stack.back());
-    stack.pop_back();
-    if (!visited.insert(current.get()).second) continue;
-    auto it = current->vars.find(name);
-    if (it != current->vars.end()) return &it->second;
-    for (const auto& ancestor : current->strongAncestors) stack.push_back(ancestor);
-    if (auto parent_ = current->parent.lock()) stack.push_back(std::move(parent_));
-  }
-  return nullptr;
-}
-
-void Env::define(const std::string& name, Value value, bool isImmutable) {
-  Binding binding;
-  binding.value = std::move(value);
-  binding.isImmutable = isImmutable;
-  vars[name] = std::move(binding);
-}
-
-Env::Assign Env::assign(const std::string& name, Value value) {
-  // Same mixed weak/strong chain walk as `find()`; nearest binding wins.
-  std::vector<std::shared_ptr<Env>> stack{shared_from_this()};
-  std::unordered_set<const Env*> visited;
-  while (!stack.empty()) {
-    std::shared_ptr<Env> current = std::move(stack.back());
-    stack.pop_back();
-    if (!visited.insert(current.get()).second) continue;
-    auto it = current->vars.find(name);
-    if (it != current->vars.end()) {
-      if (it->second.isImmutable) return Env::Assign::Immutable;
-      it->second.value = std::move(value);
-      return Env::Assign::Ok;
-    }
-    for (const auto& ancestor : current->strongAncestors) stack.push_back(ancestor);
-    if (auto parent_ = current->parent.lock()) stack.push_back(std::move(parent_));
-  }
-  return Env::Assign::NotFound;
-}
-
 // --------------------------------------------------------------- Interpreter
 
 Interpreter::Interpreter(std::string name) : globals(std::make_shared<Env>()) {
   sourceName = std::move(name);
   env = globals;
   registerBuiltins(*this);
+}
+
+Interpreter::~Interpreter() {
+  // Release everything the interpreter owns, then reclaim the cycles left among
+  // objects that nothing else references.
+  env.reset();
+  globals->clear();
+  globals.reset();
+  gcCollect();
 }
 
 void Interpreter::defineGlobal(const std::string& name, Value value, bool isImmutable) {
@@ -159,13 +90,12 @@ void Interpreter::run(const StmtPtr& program) {
     fail("'return' outside of a function");
   }
 
-  // After the program finishes, user-defined functions may still reference
-  // their own definition environment through their closure (self-recursion
-  // support binds the function inside its own call scope). Releasing globals
-  // here breaks those dangling cycles so leak checkers only report memory
-  // that is genuinely unreachable-but-live during execution.
+  // Top-level functions close over the global scope that also holds them.
+  // Releasing the globals here breaks that cycle at the end of the run, and the
+  // collector reclaims whatever cycles the program left behind.
   globals->clear();
   registerBuiltins(*this);
+  gcCollect();
 }
 
 void Interpreter::runStatement(const Stmt& stmt) {
@@ -246,13 +176,10 @@ void Interpreter::exec(const Stmt& stmt) {
             }
 
             auto runIteration = [&](const Value& item) {
-              // Each iteration gets its own binding of the loop variable, and
-              // closures created inside must keep resolving it after the loop
-              // ends, so the iteration scope pins the whole visible chain.
-              // The body runs directly in this scope (no nested block scope):
-              // a plain child env would hold only a weak parent link, letting
-              // the iteration env expire while closures still capture it.
-              auto iterationEnv = createLinkedScope(env);
+              // Each iteration gets its own binding of the loop variable, so
+              // closures created in the body capture a different one per turn.
+              // The body runs directly in this scope (no nested block scope).
+              auto iterationEnv = std::make_shared<Env>(env);
               iterationEnv->define(s.var, item, false);
               EnvGuard guard(*this);
               env = iterationEnv;
@@ -297,6 +224,10 @@ void Interpreter::exec(const Stmt& stmt) {
 }
 
 void Interpreter::execBlock(const Stmt& block, const std::shared_ptr<Env>& target, bool newScope) {
+  // A safe point: every object reachable from the running program is held by
+  // a variable, the call stack or a scope, so only unreachable cycles are freed.
+  gcCollectIfNeeded();
+
   const auto& body = std::get<BlockStmt>(block.node);
   std::shared_ptr<Env> scope = newScope ? std::make_shared<Env>(target) : target;
 
@@ -310,43 +241,7 @@ void Interpreter::execBlock(const Stmt& block, const std::shared_ptr<Env>& targe
     }
   }
 
-  // A hoisted function closes over its defining scope and is also bound
-  // inside it, a self-referential pair that plain reference counting cannot
-  // collect once the block exits. To keep memory bounded without breaking
-  // closures (which must retain their free variables), every environment in
-  // this block's chain that already holds a function gets an extra owning
-  // reference tied to the block's lifetime: when the block finishes, the
-  // whole captured subgraph is released at once unless something outside
-  // still owns it. Chains without functions stay purely weak, so top-level
-  // blocks never pin the globals or long-lived closures.
-  const size_t anchorBase = keepAlive_.size();
-  if (newScope && target != scope) {
-    for (const auto& envWithFunction : envsHoldingFunctions(target)) {
-      keepAlive_.push_back(envWithFunction);
-    }
-  }
-
   for (const auto& stmt : body.stmts) exec(*stmt);
-
-  // Break the self-referential pairs created by hoisting: a named function
-  // bound in the very environment it closes over forms a reference-counting
-  // cycle (env -> function -> env) that neither side can ever release. Once
-  // the block is done its local bindings are unreachable anyway, so dropping
-  // the closure link of such bindings lets the captured subgraph die.
-  // Escaping closures (returned or stored outside) do not live in their own
-  // defining scope, so they are never affected.
-  if (newScope && target != scope) {
-    for (auto& entry : scope->vars) {
-      Value& v = entry.second.value;
-      if (v.isFunc() && v.func().closure.get() == scope.get()) {
-        v = Value(makeFunction(v.func().name, v.func().params, v.func().body, nullptr));
-      }
-    }
-  }
-
-  // Pop exactly the anchors this block pushed so captured subgraphs are
-  // freed as soon as the block (and any outside owner) releases them.
-  keepAlive_.resize(anchorBase);
 }
 
 FuncPtr Interpreter::makeFunction(const std::string& name, const std::vector<std::string>& params,
@@ -598,11 +493,7 @@ Value Interpreter::call(const Value& callee, std::vector<Value> args, int line, 
     fail("maximum call depth exceeded (possible infinite recursion)", line, col);
   }
 
-  // The call scope pins the closure's whole visible chain strongly: closures
-  // created inside the call may outlive it and must still resolve free
-  // variables, and a plain weak parent link would let ancestors expire once
-  // the temporary owners on the stack disappear.
-  auto callEnv = createLinkedScope(fn.closure);
+  auto callEnv = std::make_shared<Env>(fn.closure);
   for (size_t i = 0; i < fn.params.size(); ++i) {
     callEnv->define(fn.params[i], std::move(args[i]), false);
   }
