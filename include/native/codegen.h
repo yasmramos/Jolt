@@ -115,21 +115,22 @@ class CodeGen {
   void emitBytes(const std::uint8_t* data, std::size_t length);
 
   std::size_t offset() const { return code_.size(); }
+
+  // Patches every pending rel32 fixup whose label is already bound. Call
+  // once after emitting the whole function; any reference to an unbound
+  // label throws (the backend must bind all labels before finishing).
+  void finalize();
+
   const std::vector<std::uint8_t>& code() const { return code_; }
 
  private:
   struct PendingFixup {
     std::size_t patchAt = 0;  // offset of the 4-byte displacement
     int labelId = -1;
-    // True when the reference was emitted before its label was bound (a
-    // forward jump): the rel32 slot ends at the instruction boundary and is
-    // already excluded from the displacement. Backward references must skip
-    // the four bytes of the patch slot.
-    bool emittedBeforeBind = false;
   };
 
-  // Like `makeFixup` but for a rel32 slot already written to the buffer
-  // (jmp/jcc): records the start of that slot instead of the write position.
+  // For a rel32 slot already written to the buffer (jmp/jcc): records the
+  // start of that displacement slot.
   PendingFixup makeInPlaceFixup(Label label);
 
   std::vector<std::uint8_t> code_;

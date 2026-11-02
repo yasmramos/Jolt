@@ -59,12 +59,10 @@ void CodeGen::resolveFixups() {
     }
     std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
     // rel32 displacements are measured from the end of the instruction that
-    // carries them. Forward references sit inside the instruction and their
-    // slot ends at the instruction boundary (patchAt + 4). Backward ones are
-    // recorded four bytes past the end of the slot, so the write position
-    // captured at makeInPlaceFixup() time minus 4 is the instruction end;
-    // since patchAt = size - 4 there, the end is patchAt + 8.
-    std::size_t nextRip = fixup.emittedBeforeBind ? (fixup.patchAt + 4) : (fixup.patchAt + 8);
+    // carries them. The displacement slot always ends at the instruction
+    // boundary, whether the reference was resolved forward or backward:
+    // next_rip = patchAt + 4 in both cases.
+    std::size_t nextRip = fixup.patchAt + 4;
     std::int32_t distance = static_cast<std::int32_t>(static_cast<std::int64_t>(target) -
                                                       static_cast<std::int64_t>(nextRip));
     code_[fixup.patchAt + 0] = static_cast<std::uint8_t>(distance & 0xFF);
@@ -77,19 +75,21 @@ void CodeGen::resolveFixups() {
 
 // Records a reference to `label` for a rel32 displacement. jmp/jcc call
 // this right after writing the four placeholder bytes, so patchAt points at
-// the start of the displacement slot inside the instruction; the pending
-// flag distinguishes forward from backward references:
-//   - Forward (flag set): the label binds at the instruction boundary that
-//     follows the slot, so next_rip = patchAt + 4.
-//   - Backward (flag clear): bind() already ran and the whole instruction
-//     has been emitted, so the current write position sits four bytes past
-//     the end of the slot; next_rip = patchAt + 8 = code size at emit time.
+// the start of the displacement slot inside the instruction. The end of the
+// slot is always the end of the instruction (next_rip = patchAt + 4), for
+// both forward and backward references.
 CodeGen::PendingFixup CodeGen::makeInPlaceFixup(Label label) {
   PendingFixup fixup;
   fixup.patchAt = code_.size() - 4;
   fixup.labelId = label.id;
-  fixup.emittedBeforeBind = !labelBound_[static_cast<std::size_t>(label.id)];
   return fixup;
+}
+
+void CodeGen::finalize() {
+  resolveFixups();
+  if (!fixups_.empty()) {
+    throw std::logic_error("codegen: finalize with unbound label references");
+  }
 }
 
 void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t index,
@@ -105,18 +105,19 @@ void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t ind
 // Encodes ModRM (+ SIB and displacement) for memory operands with a base
 // register and a signed displacement. The encoding is size-optimized:
 // disp8 when it fits (mod=01), disp32 otherwise (mod=10), no displacement
-// for [reg] (mod=00, except rbp/r12 which always need disp8, and rsp/r12 as
+// for [reg] (mod=00, except rbp/r13 which always need disp8, and rsp/r12 as
 // base which require a SIB byte).
 //
-// RIP-relative addressing is never produced here: base registers are always
-// real GPRs, so rm=101 means rbp/r12, not [rip+disp]. `leaRip()` emits the
-// RIP form explicitly.
+// `rm` is the full register number; only its low three bits go into the
+// ModRM/SIB bytes (the caller contributes REX.B from the full value). A
+// base whose low bits are 101 is rbp/r13 -- never RIP, because this helper
+// is only called with real GPR bases (`leaRip()` emits the RIP form
+// explicitly) -- so it must not trigger the SIB path: rm=101 with mod!=00
+// already encodes [rbp+disp]/[r13+disp] directly.
 void CodeGen::modRmDisp(std::uint8_t regField, std::uint8_t rm, std::int64_t disp) {
-  const bool baseNeedsDisp = (rm & 7) == 5;   // rbp/r12: mod=00 would mean disp32
-  const bool baseIsRspOrR12 = (rm & 7) == 4;  // requires a SIB byte as base
-  // Use the full register number for the REX selection by the caller, but
-  // keep the low three bits inside the ModRM/SIB bytes.
   const std::uint8_t lowRm = static_cast<std::uint8_t>(rm & 7);
+  const bool baseNeedsDisp = lowRm == 5;   // rbp/r13: mod=00 would mean disp32
+  const bool needsSib = lowRm == 4;        // rsp/r12: SIB byte required as base
 
   std::uint8_t mod;
   if (disp == 0 && !baseNeedsDisp) {
@@ -127,7 +128,7 @@ void CodeGen::modRmDisp(std::uint8_t regField, std::uint8_t rm, std::int64_t dis
     mod = 0x10;  // disp32
   }
 
-  if (baseIsRspOrR12) {
+  if (needsSib) {
     // ModRM selects the SIB form (rm=100); the SIB byte carries scale=00,
     // index=100 ("no index") and the base register.
     put8(code_, static_cast<std::uint8_t>((mod << 6) | ((regField & 7) << 3) | 0x04));
@@ -344,10 +345,11 @@ void CodeGen::cvtsi2sd(int dstXmm, X64Reg src) {
   std::uint8_t byte = 0x40 | 0x08;  // W=1
   if (d >= 8) byte |= 0x04;
   if (s >= 8) byte |= 0x01;
-  // The REX byte must precede the F2 legacy prefix: prefixes between REX
-  // and the opcode are undefined behavior per the AMD64 ABI.
-  put8(code_, byte);
+  // GNU as emits the F2 legacy prefix before REX for this instruction
+  // (`f2 48 0f 2a c0`); both orders decode identically on x86-64 CPUs, but
+  // matching the assembler keeps our byte-exact tests aligned with objdump.
   put8(code_, 0xF2);
+  put8(code_, byte);
   put8(code_, 0x0F);
   put8(code_, 0x2A);
   put8(code_, static_cast<std::uint8_t>(0xC0 | (d << 3) | (s & 7)));

@@ -45,6 +45,7 @@ static std::string toHex(const std::vector<std::uint8_t>& bytes) {
 }
 
 static void checkBytes(const char* label, CodeGen& gen, const std::string& expected) {
+  gen.finalize();
   std::string actual = toHex(gen.code());
   check(actual == expected,
         std::string(label) + " encoding [" + actual + "] expected [" + expected + "]");
@@ -70,7 +71,7 @@ static void test_mov_imm() {
   // Negative small immediates are sign-extended by the CPU.
   CodeGen g4;
   g4.movImm(X64Reg::Rax, -1);
-  checkBytes("mov rax, -1", g4, "48C7C7FFFFFFFF");
+  checkBytes("mov rax, -1", g4, "48C7C0FFFFFFFF");
 }
 
 static void test_mov_reg_and_stack() {
@@ -190,7 +191,7 @@ static void test_control_flow() {
   g5.bind(top);
   g5.movImm(X64Reg::Rax, -1);
   g5.jmp(top);
-  checkBytes("jmp rel32 backward", g5, "48C7C7FFFFFFFFFFFFFBE9F5FFFFFF");
+  checkBytes("jmp rel32 backward", g5, "48C7C0FFFFFFFFE9F5FFFFFF");
 
   // Binding an unknown or twice-bound label must be rejected: `bind()`
   // throws std::logic_error in both cases.
@@ -216,8 +217,11 @@ static void test_control_flow() {
   check(threwTwice, "binding the same label twice throws std::logic_error");
   g6.jmp(once);
   g6.retInsn();
-  // Backward jump to offset 0: disp = 0 - (5 + 4) = -9 -> F7FFFFFF
-  checkBytes("jmp to already bound label", g6, "E9F7FFFFFFC3");
+  // `once` was bound at offset 0 (bind emits no bytes), so the jmp starts at
+  // offset 0 and its rel32 slot ends at 5. disp = target - next_rip =
+  // 0 - 5 = -5 -> FBFFFFFF, an infinite self-loop terminated only by the
+  // trailing ret never being reached in this byte-check (it is not executed).
+  checkBytes("jmp to already bound label", g6, "E9FBFFFFFFC3");
 }
 
 static void test_sse() {
@@ -275,7 +279,7 @@ static void test_exec_arithmetic() {
   g.imulReg(X64Reg::Rcx, X64Reg::Rdx);
   g.addReg(X64Reg::Rax, X64Reg::Rcx);
   g.retInsn();
-  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g.code()));
+  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable((g.finalize(), g.code())));
   std::int64_t result = fn();
   check(result == 14, "exec: 2 + 3 * 4 == 14 (got " + std::to_string(result) + ")");
 }
@@ -288,7 +292,7 @@ static void test_exec_division() {
   g.movImm(X64Reg::Rcx, 7);
   g.idiv(X64Reg::Rcx);
   g.retInsn();
-  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g.code()));
+  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable((g.finalize(), g.code())));
   std::int64_t quotient = fn();
   check(quotient == 14, "exec: 100 / 7 == 14 (got " + std::to_string(quotient) + ")");
 }
@@ -304,7 +308,7 @@ static void test_exec_labels_loop() {
   g.subReg(X64Reg::Rax, X64Reg::Rcx);
   g.jcc(Jcc::Ne, top);
   g.retInsn();
-  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g.code()));
+  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable((g.finalize(), g.code())));
   std::int64_t result = fn();
   check(result == 0, "exec: countdown loop returns 0 (got " + std::to_string(result) + ")");
 }
@@ -320,7 +324,7 @@ static void test_exec_stack_and_mem() {
   g.addReg(X64Reg::Rax, X64Reg::Rcx);
   g.pop(X64Reg::Rbx);
   g.retInsn();
-  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g.code()));
+  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable((g.finalize(), g.code())));
   std::int64_t result = fn();
   check(result == 18, "exec: push/add/pop sequence returns 18 (got " + std::to_string(result) + ")");
 }
