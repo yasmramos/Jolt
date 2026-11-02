@@ -10,13 +10,16 @@
 
 // Low-level bytecode for Jolt's register-based VM.
 //
-// Every instruction works on registers and is designed to map to a single
-// native instruction in PHASE 7. The set is deliberately small: literals share
-// one tagged constant pool, unary operators share one opcode whose `c` field
-// selects the operation, and collections share the GET/SET table pair.
+// Every instruction works on registers and has exactly one direct native
+// lowering in PHASE 7: either a short inline instruction sequence or one call
+// to a named runtime primitive (AGENT.md §3.2). The set is deliberately small:
+// literals share one tagged constant pool, unary operators share one opcode
+// whose `c` field selects the operation, and collections share the GET/SET
+// table pair.
 //
-// PHASE 6 adds functions, collections and iteration, so the budget is exactly
-// 40 opcodes: the ones below. Anything that needs more must first consolidate.
+// PHASE 6 adds functions, collections and iteration, so the set is exactly 40
+// opcodes: the ones below. 40 is a hard ceiling; the retirement ladder for a
+// new opcode is in AGENT.md §3.3.
 
 enum class OpCode : std::uint8_t {
   LOADK,   // R[a] = constants[b]  (nil, bool, int, float or string)
@@ -72,9 +75,17 @@ enum class OpCode : std::uint8_t {
   ITER,       // R[a] = next item of R[b], or R[a] = nil when exhausted
   IN,         // R[a] = R[b] in R[c]
 
-  PRINT,      // print R[a]
+  PRINT,      // print R[a] (temporary: CALL to the print builtin from 6c/6e,
+              // deleted at the 6f parity gate; AGENT.md §3.6)
   HALT,       // stop execution
 };
+
+// Hard budget gate (AGENT.md §3.3). HALT must stay the last enumerator: adding
+// an opcode without first executing a retirement rung trips this assertion at
+// compile time, so the ceiling cannot drift silently.
+inline constexpr int kOpcodeCount = static_cast<int>(OpCode::HALT) + 1;
+static_assert(kOpcodeCount <= 40,
+              "opcode budget exceeded: execute a retirement rung first (AGENT.md §3.3)");
 
 // Selector stored in `Instruction::c` for `UNOP`. Keeping the operator in the
 // instruction lets PHASE 7 emit one native instruction per case without a
