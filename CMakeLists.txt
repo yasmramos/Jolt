@@ -110,6 +110,13 @@ if(BUILD_TESTING)
   target_compile_options(codegen_test PRIVATE ${JOLT_WARNINGS})
   add_test(NAME codegen_test COMMAND codegen_test)
 
+  # Guards the AGENT.md toolchain boundary: the compiler and the native backend
+  # must stay linkable without the interpreter or the VM.
+  add_test(NAME compiler_boundary
+    COMMAND ${CMAKE_COMMAND}
+      -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_compiler_boundary.cmake")
+
   file(GLOB jolt_tests CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.jolt"
   )
