@@ -127,11 +127,15 @@ class CodeGen {
   struct PendingFixup {
     std::size_t patchAt = 0;  // offset of the 4-byte displacement
     int labelId = -1;
+    bool backward = false;  // label was already bound when the reference was
+                            // emitted (patched immediately, kept for checks)
   };
 
   // For a rel32 slot already written to the buffer (jmp/jcc): records the
-  // start of that displacement slot.
-  PendingFixup makeInPlaceFixup(Label label);
+  // start of that displacement slot and patches it right away when the
+  // label is already bound (backward reference).
+  void recordFixup(Label label, bool backward);
+  void patchRel32(const PendingFixup& fixup);
 
   std::vector<std::uint8_t> code_;
   std::vector<std::size_t> labelOffset_;  // label id -> offset, kUnbound until bound

@@ -42,6 +42,9 @@ void CodeGen::bind(Label label) {
   if (labelBound_[static_cast<std::size_t>(label.id)]) {
     throw std::logic_error("codegen: label bound twice");
   }
+  // Bindings are append-only: the offset of a label can never change after
+  // it is bound, so fixups already resolved for backward references stay
+  // valid and only forward references need to be retried here.
   labelOffset_[static_cast<std::size_t>(label.id)] = code_.size();
   labelBound_[static_cast<std::size_t>(label.id)] = true;
   resolveFixups();
@@ -50,45 +53,55 @@ void CodeGen::bind(Label label) {
 void CodeGen::resolveFixups() {
   std::vector<PendingFixup> remaining;
   for (const PendingFixup& fixup : fixups_) {
-    if (!labelBound_[static_cast<std::size_t>(fixup.labelId)]) {
-      // The label is not bound yet: keep the placeholder and retry when the
-      // next bind() runs. (An offset of 0 is a valid binding, so the pending
-      // state cannot be inferred from `labelOffset_` alone.)
+    if (fixup.backward || !labelBound_[static_cast<std::size_t>(fixup.labelId)]) {
+      // Backward fixups were patched at emission time; keep them around so
+      // `finalize()` can double-check that every reference was resolved.
+      // Forward references to unbound labels stay pending for the next bind.
       remaining.push_back(fixup);
       continue;
     }
-    std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
-    // rel32 displacements are measured from the end of the instruction that
-    // carries them. The displacement slot always ends at the instruction
-    // boundary, whether the reference was resolved forward or backward:
-    // next_rip = patchAt + 4 in both cases.
-    std::size_t nextRip = fixup.patchAt + 4;
-    std::int32_t distance = static_cast<std::int32_t>(static_cast<std::int64_t>(target) -
-                                                      static_cast<std::int64_t>(nextRip));
-    code_[fixup.patchAt + 0] = static_cast<std::uint8_t>(distance & 0xFF);
-    code_[fixup.patchAt + 1] = static_cast<std::uint8_t>((distance >> 8) & 0xFF);
-    code_[fixup.patchAt + 2] = static_cast<std::uint8_t>((distance >> 16) & 0xFF);
-    code_[fixup.patchAt + 3] = static_cast<std::uint8_t>((distance >> 24) & 0xFF);
+    patchRel32(fixup);
   }
   fixups_ = std::move(remaining);
 }
 
+// rel32 displacements are measured from the end of the instruction that
+// carries them. The displacement slot always ends at the instruction
+// boundary, whether the reference was resolved forward or backward:
+// next_rip = patchAt + 4 in both cases.
+void CodeGen::patchRel32(const PendingFixup& fixup) {
+  std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
+  std::size_t nextRip = fixup.patchAt + 4;
+  std::int32_t distance = static_cast<std::int32_t>(static_cast<std::int64_t>(target) -
+                                                    static_cast<std::int64_t>(nextRip));
+  code_[fixup.patchAt + 0] = static_cast<std::uint8_t>(distance & 0xFF);
+  code_[fixup.patchAt + 1] = static_cast<std::uint8_t>((distance >> 8) & 0xFF);
+  code_[fixup.patchAt + 2] = static_cast<std::uint8_t>((distance >> 16) & 0xFF);
+  code_[fixup.patchAt + 3] = static_cast<std::uint8_t>((distance >> 24) & 0xFF);
+}
+
 // Records a reference to `label` for a rel32 displacement. jmp/jcc call
 // this right after writing the four placeholder bytes, so patchAt points at
-// the start of the displacement slot inside the instruction. The end of the
-// slot is always the end of the instruction (next_rip = patchAt + 4), for
-// both forward and backward references.
-CodeGen::PendingFixup CodeGen::makeInPlaceFixup(Label label) {
+// the start of the displacement slot inside the instruction. If the label
+// is already bound (a backward reference), the displacement is patched
+// immediately instead of staying pending.
+void CodeGen::recordFixup(Label label, bool /*backward*/) {
   PendingFixup fixup;
   fixup.patchAt = code_.size() - 4;
   fixup.labelId = label.id;
-  return fixup;
+  if (labelBound_[static_cast<std::size_t>(label.id)]) {
+    fixup.backward = true;
+    patchRel32(fixup);
+  }
+  fixups_.push_back(fixup);
 }
 
 void CodeGen::finalize() {
   resolveFixups();
-  if (!fixups_.empty()) {
-    throw std::logic_error("codegen: finalize with unbound label references");
+  for (const PendingFixup& fixup : fixups_) {
+    if (!fixup.backward) {
+      throw std::logic_error("codegen: finalize with unbound label references");
+    }
   }
 }
 
@@ -190,7 +203,19 @@ void CodeGen::storeToMem(X64Reg base, std::int64_t disp, std::uint8_t src, bool 
   } else {
     put8(code_, 0x89);
   }
-  modRmDisp(static_cast<std::uint8_t>(src & 7), b, disp);
+  // Real-register stores never need the SIB form: rsp/r12 as a base is a
+  // backend invariant (the frame pointer plays that role), so forcing the
+  // direct ModRM path keeps `[r12+disp]` from silently decoding as RIP.
+  const std::uint8_t lowRm = static_cast<std::uint8_t>(b & 7);
+  const std::uint8_t mod = (disp == 0 && lowRm != 5)   ? 0x00
+                            : (disp >= -128 && disp <= 127) ? 0x01
+                                                            : 0x10;
+  put8(code_, static_cast<std::uint8_t>((mod << 6) | ((src & 7) << 3) | lowRm));
+  if (mod == 0x01) {
+    put8(code_, static_cast<std::uint8_t>(static_cast<std::int8_t>(disp)));
+  } else if (mod == 0x10) {
+    put32(code_, static_cast<std::int32_t>(disp));
+  }
 }
 
 void CodeGen::movFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
@@ -323,7 +348,10 @@ void CodeGen::movsdToXmm(int xmm, X64Reg base, std::int64_t disp) {
 }
 
 void CodeGen::movsdFromXmm(X64Reg base, std::int64_t disp, int xmm) {
-  sseMemOp(0xF2, 0x11, xmm, base, disp);
+  // The store form (F2 0F 11) has the source in the reg field, which is
+  // exactly what `storeToMem` emits; routing through it keeps one single
+  // implementation of the SSE store encoding.
+  storeToMem(base, disp, static_cast<std::uint8_t>(xmm), true);
 }
 
 void CodeGen::cvttsd2si(X64Reg dst, int srcXmm) {
@@ -358,14 +386,14 @@ void CodeGen::cvtsi2sd(int dstXmm, X64Reg src) {
 void CodeGen::jmp(Label label) {
   put8(code_, 0xE9);
   put32(code_, 0);
-  fixups_.push_back(makeInPlaceFixup(label));
+  recordFixup(label, labelBound_[static_cast<std::size_t>(label.id)]);
 }
 
 void CodeGen::jcc(Jcc cc, Label label) {
   put8(code_, 0x0F);
   put8(code_, static_cast<std::uint8_t>(cc));
   put32(code_, 0);
-  fixups_.push_back(makeInPlaceFixup(label));
+  recordFixup(label, labelBound_[static_cast<std::size_t>(label.id)]);
 }
 
 void CodeGen::callRel(std::int32_t offsetBytes) {

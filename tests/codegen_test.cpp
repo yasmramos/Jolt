@@ -117,6 +117,19 @@ static void test_memory_operands() {
   g3.movFromMem(X64Reg::Rax, X64Reg::Rbp, 0);
   checkBytes("mov rax, [rbp] (forced disp8)", g3, "488B4500");
 
+  // movsd [rbp+0x18], xmm1: legacy SSE has no REX.W, so the bytes are
+  // F2 0F 11 4D 18 (reg field = src xmm1, mod=01 disp8).
+  CodeGen gStore;
+  gStore.movsdFromXmm(X64Reg::Rbp, 0x18, kXmmBase + 1);
+  checkBytes("movsd [rbp+0x18], xmm1", gStore, "F20F114D18");
+
+  // movsd [rbp], xmm9: extended source sets REX.R (not REX.B), reg field
+  // keeps the low bits (001), and the rbp base forces mod=01 disp8 =>
+  // 44 F2 0F 11 4D 00.
+  CodeGen gStore9;
+  gStore9.movsdFromXmm(X64Reg::Rbp, 0, kXmmBase + 9);
+  checkBytes("movsd [rbp], xmm9 (REX.R)", gStore9, "44F20F114D00");
+
   // RIP-relative lea: 48 8D 35 <disp32>, mod=00 rm=101 without SIB.
   CodeGen g4;
   g4.leaRip(X64Reg::Rsi, 0x77);
