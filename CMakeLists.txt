@@ -30,6 +30,7 @@ set(JOLT_CORE_SOURCES
   src/lexer.cpp
   src/parser.cpp
   src/bytecode.cpp
+  src/platform_posix.cpp
   src/diagnostic.cpp
 )
 
