@@ -44,6 +44,33 @@ runtime to install); end users never install Jolt or any runtime.
 | `gc.cpp` | tracked `GcNode`s | reclamation of reference cycles | ✅ PHASE 6 groundwork |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a (emitter only) |
 
+### Toolchain binaries and the compiler boundary
+
+`jolt` ships as a single binary until PHASE 7d. Split the toolchain only once
+`jolt build` exists and something actually consumes it (CI, third-party
+builds); end users never install Jolt (PHASE 7), so an early split adds
+packaging and build cost without removing any user-facing surface.
+
+The split, when it happens:
+
+- `jolt` keeps run, REPL and `-c`: the development engine.
+- `joltc` becomes the host compiler (`joltc file.jolt -o app`). It reads
+  sources and writes the ELF, so it links libc; the freestanding part is what
+  it emits, not the compiler itself.
+- `jolt build` stays a thin alias over the same library, never a second
+  implementation of the pipeline.
+
+Boundary rule, in force before the split: `src/compiler.*` and `src/native/*`
+must not include `interpreter.h` or `vm.h`. Both are libraries that any entry
+point may link (the `compiler_test` target already builds the compiler without
+the interpreter), which is what makes the later split a second `main` instead
+of a refactor. The `compiler_boundary` CTest case
+(tests/check_compiler_boundary.cmake) enforces the rule on every run.
+
+Rationale: it keeps the PHASE 7 anti-goal (no compiler and no eval reachable
+from the AOT runtime) enforceable mechanically, and it keeps the compiler
+reusable by a leaner entry point.
+
 ---
 
 ## 3. Bytecode rules (CRITICAL)
