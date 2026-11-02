@@ -121,7 +121,14 @@ class CodeGen {
   struct PendingFixup {
     std::size_t patchAt = 0;  // offset of the 4-byte displacement
     int labelId = -1;
+    // True when the reference was emitted before its label was bound (a
+    // forward jump): the rel32 slot ends at the instruction boundary and is
+    // already excluded from the displacement. Backward references must skip
+    // the four bytes of the patch slot.
+    bool emittedBeforeBind = false;
   };
+
+  PendingFixup makeFixup(Label label);
 
   std::vector<std::uint8_t> code_;
   std::vector<std::size_t> labelOffset_;  // label id -> offset, kUnbound until bound

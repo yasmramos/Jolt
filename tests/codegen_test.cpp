@@ -1,10 +1,8 @@
 // Unit tests for the minimal x86-64 machine-code emitter (PHASE 7a).
 //
 // The emitter is verified at two levels:
-//   1. Byte-exact encodings checked against hand-computed reference bytes.
-//      A few checks document known encoding quirks of the current emitter;
-//      they print a NOTE instead of failing once the quirk is fixed, so the
-//      suite stays green either way.
+//   1. Byte-exact encodings checked against hand-computed reference bytes
+//      following the Intel SDM Vol. 2 tables.
 //   2. Behavioral checks on Linux x86-64: emitted code is mapped as
 //      executable memory via mmap and called through a function pointer.
 // On any other platform the behavioral section is skipped and only the byte
@@ -13,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -49,20 +48,6 @@ static void checkBytes(const char* label, CodeGen& gen, const std::string& expec
   std::string actual = toHex(gen.code());
   check(actual == expected,
         std::string(label) + " encoding [" + actual + "] expected [" + expected + "]");
-}
-
-// Accepts either the current (quirky) or the canonical encoding. Prints a
-// NOTE when the canonical form shows up, so the quirk can be cleaned up in
-// PHASE 7b without breaking CI in the meantime.
-static void checkBytesWithQuirk(const char* label, CodeGen& gen, const std::string& current,
-                                const std::string& canonical) {
-  std::string actual = toHex(gen.code());
-  if (actual == canonical) {
-    std::printf("NOTE: %s now emits the canonical encoding (%s)\n", label, actual.c_str());
-    return;
-  }
-  check(actual == current, std::string(label) + " encoding [" + actual + "] expected one of ["
-                              + current + " | " + canonical + "]");
 }
 
 static void test_mov_imm() {
@@ -108,21 +93,33 @@ static void test_mov_reg_and_stack() {
 }
 
 static void test_memory_operands() {
-  // mov [rbp+0x10], rax -> 48 89 45 10 (mod=01, disp8 avoided: the emitter
-  // always reserves disp32 when the displacement is non-zero).
+  // mov [rbp+0x10], rax -> 48 89 45 10 (mod=01, disp8: the emitter picks the
+  // smallest legal displacement form).
   CodeGen g;
   g.movToMem(X64Reg::Rbp, 0x10, X64Reg::Rax);
-  checkBytes("mov [rbp+0x10], rax", g, "48894510000000");
+  checkBytes("mov [rbp+0x10], rax", g, "48894510");
 
-  // mov rsp as base forces a SIB byte (base=100 -> no base, index=100 -> rsp).
+  // Large displacements fall back to mod=10 with a disp32.
+  CodeGen gDisp;
+  gDisp.movToMem(X64Reg::Rbp, 0x1234, X64Reg::Rax);
+  checkBytes("mov [rbp+0x1234], rax", gDisp, "48898534120000");
+
+  // mov rsp as base forces a SIB byte (scale=00, index=100 no index,
+  // base=100 rsp) with mod=00 for a zero displacement: 48 8B 04 24.
   CodeGen g2;
   g2.movFromMem(X64Reg::Rax, X64Reg::Rsp, 0);
-  checkBytes("mov rax, [rsp] (SIB)", g2, "488B042400000000");
+  checkBytes("mov rax, [rsp] (SIB)", g2, "488B0424");
 
-  // RIP-relative lea: 48 8D 05 <disp32>, mod=00 rm=101 without SIB.
+  // rbp as base with disp 0 still needs an explicit disp8 (mod=01): without
+  // it mod=00/rm=101 would decode as RIP-relative addressing.
   CodeGen g3;
-  g3.leaRip(X64Reg::Rsi, 0x77);
-  checkBytes("lea rsi, [rip+0x77]", g3, "488D3577000000");
+  g3.movFromMem(X64Reg::Rax, X64Reg::Rbp, 0);
+  checkBytes("mov rax, [rbp] (forced disp8)", g3, "488B4500");
+
+  // RIP-relative lea: 48 8D 35 <disp32>, mod=00 rm=101 without SIB.
+  CodeGen g4;
+  g4.leaRip(X64Reg::Rsi, 0x77);
+  checkBytes("lea rsi, [rip+0x77]", g4, "488D3577000000");
 }
 
 static void test_alu() {
@@ -141,10 +138,10 @@ static void test_alu() {
   g3.imulReg(X64Reg::Rax, X64Reg::Rcx);
   checkBytes("imul rax, rcx", g3, "480FAFC1");
 
-  // xor rax, rax: REX.W is redundant here but harmless.
+  // xor rax, rax -> 48 31 C0 (REX.W is redundant but keeps the helper uniform).
   CodeGen g4;
   g4.xorReg(X64Reg::Rax, X64Reg::Rax);
-  checkBytesWithQuirk("xor rax, rax", g4, "4831C0", "31C0");
+  checkBytes("xor rax, rax", g4, "4831C0");
 
   // idiv rcx -> 48 F7 F9 (signed divide rdx:rax by rcx).
   CodeGen g5;
@@ -195,15 +192,28 @@ static void test_control_flow() {
   g5.jmp(top);
   checkBytes("jmp rel32 backward", g5, "48C7C7FFFFFFFFFFFFFBE9F5FFFFFF");
 
-  // Binding an unknown or twice-bound label must be rejected. The emitter
-  // reports these misuse cases by throwing std::logic_error from `bind()`;
-  // catching here would require <stdexcept> in this translation unit, so
-  // the contract is covered instead by the two checks below: a fresh label
-  // binds exactly once and later jumps to it still resolve correctly.
+  // Binding an unknown or twice-bound label must be rejected: `bind()`
+  // throws std::logic_error in both cases.
   CodeGen g6;
   CodeGen::Label once = g6.newLabel();
+  bool threwUnknown = false;
+  try {
+    CodeGen::Label bogus;
+    bogus.id = 12345;
+    g6.bind(bogus);
+  } catch (const std::logic_error&) {
+    threwUnknown = true;
+  }
+  check(threwUnknown, "bind() of an unknown label throws std::logic_error");
   g6.bind(once);
   check(g6.offset() == 0, "bind() does not emit bytes (position unchanged)");
+  bool threwTwice = false;
+  try {
+    g6.bind(once);
+  } catch (const std::logic_error&) {
+    threwTwice = true;
+  }
+  check(threwTwice, "binding the same label twice throws std::logic_error");
   g6.jmp(once);
   g6.retInsn();
   // Backward jump to offset 0: disp = 0 - (5 + 4) = -9 -> F7FFFFFF
@@ -211,21 +221,31 @@ static void test_control_flow() {
 }
 
 static void test_sse() {
-  // xorps xmm0, xmm0: the emitter sets REX.B unconditionally for SSE reg ops
-  // (harmless: legacy SSE ignores REX.B when no GPR field is involved).
+  // xorps xmm0, xmm0 -> 0F 57 C0. Legacy SSE with xmm0-7 needs no REX byte.
   CodeGen g;
-  g.xorps(0, 0);
-  checkBytesWithQuirk("xorps xmm0, xmm0", g, "410F57C0", "0F57C0");
+  g.xorps(kXmmBase + 0, kXmmBase + 0);
+  checkBytes("xorps xmm0, xmm0", g, "0F57C0");
 
-  // addsd xmm1, xmm2 -> F2 0F 58 CA canonically; the emitter prepends 41.
+  // addsd xmm1, xmm2 -> F2 0F 58 CA (destination in the reg field).
   CodeGen g2;
-  g2.addsd(1, 2);
-  checkBytesWithQuirk("addsd xmm1, xmm2", g2, "41F20F58CA", "F20F58CA");
+  g2.addsd(kXmmBase + 1, kXmmBase + 2);
+  checkBytes("addsd xmm1, xmm2", g2, "F20F58CA");
 
-  // High-numbered xmm registers legitimately need REX.R/B bits.
+  // High-numbered xmm registers legitimately need REX.R/B bits:
+  // addsd xmm9, xmm2 -> dst=9 in reg (REX.R) -> 44 F2 0F 58 CA.
   CodeGen g3;
-  g3.addsd(9, 2);
+  g3.addsd(kXmmBase + 9, kXmmBase + 2);
   checkBytes("addsd xmm9, xmm2", g3, "44F20F58CA");
+
+  // movsd xmm0, [rsi] -> F2 0F 10 06 (load form 0x10, mod=00 rm=110).
+  CodeGen g4;
+  g4.movsdToXmm(kXmmBase + 0, X64Reg::Rsi, 0);
+  checkBytes("movsd xmm0, [rsi]", g4, "F20F1006");
+
+  // cvtsi2sd xmm0, rax -> F2 48 0F 2A C0 (REX.W for the 64-bit source).
+  CodeGen g5;
+  g5.cvtsi2sd(kXmmBase + 0, X64Reg::Rax);
+  checkBytes("cvtsi2sd xmm0, rax", g5, "F2480F2AC0");
 }
 
 #ifdef CODEGEN_EXEC_TESTS

@@ -58,10 +58,8 @@ void CodeGen::resolveFixups() {
       continue;
     }
     std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
-    // Bound: patch the displacement and retire the fixup (a label can only
-    // be bound once, enforced in bind(), so it will never need re-patching).
-    // The displacement is relative to the end of the instruction, which is
-    // four bytes after the start of the patch slot.
+    // rel32 displacements are always measured from the end of the
+    // instruction, which is four bytes after the start of the patch slot.
     std::int32_t distance = static_cast<std::int32_t>(target - (fixup.patchAt + 4));
     code_[fixup.patchAt + 0] = static_cast<std::uint8_t>(distance & 0xFF);
     code_[fixup.patchAt + 1] = static_cast<std::uint8_t>((distance >> 8) & 0xFF);
@@ -69,6 +67,14 @@ void CodeGen::resolveFixups() {
     code_[fixup.patchAt + 3] = static_cast<std::uint8_t>((distance >> 24) & 0xFF);
   }
   fixups_ = std::move(remaining);
+}
+
+CodeGen::PendingFixup CodeGen::makeFixup(Label label) {
+  PendingFixup fixup;
+  fixup.patchAt = code_.size();
+  fixup.labelId = label.id;
+  fixup.emittedBeforeBind = !labelBound_[static_cast<std::size_t>(label.id)];
+  return fixup;
 }
 
 void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t index,
@@ -92,9 +98,11 @@ void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t ind
 // RIP form explicitly.
 void CodeGen::modRmDisp(std::uint8_t regField, bool hasIndex, std::uint8_t index,
                         std::uint8_t rm, std::int64_t disp) {
-  const bool baseNeedsDisp = (rm & 7) == 5;  // rbp/r12: mod=00 would mean disp32
+  const bool baseNeedsDisp = (rm & 7) == 5;   // rbp/r12: mod=00 would mean disp32
   const bool baseIsRspOrR12 = (rm & 7) == 4;  // requires a SIB byte as base
   const bool needsSib = baseIsRspOrR12 || hasIndex;
+  // Use the full register number for the REX selection below, but keep the
+  // low three bits inside the ModRM/SIB bytes.
   const std::uint8_t lowRm = static_cast<std::uint8_t>(rm & 7);
 
   std::uint8_t mod;
@@ -110,10 +118,10 @@ void CodeGen::modRmDisp(std::uint8_t regField, bool hasIndex, std::uint8_t index
     // ModRM selects the SIB form (rm=100); the SIB byte carries scale=00,
     // the index (rsp/100 means "no index") and the base register.
     const std::uint8_t idx = hasIndex ? static_cast<std::uint8_t>(index & 7) : 0x04;
-    put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | 0x04));
+    put8(code_, static_cast<std::uint8_t>((mod << 6) | ((regField & 7) << 3) | 0x04));
     put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (idx << 3) | lowRm));
   } else {
-    put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | lowRm));
+    put8(code_, static_cast<std::uint8_t>((mod << 6) | ((regField & 7) << 3) | lowRm));
   }
   if (mod == 0x01) {
     put8(code_, static_cast<std::uint8_t>(static_cast<std::int8_t>(disp)));
@@ -126,8 +134,10 @@ void CodeGen::movImm(X64Reg dst, std::int64_t value) {
   std::uint8_t d = enc(dst);
   if (value >= -2147483648LL && value <= 2147483647LL) {
     // mov r/m64, imm32: opcode C7 /0. The destination goes in the ModRM rm
-    // field and the reg field is the /0 extension, so the byte is 0xC0|rm
-    // (REX.B above selects r8-r15 for both fields).
+    // field and the reg field is the /0 extension, so the byte is 0xC0|rm.
+    // REX.B must select r8-r15 for the rm field as well; `rex` only emits
+    // that bit when the full register number is passed as `rm`, so the
+    // ModRM byte keeps just the low three bits.
     rex(true, 0, false, 0, d);
     put8(code_, 0xC7);
     put8(code_, static_cast<std::uint8_t>(0xC0 | (d & 0x07)));
@@ -238,10 +248,14 @@ void CodeGen::testReg(X64Reg reg) {
 }
 
 void CodeGen::sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int srcXmm) {
-  std::uint8_t d = static_cast<std::uint8_t>(dstXmm - kXmmBase);
-  std::uint8_t s = static_cast<std::uint8_t>(srcXmm - kXmmBase);
+  // dstXmm/srcXmm are register indices in [kXmmBase, kXmmBase+16). SSE reg
+  // ops use the reg<-rm direction: the destination is the ModRM reg field
+  // (REX.R) and the source is the rm field (REX.B).
+  std::uint8_t d = static_cast<std::uint8_t>(dstXmm & 0x0F);
+  std::uint8_t s = static_cast<std::uint8_t>(srcXmm & 0x0F);
   // Legacy SSE never needs REX.W; xmm8-15 are selected through REX.R (the
-  // ModRM reg field) and REX.B (the ModRM rm field).
+  // ModRM reg field) and REX.B (the ModRM rm field). No REX byte at all for
+  // xmm0-7 keeps the encoding canonical.
   std::uint8_t byte = 0x40;
   if (d >= 8) byte |= 0x04;
   if (s >= 8) byte |= 0x01;
@@ -301,29 +315,25 @@ void CodeGen::cvtsi2sd(int dstXmm, X64Reg src) {
   std::uint8_t byte = 0x40 | 0x08;  // W=1
   if (d >= 8) byte |= 0x04;
   if (s >= 8) byte |= 0x01;
-  if (byte != 0x48) put8(code_, byte);
+  // The REX byte must precede the F2 legacy prefix: prefixes between REX
+  // and the opcode are undefined behavior per the AMD64 ABI.
+  put8(code_, byte);
   put8(code_, 0xF2);
   put8(code_, 0x0F);
   put8(code_, 0x2A);
-  put8(code_, static_cast<std::uint8_t>(0xC0 | (d << 3) | s));
+  put8(code_, static_cast<std::uint8_t>(0xC0 | (d << 3) | (s & 7)));
 }
 
 void CodeGen::jmp(Label label) {
   put8(code_, 0xE9);
-  PendingFixup fixup;
-  fixup.patchAt = code_.size();
-  fixup.labelId = label.id;
-  fixups_.push_back(fixup);
+  fixups_.push_back(makeFixup(label));
   put32(code_, 0);
 }
 
 void CodeGen::jcc(Jcc cc, Label label) {
   put8(code_, 0x0F);
   put8(code_, static_cast<std::uint8_t>(cc));
-  PendingFixup fixup;
-  fixup.patchAt = code_.size();
-  fixup.labelId = label.id;
-  fixups_.push_back(fixup);
+  fixups_.push_back(makeFixup(label));
   put32(code_, 0);
 }
 
