@@ -1,0 +1,54 @@
+// The cycle collector runs on its own during a long program. These tests build
+// plenty of garbage cycles and check that everything still reachable keeps
+// working across the collections that happen in between.
+
+// Long-lived state created before the garbage: a closure with a captured
+// counter, an array that contains itself and a map with a back reference.
+fn makeCounter() {
+  var count = 0;
+  return () => {
+    count += 1;
+    return count;
+  };
+}
+let counter = makeCounter();
+counter();
+
+let selfArray = [1, 2, 3];
+selfArray.push(selfArray);
+
+let parent = {name: "parent"};
+let child = {name: "child", up: parent};
+parent.down = child;
+
+// Declared functions in the global scope and recursion keep working too.
+fn fib(n) => n < 2 ? n : fib(n - 1) + fib(n - 2);
+
+// Garbage: every call leaves a function bound in the scope it closes over, an
+// array that contains itself and a mutually recursive pair behind.
+fn churn(n) {
+  fn helper(k) => k + n;
+  let local = x => helper(x) * 2;
+  let loop = [];
+  loop.push(loop);
+  fn isEven(k) { return k == 0 ? true : isOdd(k - 1); }
+  fn isOdd(k) { return k == 0 ? false : isEven(k - 1); }
+  return local(1) + (isEven(4) ? 1 : 0) + loop.length;
+}
+
+var total = 0;
+for i in 0..30000 {
+  total += churn(i);
+}
+// churn(i) returns (i + 1) * 2 + 1 + 1, and the sum over 0..29999 is 900090000.
+assertEq(total, 900090000);
+
+// Everything created before the garbage is still intact after the collections.
+assertEq(counter(), 2);
+assertEq(counter(), 3);
+assertEq(selfArray.length, 4);
+assertEq(selfArray[0] + selfArray[1] + selfArray[2], 6);
+assertEq(selfArray[3][3][0], 1);
+assertEq(parent.down.name, "child");
+assertEq(child.up.down.up.name, "parent");
+assertEq(fib(15), 610);

@@ -1,5 +1,7 @@
 #include "value.h"
 
+#include "env.h"
+
 #include <cmath>
 #include <cstdio>
 
@@ -324,3 +326,76 @@ void appendUtf8(std::string& out, uint32_t cp) {
     out += static_cast<char>(0x80 | (cp & 0x3F));
   }
 }
+
+// ------------------------------------------------------- cycle collector hooks
+
+namespace {
+
+template <typename T>
+std::shared_ptr<void> pinObject(GcNode& node) {
+  Ref<T> handle = Ref<T>::retaining(&static_cast<T&>(node));
+  return std::shared_ptr<void>(new Ref<T>(std::move(handle)),
+                               [](void* p) { delete static_cast<Ref<T>*>(p); });
+}
+
+std::size_t arrayRefCount(const GcNode& node) { return static_cast<const Array&>(node).refs; }
+
+void arrayVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
+  for (const Value& item : static_cast<const Array&>(node).items) gcVisit(item, visitor, context);
+}
+
+void arrayClear(GcNode& node) { std::vector<Value>().swap(static_cast<Array&>(node).items); }
+
+std::size_t mapRefCount(const GcNode& node) { return static_cast<const Map&>(node).refs; }
+
+void mapVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
+  for (const auto& entry : static_cast<const Map&>(node).entries) {
+    gcVisit(entry.second, visitor, context);
+  }
+}
+
+void mapClear(GcNode& node) { static_cast<Map&>(node).clear(); }
+
+std::size_t functionRefCount(const GcNode& node) { return static_cast<const Function&>(node).refs; }
+
+// A function owns its defining scope. Natives may also own objects through the
+// state captured by their std::function; the collector cannot see those, so
+// such objects are simply treated as referenced from outside.
+void functionVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
+  const Function& function = static_cast<const Function&>(node);
+  if (function.closure) visitor(*function.closure, context);
+}
+
+void functionClear(GcNode& node) {
+  Function& function = static_cast<Function&>(node);
+  function.closure.reset();
+  function.native = nullptr;
+}
+
+// Environments are owned through std::shared_ptr, so their reference count is
+// the shared count. `parent` and every bound value are strong references.
+std::size_t envRefCount(const GcNode& node) {
+  return const_cast<Env&>(static_cast<const Env&>(node)).weak_from_this().use_count();
+}
+
+void envVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
+  const Env& env = static_cast<const Env&>(node);
+  if (env.parent) visitor(*env.parent, context);
+  for (const auto& entry : env.vars) gcVisit(entry.second.value, visitor, context);
+}
+
+void envClear(GcNode& node) {
+  Env& env = static_cast<Env&>(node);
+  env.vars.clear();
+  env.parent.reset();
+}
+
+std::shared_ptr<void> envPin(GcNode& node) { return static_cast<Env&>(node).shared_from_this(); }
+
+}  // namespace
+
+const GcNode::Ops arrayGcOps = {arrayRefCount, arrayVisit, arrayClear, pinObject<Array>};
+const GcNode::Ops mapGcOps = {mapRefCount, mapVisit, mapClear, pinObject<Map>};
+const GcNode::Ops functionGcOps = {functionRefCount, functionVisit, functionClear,
+                                   pinObject<Function>};
+const GcNode::Ops envGcOps = {envRefCount, envVisit, envClear, envPin};

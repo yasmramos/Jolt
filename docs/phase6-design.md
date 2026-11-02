@@ -221,6 +221,7 @@ engines for the same file; it grows one directory per slice and is what makes
 | Native re-entrancy (builtin -> VM -> builtin) | `VM::call` runs a nested frame with a return barrier; test `map` with a VM lambda |
 | `Edge: mutation during for-in` | Iterate live containers by index (document it), except ranges which are lazy |
 | Performance regression from cells | Accepted in PHASE 6; measured in the benchmark noted in `docs/PROJECT_ANALYSIS.md` |
+| Closures over `Cell` form cycles (a recursive local function: cell -> closure -> cell) | Make `Cell` and the VM closure a `GcNode` and add their hooks next to the others in `src/value.cpp`; `src/gc.h` is engine-agnostic, so this is not a GC redesign. Add the cases to `tests/gc_test.cpp` |
 
 ## 6. What NOT to do
 

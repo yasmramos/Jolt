@@ -24,6 +24,7 @@ fi
 "$CXX" -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc \
     -o build/vm_test \
     tests/vm_test.cpp \
+    src/gc.cpp \
     src/value.cpp \
     src/lexer.cpp \
     src/parser.cpp \

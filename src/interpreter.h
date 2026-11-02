@@ -7,37 +7,10 @@
 #include <vector>
 
 #include "ast.h"
+#include "env.h"
 #include "errors.h"
 #include "runtime.h"
 #include "value.h"
-
-struct Binding {
-  Value value;
-  bool isImmutable = false;
-};
-
-struct Env : std::enable_shared_from_this<Env> {
-  // The link to the enclosing scope is strong: a closure that captures a
-  // scope keeps its whole lexical chain alive, so free variables stay
-  // resolvable after the scope that created the closure has returned.
-  //
-  // Reference counting alone cannot free the cycles this allows (a function
-  // stored in the very scope it closes over); those are reclaimed by the
-  // cycle collector in gc.h.
-  std::shared_ptr<Env> parent;
-  std::unordered_map<std::string, Binding> vars;
-
-  explicit Env(std::shared_ptr<Env> parent = nullptr) : parent(std::move(parent)) {}
-
-  // Walks up the scope chain looking for `name`; nullptr when it is not visible.
-  Binding* find(const std::string& name);
-  void define(const std::string& name, Value value, bool isImmutable = false);
-  enum class Assign { Ok, NotFound, Immutable };
-  Assign assign(const std::string& name, Value value);
-
-  // Removes every binding (used when resetting the interpreter between runs).
-  void clear() { vars.clear(); }
-};
 
 struct BreakSignal {
   int line = 0;
@@ -54,6 +27,7 @@ struct ReturnSignal {
 class Interpreter : public Runtime {
  public:
   explicit Interpreter(std::string sourceName = "<script>");
+  ~Interpreter();
 
   void run(const StmtPtr& program);
   void runStatement(const Stmt& stmt);

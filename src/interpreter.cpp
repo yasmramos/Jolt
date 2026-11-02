@@ -48,41 +48,21 @@ Tok baseAssignOp(Tok op) {
 
 }  // namespace
 
-// ----------------------------------------------------------------------- Env
-
-namespace {
-
-}  // namespace
-
-Binding* Env::find(const std::string& name) {
-  for (Env* scope = this; scope != nullptr; scope = scope->parent.get()) {
-    auto it = scope->vars.find(name);
-    if (it != scope->vars.end()) return &it->second;
-  }
-  return nullptr;
-}
-
-void Env::define(const std::string& name, Value value, bool isImmutable) {
-  Binding binding;
-  binding.value = std::move(value);
-  binding.isImmutable = isImmutable;
-  vars[name] = std::move(binding);
-}
-
-Env::Assign Env::assign(const std::string& name, Value value) {
-  Binding* binding = find(name);
-  if (binding == nullptr) return Env::Assign::NotFound;
-  if (binding->isImmutable) return Env::Assign::Immutable;
-  binding->value = std::move(value);
-  return Env::Assign::Ok;
-}
-
 // --------------------------------------------------------------- Interpreter
 
 Interpreter::Interpreter(std::string name) : globals(std::make_shared<Env>()) {
   sourceName = std::move(name);
   env = globals;
   registerBuiltins(*this);
+}
+
+Interpreter::~Interpreter() {
+  // Release everything the interpreter owns, then reclaim the cycles left among
+  // objects that nothing else references.
+  env.reset();
+  globals->clear();
+  globals.reset();
+  gcCollect();
 }
 
 void Interpreter::defineGlobal(const std::string& name, Value value, bool isImmutable) {
@@ -111,9 +91,11 @@ void Interpreter::run(const StmtPtr& program) {
   }
 
   // Top-level functions close over the global scope that also holds them.
-  // Releasing the globals here breaks that cycle at the end of the run.
+  // Releasing the globals here breaks that cycle at the end of the run, and the
+  // collector reclaims whatever cycles the program left behind.
   globals->clear();
   registerBuiltins(*this);
+  gcCollect();
 }
 
 void Interpreter::runStatement(const Stmt& stmt) {
@@ -242,6 +224,10 @@ void Interpreter::exec(const Stmt& stmt) {
 }
 
 void Interpreter::execBlock(const Stmt& block, const std::shared_ptr<Env>& target, bool newScope) {
+  // A safe point: every object reachable from the running program is held by
+  // a variable, the call stack or a scope, so only unreachable cycles are freed.
+  gcCollectIfNeeded();
+
   const auto& body = std::get<BlockStmt>(block.node);
   std::shared_ptr<Env> scope = newScope ? std::make_shared<Env>(target) : target;
 

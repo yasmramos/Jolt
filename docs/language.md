@@ -1162,7 +1162,7 @@ for argument in args() {
 - No slicing syntax for strings or arrays; methods such as `substr` and `slice` are used.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
-- Memory is managed with reference counting; cyclic references are not freed.
+- Memory is managed with reference counting plus a cycle collector, so unreachable cycles (a function stored in the scope it closes over, an array that contains itself) are reclaimed. A cycle that runs through state captured by a native method, such as `a.f = a.push`, is never collected.
 - Sorting with custom comparators relies on the comparator defining a strict order.
 
 ---
