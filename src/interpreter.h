@@ -29,6 +29,12 @@ class Interpreter : public Runtime {
   explicit Interpreter(std::string sourceName = "<script>");
   ~Interpreter();
 
+  // An interpreter owns its global scope. Moving transfers it (the REPL's
+  // `:clear` assigns a fresh interpreter), and copying is not allowed: two
+  // interpreters sharing one scope would clear each other's definitions.
+  Interpreter(Interpreter&&) = default;
+  Interpreter& operator=(Interpreter&&) = default;
+
   void run(const StmtPtr& program);
   void runStatement(const Stmt& stmt);
   void exec(const Stmt& stmt);

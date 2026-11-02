@@ -60,7 +60,8 @@ Interpreter::~Interpreter() {
   // Release everything the interpreter owns, then reclaim the cycles left among
   // objects that nothing else references.
   env.reset();
-  globals->clear();
+  // A moved-from interpreter has no scope left to release.
+  if (globals) globals->clear();
   globals.reset();
   gcCollect();
 }
