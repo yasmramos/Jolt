@@ -255,9 +255,10 @@ std::string quoteString(const std::string& s) {
         break;
       default:
         if (c < 0x20) {
-          char buffer[8];
-          std::snprintf(buffer, sizeof buffer, "\\x%02x", c);
-          out += buffer;
+          const char* hex = "0123456789abcdef";
+          out += "\\x";
+          out += hex[(c >> 4) & 0x0F];
+          out += hex[c & 0x0F];
         } else {
           out += static_cast<char>(c);
         }
