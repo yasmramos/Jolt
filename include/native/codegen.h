@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 // Minimal x86-64 machine-code emitter (PHASE 7a).
@@ -33,9 +34,16 @@ enum class X64Reg {
   R15,
 };
 
-// General-purpose registers live in the range [0, kXmmBase); SSE registers
-// use indices kXmmBase + N (xmm0..xmm15).
-constexpr int kXmmBase = 16;
+// General-purpose registers occupy the enum values Rax (0) through R15 (15),
+// so `kGprCount` is one past the last GPR. SSE registers are encoded as
+// `kGprCount + N` (xmm0..xmm15) when passed to the SSE emitters; they never
+// appear in the X64Reg enum itself.
+constexpr int kGprCount = 16;
+
+// Named alias for the base of the synthetic xmm numbering: callers write
+// `kXmmBase + N` for xmmN. Declared in the header so tests and the backend
+// share one definition instead of relying on `kGprCount` directly.
+constexpr int kXmmBase = kGprCount;
 
 // Condition codes for `jcc`, matching the Intel opcode low nibble.
 enum class Jcc : std::uint8_t {
@@ -59,6 +67,7 @@ class CodeGen {
 
   Label newLabel();
   void bind(Label label);
+
 
   // Data movement.
   void movImm(X64Reg dst, std::int64_t value);  // mov r/m64, imm32 (sign-extended) or movabs
@@ -116,6 +125,17 @@ class CodeGen {
 
   std::size_t offset() const { return code_.size(); }
 
+  // Offset of an already-bound label (throws if the label is unknown or
+  // still unbound). Exposed for tests that need to verify jump
+  // displacements against the emitter's own bookkeeping.
+  std::size_t labelOffset(Label label) const {
+    if (label.id < 0 || static_cast<std::size_t>(label.id) >= labelOffset_.size() ||
+        !labelBound_[static_cast<std::size_t>(label.id)]) {
+      throw std::logic_error("codegen: labelOffset of an unbound label");
+    }
+    return labelOffset_[static_cast<std::size_t>(label.id)];
+  }
+
   // Patches every pending rel32 fixup whose label is already bound. Call
   // once after emitting the whole function; any reference to an unbound
   // label throws (the backend must bind all labels before finishing).
@@ -125,17 +145,28 @@ class CodeGen {
 
  private:
   struct PendingFixup {
-    std::size_t patchAt = 0;  // offset of the 4-byte displacement
+    std::size_t patchAt = 0;  // offset of the 4-byte displacement slot
     int labelId = -1;
-    bool backward = false;  // label was already bound when the reference was
-                            // emitted (patched immediately, kept for checks)
   };
 
-  // For a rel32 slot already written to the buffer (jmp/jcc): records the
-  // start of that displacement slot and patches it right away when the
-  // label is already bound (backward reference).
-  void recordFixup(Label label, bool backward);
+  // Records a reference to `label` for a rel32 displacement: reserves the
+  // four-byte displacement slot at the current buffer end (the opcode byte
+  // is already emitted by the caller). The reference is patched later, when
+  // the label gets bound or at `finalize()`.
+  void recordFixup(Label label);
+
+  // Patches one rel32 displacement, measured from `patchAt + 4`, which is
+  // the end of the instruction carrying the slot (next RIP). The slot is
+  // reserved up front by `recordFixup()`, so no later emission can shift
+  // this reference point -- that pinning is what keeps backward jumps with
+  // trailing code (e.g. a loop epilogue after `jmp top`) off-by-one free.
   void patchRel32(const PendingFixup& fixup);
+
+  // Appends bytes to the buffer. All emitter helpers funnel through these
+  // so every byte takes part in exactly one instruction boundary.
+  void emitByte(std::uint8_t value);
+  void emit32(std::int32_t value);
+  void emit64(std::int64_t value);
 
   std::vector<std::uint8_t> code_;
   std::vector<std::size_t> labelOffset_;  // label id -> offset, kUnbound until bound

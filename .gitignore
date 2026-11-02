@@ -34,3 +34,6 @@ LSan.*
 build-native-test/
 build-fix/
 .scratch-test.txt
+
+# Local cmake build directory
+cmake-build/

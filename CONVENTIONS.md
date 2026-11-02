@@ -10,8 +10,9 @@ work performed from this workspace.
 | `user.name`  | `yasmramos` |
 | `user.email` | `yasmramos95@gmail.com` |
 
-GitHub authentication uses HTTPS with a personal access token (stored in
-`~/.git-credentials`, helper: `store`). Never print or commit the token.
+GitHub authentication uses HTTPS through the GitHub CLI (`gh auth login` with a
+personal access token; credentials resolved via the `gh auth git-credential`
+helper configured in `~/.gitconfig`). Never print or commit the token.
 
 SSH URLs are rewritten to authenticated HTTPS, so either form works for clones:
 
