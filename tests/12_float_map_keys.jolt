@@ -1,0 +1,49 @@
+// Float literals are valid map keys: the parser must consume the literal and
+// store the key in its canonical string form, like every other scalar key.
+// Regression test for a float key that was read from the wrong token and never
+// consumed, which aborted the literal with "expected ':' after the map key".
+
+// A float key parses and is looked up through its canonical string form.
+let single = {1.5: "a"};
+assertEq(single["1.5"], "a");
+assertEq(single.length, 1);
+
+// The float branch must not swallow the separator: every entry after it is kept.
+let mixed = {
+  1.5: "half",
+  2: "two",
+  name: "ada",
+  "quoted": true,
+  false: "no",
+  nil: "none",
+};
+assertEq(mixed["1.5"], "half");
+assertEq(mixed["2"], "two");
+assertEq(mixed.name, "ada");
+assertEq(mixed["quoted"], true);
+assertEq(mixed["false"], "no");
+assertEq(mixed["nil"], "none");
+assertEq(mixed.length, 6);
+
+// A trailing comma after a float key is still accepted.
+let trailing = {1.5: "a",};
+assertEq(trailing["1.5"], "a");
+
+// Values after a float key may contain their own commas and blocks.
+let nested = {1.5: [1, 2], 2.5: {x: 1}};
+assertEq(nested["1.5"][1], 2);
+assertEq(nested["2.5"].x, 1);
+
+// Integral floats collapse onto the integer form, so both keys collide.
+let collapsed = {2.0: "float", 2: "int"};
+assertEq(collapsed.length, 1);
+assertEq(collapsed["2"], "int");
+
+// A repeated float key keeps the first position and the last value.
+let repeated = {1.5: "first", 2.5: "other", 1.5: "last"};
+assertEq(repeated.length, 2);
+assertEq(repeated["1.5"], "last");
+
+// Computed keys are normalized the same way as float literals.
+let computed = {[0.5 + 1]: "three halves"};
+assertEq(computed["1.5"], "three halves");
