@@ -9,8 +9,8 @@ closures over `Cell`, a `Runtime` interface so builtins can call VM functions
 without re-entering the AST, arrays/maps with indexing and members, ranges,
 string interpolation and `for-in`.
 
-Non-goals: PHASE 4 (VM as the only engine) and PHASE 7 (bytecode -> C++). They
-come after parity is proven.
+Non-goals: PHASE 4 (VM as the dev engine) and PHASE 7 (bytecode -> native AOT
+backend). They come after parity is proven.
 
 ---
 
@@ -177,6 +177,12 @@ engines, `map`/`filter`/`sort` call back through `Runtime::call`, and
 (`indexGet/indexSet/memberGet/memberSet`, `contains`, `toString` of ranges)
 move to `src/ops.{h,cpp}` and both engines call it, which also removes the
 duplicated arithmetic in `vm.cpp`.
+
+> **PHASE 7 note:** the `Runtime` introduced in slice 6a.0 must be designed as
+> a linkable, embeddable component (no dependency on the compiler front-end or
+> the VM). The AOT backend statically links this same runtime into every
+> generated native binary, so anything that keeps it tied to the VM would have
+> to be refactored later. See PHASE 7 in `AGENT.md`.
 
 ## 3. Final opcode set (39 + `IN` = 40)
 

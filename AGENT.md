@@ -21,10 +21,13 @@ programming language with a Lua-style internal architecture.
 ## 2. Mandatory architecture
 
 ```text
-.jolt → LEXER → PARSER → AST → COMPILER → BYTECODE → VM
-                                                  ↓
-                                   (future) NATIVE COMPILER
+.jolt → LEXER → PARSER → AST → COMPILER → BYTECODE ─┬─→ VM (dev engine)
+                                                     └─→ AOT BACKEND → static native binary
 ```
+
+The VM is a development tool (REPL, fast iteration, differential testing).
+Shipping a program means `jolt build` producing a self-contained native
+binary; end users never install Jolt.
 
 ### Modules and responsibilities
 
@@ -81,6 +84,16 @@ and propose an alternative.
 > **Do NOT repeat Java's mistake**: high-level bytecode that later turns out
 > to be impossible to compile to native code efficiently. Jolt's bytecode
 > must be born with future native compilation in mind.
+
+### Design rules for the AOT backend
+
+1. **No VM-only features.** Every language feature must be compilable by the
+   AOT backend. Runtime `eval`/`load` of bytecode is forbidden unless the
+   produced binary embeds the compiler itself (same pitfall as GraalVM: a
+   dynamic escape hatch that defeats static compilation).
+2. **The bytecode must carry enough information for AOT.** Instructions stay
+   annotatable with provable types so the backend can emit typed fast paths
+   instead of falling back to full dynamic dispatch.
 
 ### Expected bytecode → ASM mapping
 
@@ -150,15 +163,17 @@ previous one.
 - `run()` resets the registers and keeps the globals between executions
 - Each opcode: 2-3 lines of C++
 
-### PHASE 4 — `src/main.cpp` (VM as the only engine) ⬜ (runs after PHASE 6)
+### PHASE 4 — `src/main.cpp` (VM as the dev engine) ⬜ (runs after PHASE 6)
 - Lua/LuaJIT model: `jolt`, `jolt -e` and the REPL **always** compile to
-  bytecode and run on the VM. The AST is never executed in production.
+  bytecode and run on the VM as the **development mode**. The AST is never
+  executed in production.
 - REPL with **a single persistent VM**: each input is compiled to a chunk and
   run on the same globals.
 - Temporary `--ast` only for differential tests (comparing AST vs VM); it is
   removed from the binary once parity is reached.
 - `jolt -c file.jolt` compiles without running.
-- `jolt build file.jolt` (future) → generate C++ + g++
+- `jolt build file.jolt` → PHASE 7 AOT backend: static native binary, no Jolt
+  installation needed by end users.
 
 ### PHASE 5 — Control flow and locals ✅
 - Opcodes: `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`
@@ -188,20 +203,39 @@ previous one.
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
 
-### PHASE 7 — Bytecode → C++ compiler (future) ⬜
-- Translate each instruction into one line of C++
-- `g++ -O2` produces the native binary
-- Evaluate `union`/`variant` for `Instruction` and drop `jump` when unused
-- Afterwards, LuaJIT's JIT as a reference
+### PHASE 7 — Bytecode → native backend (AOT) ⬜
+- New module `src/native/` + `include/native/`: lowering of every opcode to
+  x86-64 following the bytecode→ASM mapping table of §3.
+- **Own machine-code and static ELF executable emitter** (~500-1000 lines:
+  ELF header, program headers, `.text`, `.rodata`, entry point with direct
+  syscalls), keeping the zero-dependency rule of §5.1/§8. LIEF was evaluated
+  and rejected: it is built to parse/modify binaries, not to generate them.
+- The runtime (`Value`, strings, arrays, maps, `Cell`s, dynamic arithmetic
+  helpers) is extracted into a component that links statically into the
+  generated binary — the `Runtime` of slice 6a.0 (PHASE 6) must be designed
+  from the start to be embeddable.
+- Subslices:
+  - **7a** — "hello world" spike: hand-written function with the `write`
+    syscall → static ELF → `./hello` runs, no libc.
+  - **7b** — lowering of opcodes that need no runtime (int/float arithmetic,
+    jumps, comparisons).
+  - **7c** — calls into the embedded runtime (strings, `PRINT`, collections).
+  - **7d** — `jolt build` wired into the CLI.
+- Optional/deferred: per-instruction type annotations when the compiler can
+  prove the type, to emit fast paths without dynamic dispatch (bridge toward
+  the speculative work in `docs/ARCHITECTURE_ANALYSIS.md`).
+- Afterwards, LuaJIT's JIT as a reference.
 
 ### Current status
 Phase 1: ✅ completed and reviewed
 Phase 2: ✅ completed
 Phase 3: ✅ completed
-Phase 4: ⬜ pending (VM as the only engine; requires PHASE 6)
+Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ⬜ pending ← NEXT
 Phase 7: ⬜ pending
+Distribution model: AOT native binary (PHASE 7). VM = dev engine only.
+AST interpreter removed after 6f parity gate.
 
 
 ---
@@ -299,7 +333,8 @@ The agent **must NOT** propose or implement:
 - The "dual" approach (AST interpreter as an alternative engine) is **NOT**
   preserved. Once the VM covers the language (PHASE 4), the AST interpreter
   leaves the binary and stays only in tests, and is retired afterwards.
-- The phases run in order: 5 ✅, 6, then 4 (VM as the only engine) and 7.
+- The phases run in order: 5 ✅, 6, then 4 (VM as the dev engine) and 7 (AOT
+  native backend).
 
 ---
 
