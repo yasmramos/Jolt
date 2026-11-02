@@ -7,8 +7,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
-#include <iostream>
 #include <random>
 #include <sstream>
 #include <string>
@@ -831,43 +829,58 @@ void registerBuiltins(Runtime& in) {
   static std::mt19937_64 engine(std::random_device{}());
   static auto startTime = std::chrono::steady_clock::now();
 
-  in.addNative("print", [](Runtime&, Args args) -> Value {
+  in.addNative("print", [](Runtime& in, Args args) -> Value {
+    std::string text;
     for (size_t i = 0; i < args.size(); ++i) {
-      if (i) std::cout << ' ';
-      std::cout << args[i].toString();
+      if (i) text.push_back(' ');
+      text += args[i].toString();
     }
-    std::cout << '\n';
-    std::cout.flush();
+    text.push_back('\n');
+    in.platform().write(Platform::kStdout, text.data(), text.size());
+    in.platform().flush(Platform::kStdout);
     return Value();
   });
 
-  in.addNative("write", [](Runtime&, Args args) -> Value {
+  in.addNative("write", [](Runtime& in, Args args) -> Value {
+    std::string text;
     for (size_t i = 0; i < args.size(); ++i) {
-      if (i) std::cout << ' ';
-      std::cout << args[i].toString();
+      if (i) text.push_back(' ');
+      text += args[i].toString();
     }
-    std::cout.flush();
+    in.platform().write(Platform::kStdout, text.data(), text.size());
+    in.platform().flush(Platform::kStdout);
     return Value();
   });
 
-  in.addNative("eprint", [](Runtime&, Args args) -> Value {
+  in.addNative("eprint", [](Runtime& in, Args args) -> Value {
+    std::string text;
     for (size_t i = 0; i < args.size(); ++i) {
-      if (i) std::cerr << ' ';
-      std::cerr << args[i].toString();
+      if (i) text.push_back(' ');
+      text += args[i].toString();
     }
-    std::cerr << '\n';
-    std::cerr.flush();
+    text.push_back('\n');
+    in.platform().writeErr(text.data(), text.size());
+    in.platform().flush(Platform::kStderr);
     return Value();
   });
 
   in.addNative("input", [](Runtime& in, Args args) -> Value {
     needBetween(in, "input", args, 0, 1);
     if (!args.empty()) {
-      std::cout << args[0].toString();
-      std::cout.flush();
+      const std::string prompt = args[0].toString();
+      in.platform().write(Platform::kStdout, prompt.data(), prompt.size());
+      in.platform().flush(Platform::kStdout);
     }
     std::string line;
-    if (!std::getline(std::cin, line)) return Value();
+    char ch = 0;
+    for (;;) {
+      if (in.platform().read(Platform::kStdin, &ch, 1) == 0) {
+        if (line.empty()) return Value();
+        break;
+      }
+      if (ch == '\n') break;
+      line.push_back(ch);
+    }
     if (!line.empty() && line.back() == '\r') line.pop_back();
     return Value(std::move(line));
   });
@@ -1088,7 +1101,7 @@ void registerBuiltins(Runtime& in) {
   in.addNative("exit", [](Runtime& in, Args args) -> Value {
     needBetween(in, "exit", args, 0, 1);
     int code = args.empty() ? 0 : static_cast<int>(wantInt(in, "exit", args[0]));
-    std::exit(code);
+    in.platform().exit(code);
   });
 
   in.addNative("args", [](Runtime& in, Args args) -> Value {
@@ -1101,8 +1114,16 @@ void registerBuiltins(Runtime& in) {
   in.addNative("readFile", [](Runtime& in, Args args) -> Value {
     need(in, "readFile", args, 1);
     std::string path = wantString(in, "readFile", args[0], "path");
+    int fd = in.platform().open(path.c_str(), Platform::OpenMode::Read);
+    if (fd == Platform::kInvalidFd) in.fail("cannot read file '" + path + "'");
     std::string contents;
-    if (!readSourceFile(path, contents)) in.fail("cannot read file '" + path + "'");
+    char buffer[4096];
+    for (;;) {
+      const std::size_t n = in.platform().read(fd, buffer, sizeof buffer);
+      if (n == 0) break;
+      contents.append(buffer, n);
+    }
+    in.platform().close(fd);
     return Value(std::move(contents));
   });
 
@@ -1110,18 +1131,20 @@ void registerBuiltins(Runtime& in) {
     need(in, "writeFile", args, 2);
     std::string path = wantString(in, "writeFile", args[0], "path");
     std::string contents = wantString(in, "writeFile", args[1], "contents");
-    std::ofstream file(path, std::ios::binary);
-    if (!file) in.fail("cannot write file '" + path + "'");
-    file << contents;
-    if (!file) in.fail("cannot write file '" + path + "'");
+    int fd = in.platform().open(path.c_str(), Platform::OpenMode::Write);
+    if (fd == Platform::kInvalidFd) in.fail("cannot write file '" + path + "'");
+    in.platform().write(fd, contents.data(), contents.size());
+    in.platform().close(fd);
     return Value();
   });
 
   in.addNative("fileExists", [](Runtime& in, Args args) -> Value {
     need(in, "fileExists", args, 1);
     std::string path = wantString(in, "fileExists", args[0], "path");
-    std::ifstream file(path, std::ios::binary);
-    return Value(static_cast<bool>(file));
+    int fd = in.platform().open(path.c_str(), Platform::OpenMode::Read);
+    if (fd == Platform::kInvalidFd) return Value(false);
+    in.platform().close(fd);
+    return Value(true);
   });
 
   in.addNative("range", [](Runtime& in, Args args) -> Value {

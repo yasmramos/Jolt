@@ -1,6 +1,5 @@
 #include "vm.h"
 
-#include <iostream>
 #include <string>
 #include <utility>
 
@@ -446,10 +445,13 @@ Value VM::runFrames(std::size_t stopDepth) {
       case OpCode::IN:
         fail("opcode not implemented yet", line, col);
 
-      case OpCode::PRINT:
-        std::cout << getReg(instruction.a).toString() << '\n';
-        std::cout.flush();
+      case OpCode::PRINT: {
+        const std::string text = getReg(instruction.a).toString();
+        platform().write(Platform::kStdout, text.data(), text.size());
+        platform().write(Platform::kStdout, "\n", 1);
+        platform().flush(Platform::kStdout);
         break;
+      }
 
       case OpCode::HALT:
         return Value();
