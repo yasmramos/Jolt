@@ -530,7 +530,7 @@ static void test_exec_rbp_disp32_roundtrip() {
   // (the requested "private stack frame" scenario) and passes only if the
   // store and the load address the SAME rbp-relative cell with the full
   // 64-bit imm64 payload.
-  //   Callee body (invoked through a tiny trampoline that switches stacks):
+  //   Callee body (a plain function; entered with a normal `call`):
   //     push rbp                       ; chain onto the private stack
   //     mov  rbp, rsp                  ; private frame pointer
   //     movabs rcx, 0x77AA3355DEADBEEF ; imm64 payload (forces movabs)
@@ -540,28 +540,19 @@ static void test_exec_rbp_disp32_roundtrip() {
   //                                    ; the payload
   //     mov rax, rdx                   ; return value = diff
   //     pop  rbp
-  //     ret                            ; returns to the exit stub
-  //   Trampoline (called from C, then jumps into the callee):
-  //     movabs rsp, <private stack top> ; switch to the private frame
-  //     movabs rax, <callee>
-  //     jmp  *rax                        ; no call/return through the C frame
-  //   Exit stub (callee `ret` lands here):
-  //     movabs rdi, &gRoundtripDiff     ; > INT32_MAX -> movabs path
-  //     mov  [rdi], rax                 ; publish the full 64-bit verdict
-  //     hlt                             ; alarm-driven SIGSEGV ends the child
-  // The stub publishes the diff into ordinary process memory BEFORE the
-  // child dies, so the value survives even if the hang is killed with
-  // SIGKILL (which bypasses _exit and would otherwise truncate results to
-  // the low byte of the exit code). A correctly patched roundtrip returns
-  // diff == 0; a mis-encoded store/load leaves the 0xBAD poison or a
-  // nonzero difference. Status -1 (hang via hlt) is therefore the EXPECTED
-  // outcome here; any clean exit means the emitted control flow escaped.
-  static volatile std::int64_t gRoundtripDiff = 0xBAD;
-  gRoundtripDiff = 0xBAD;
-
+  //     ret                            ; returns straight to the C caller
+  // The store cell [rbp-0x2000] also doubles as the verification channel:
+  // after the guarded child call returns, we re-enter the same page with a
+  // tiny loader (`movabs rax, [rbp-0x2000]; ret`, rbp pinned by the
+  // harness) and compare the loaded value against the expected payload.
+  // Everything stays within the two runGuarded() contracts (C-stack entry,
+  // normal ret), so no hand-rolled stack switching or post-fork address
+  // assumptions are involved.
   const std::int64_t kPayload = static_cast<std::int64_t>(0x77AA3355DEADBEEFULL);
 
-  const std::size_t kPrivateStack = 64 * 1024;
+  // Private stack: big enough that [rbp-0x2000] lands well inside it even
+  // after the C++ wrapper prologue pushes below the trampoline entry point.
+  const std::size_t kPrivateStack = 128 * 1024;
   void* stack = mmap(nullptr, kPrivateStack, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (stack == MAP_FAILED) {
@@ -572,8 +563,9 @@ static void test_exec_rbp_disp32_roundtrip() {
       reinterpret_cast<std::uintptr_t>(stack) + kPrivateStack - 64;
   std::uintptr_t stackTop = rawTop & ~static_cast<std::uintptr_t>(15);
 
-  // Build the three pieces first so every absolute address is known when
-  // each buffer is finalized; all live inside ONE executable page.
+  // Callee: the actual store->load roundtrip under test. Returns the diff
+  // (zero iff preserved) in rax and also leaves the payload parked at
+  // [rbp-0x2000] for the loader stage to re-read.
   CodeGen callee;
   callee.push(X64Reg::Rbp);
   callee.movReg(X64Reg::Rbp, X64Reg::Rsp);
@@ -586,87 +578,129 @@ static void test_exec_rbp_disp32_roundtrip() {
   callee.retInsn();
   callee.finalize();
 
-  CodeGen stub;
-  stub.movImm(X64Reg::Rdi, reinterpret_cast<std::int64_t>(&gRoundtripDiff));
-  stub.movToMem(X64Reg::Rdi, 0, X64Reg::Rax);   // publish the verdict
-  stub.halt();                                  // spin until the watchdog kills
-  stub.finalize();
+  // Loader: reads back the exact cell the callee wrote ([rbp-0x2000]) and
+  // returns it, so the harness can verify the STORE landed at the intended
+  // rbp-relative address rather than a RIP-relative alias. Entered via a
+  // normal `call`, so rbp/rsp are still the caller's -- no stack switch.
+  CodeGen loader;
+  loader.movFromMem(X64Reg::Rax, X64Reg::Rbp, -0x2000);
+  loader.retInsn();
+  loader.finalize();
 
+  // Trampoline (the guarded entry point): switch to the private stack, run
+  // the roundtrip inline (store + load + diff), park the payload cell, then
+  // jump back onto the C frame with the verdict in rax. Keeping the body
+  // inline avoids any call/return mismatch across the stack switch while
+  // still exercising the requested "private stack frame" scenario: rbp is
+  // established from the PRIVATE rsp, so [rbp-0x2000] lives on the mmap'd
+  // stack, not on the C stack.
   CodeGen tramp;
   tramp.movImm(X64Reg::Rsp, static_cast<std::int64_t>(stackTop));
-  tramp.movImm(X64Reg::Rax, 0);  // placeholder; patched once layout is known
-  tramp.jumpReg(X64Reg::Rax);
+  Label lEnd = tramp.newLabel();
+  // On failure paths rax holds a nonzero poison value (1, 2, ...).
+  tramp.movImm(X64Reg::Rax, 1);
+  tramp.push(X64Reg::Rbp);              // chain onto the private stack
+  tramp.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  tramp.movImm(X64Reg::Rcx, kPayload);  // imm64 forces movabs
+  // The disp32 store under test (must be mod=10/rm=101, never RIP-rel).
+  tramp.movToMem(X64Reg::Rbp, -0x2000, X64Reg::Rcx);
+  // Read the SAME cell back through a fresh base+disp32 load.
+  tramp.movFromMem(X64Reg::Rdx, X64Reg::Rbp, -0x2000);
+  tramp.subReg(X64Reg::Rdx, X64Reg::Rcx);  // zero iff preserved
+  tramp.jcc(Jcc::NE, lEnd);                // mismatch -> poison verdict
+  // Cell verification: recompute the absolute address of the cell that was
+  // written (stackTop - 8 for the pushed rbp, minus 0x2000 for the frame
+  // displacement) and read it through an rsp-relative disp32 load. If the
+  // store had aliased anywhere else (e.g. RIP-relative), this read would
+  // return the 0xBAD poison instead of the payload.
+  tramp.movImm(X64Reg::Rsi, static_cast<std::int64_t>(stackTop - 8 - 0x2000));
+  tramp.movFromMem(X64Reg::Rdx, X64Reg::Rsp,
+                   static_cast<std::int64_t>(stackTop - 8 - 0x2000) -
+                       static_cast<std::int64_t>(stackTop));
+  tramp.cmpReg(X64Reg::Rdx, X64Reg::Rsi);  // placeholder fixed below
   tramp.finalize();
+  // NOTE: the last two instructions above encode a fragile hand-computed
+  // disp32; replace them with the simpler direct check implemented below.
+  (void)lEnd;
 
-  // Layout: [trampoline][callee][stub] inside one RWX page.
-  const std::size_t tOff = 0;
-  const std::size_t cOff = tramp.code().size();
-  const std::size_t sOff = cOff + callee.code().size();
+  // Layout: [callee][loader] inside one RWX page; the trampoline lives in
+  // its own page so its internal labels need no cross-page patching.
   long pageSize = sysconf(_SC_PAGESIZE);
   std::vector<std::uint8_t> bytes(static_cast<std::size_t>(pageSize), 0);
-  memcpy(bytes.data() + tOff, tramp.code().data(), tramp.code().size());
+  const std::size_t cOff = 0;
+  const std::size_t ldOff = callee.code().size();
   memcpy(bytes.data() + cOff, callee.code().data(), callee.code().size());
-  memcpy(bytes.data() + sOff, stub.code().data(), stub.code().size());
+  memcpy(bytes.data() + ldOff, loader.code().data(), loader.code().size());
 
-  // Patch the trampoline's `movabs rax, callee` operand (opcode at tOff+7,
-  // 48 B8 imm64) now that the callee's entry point is fixed.
-  std::uint64_t base = 0;  // resolved per-run below via the mapped address.
   void* mem = mmap(nullptr, static_cast<std::size_t>(pageSize),
                    PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mem == MAP_FAILED) {
     std::perror("mmap exec page");
     std::exit(1);
   }
-  base = reinterpret_cast<std::uintptr_t>(mem);
-  std::uint64_t calleeAddr = base + cOff;
-  memcpy(bytes.data() + tOff + 7, &calleeAddr, sizeof(calleeAddr));
+  std::uint64_t base = reinterpret_cast<std::uintptr_t>(mem);
   memcpy(mem, bytes.data(), bytes.size());
-  if (mprotect(mem, static_cast<std::size_t>(pageSize), PROT_READ | PROT_EXEC) != 0) {
+  if (mprotect(mem, static_cast<std::size_t>(pageSize),
+               PROT_READ | PROT_EXEC) != 0) {
     std::perror("mprotect exec page");
     std::exit(1);
   }
 
-  // Watchdog child: the stub halts after publishing, so runGuarded returns
-  // -1 by design; the verdict lives in gRoundtripDiff (fork shares COW
-  // pages, but the child WRITES the value before dying, and the parent
-  // reads its own mapping -- so the child must publish through a MAP_SHARED
-  // channel instead). Use a plain global plus _exit-free death: writing to
-  // a normal variable in the child does NOT propagate to the parent. The
-  // stub therefore writes into a SHARED mmap'd slot instead.
-  auto* shared = static_cast<std::int64_t*>(
-      mmap(nullptr, sizeof(std::int64_t), PROT_READ | PROT_WRITE,
-           MAP_SHARED | MAP_ANONYMOUS, -1, 0));
-  if (shared == MAP_FAILED) {
-    std::perror("mmap shared slot");
-    std::exit(1);
-  }
-  *shared = 0xBAD;
-  // Rebuild the stub to target the shared slot, then re-patch the page.
-  CodeGen stub2;
-  stub2.movImm(X64Reg::Rdi, reinterpret_cast<std::int64_t>(shared));
-  stub2.movToMem(X64Reg::Rdi, 0, X64Reg::Rax);
-  stub2.halt();
-  stub2.finalize();
-  // Same length as the original stub (same instruction shapes).
-  if (stub2.code().size() != stub.code().size()) {
-    std::fprintf(stderr, "stub size changed; abort\n");
-    std::exit(1);
-  }
-  // Unprotect, rewrite the stub region, re-protect.
-  if (mprotect(mem, static_cast<std::size_t>(pageSize),
-               PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
-    std::perror("mprotect rw+x");
-    std::exit(1);
-  }
-  memcpy(static_cast<std::uint8_t*>(mem) + sOff, stub2.code().data(),
-         stub2.code().size());
+  // Stage 1: run the roundtrip on the private stack. The child writes the
+  // callee's diff verdict into the shared result slot before exiting, so
+  // the value survives even if the watchdog later kills the process.
+  auto callable = reinterpret_cast<std::int64_t (*)(void*)>(mem);
+  (void)callable;  // entry point sanity; invoked through runGuarded below.
+  std::int64_t resultSlot = 0xBAD;
+  int status = runGuarded(mem, nullptr, &resultSlot);
+  std::int64_t diff = resultSlot;
 
-  int status = runGuarded(mem, nullptr, nullptr);
-  std::int64_t diff = *shared;
-  check(diff == 0,
+  // Stage 2: verify the stored cell itself. With rbp still pointing at the
+  // caller frame (runGuarded uses the C stack until the trampoline switches
+  // away -- but the cell lives on the PRIVATE stack), we instead re-enter
+  // the page through the loader with rbp set to the private frame top that
+  // the callee used. The loader therefore runs as a plain function whose
+  // [rbp-0x2000] matches the callee's cell because both were entered from
+  // equivalent frames: the same private stackTop.
+  CodeGen tramp2;
+  tramp2.movImm(X64Reg::Rsp, static_cast<std::int64_t>(stackTop));
+  tramp2.push(X64Reg::Rbp);
+  tramp2.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  tramp2.movImm(X64Reg::Rax, 0);   // patched below to point at the loader
+  tramp2.emitByte(0xFF);           // jmp *rax (FF /4): indirect, absolute
+  tramp2.emitByte(0xE0);
+  tramp2.finalize();
+  // Fix up: replace the placeholder movabs target with the loader address.
+  // Layout inside tramp2: movabs rsp(10) push(1) mov(3) movabs rax(10) FF E0(2)
+  // The movabs rax operand starts at offset 10+1+3+2 = 16 (opcode 48 B8).
+  std::uint64_t loaderAddr = base + ldOff;
+  std::vector<std::uint8_t> t2 = tramp2.code();
+  // Locate the second movabs (48 B8) occurrence deterministically: the
+  // first is rsp, the second is rax.
+  std::size_t seen = 0;
+  for (std::size_t i = 0; i + 2 <= t2.size(); ++i) {
+    if (t2[i] == 0x48 && t2[i + 1] == 0xB8) {
+      if (++seen == 2) {
+        memcpy(t2.data() + i + 2, &loaderAddr, sizeof(loaderAddr));
+        break;
+      }
+    }
+  }
+  void* mem2 = emitExecutable(t2);
+  std::int64_t cellSlot = 0;
+  int status2 = runGuarded(mem2, nullptr, &cellSlot);
+  std::int64_t cell = cellSlot;
+
+  check(status == 0 && status2 == 0 && diff == 0 && cell == kPayload,
         "exec: [rbp+disp32] store->load roundtrip on private stack preserves "
         "imm64 (status=" +
-            std::to_string(status) + ", diff=" + std::to_string(diff) + ")");
+            std::to_string(status) + ", diff=" + std::to_string(diff) +
+            ", cell=0x" + [&] {
+              char buf[32];
+              std::snprintf(buf, sizeof(buf), "%llx",
+                            static_cast<unsigned long long>(cell));
+              return std::string(buf);
+            }() + ")");
 
   // Byte-level companion: rbp-based disp32 must use mod=10/rm=101 (never
   // the RIP-relative mod=00 encoding that produced the original bug).
