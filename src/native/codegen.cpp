@@ -96,15 +96,21 @@ void CodeGen::modRmDisp(std::uint8_t modBits, std::uint8_t regField, bool hasInd
     mod = 0x10;  // disp32
   }
 
-  if (!ripForm(hasIndex, rm)) {
-    if (needsSib) {
-      // SIB base = rm, index = rsp(100) when unused => "no index".
-      std::uint8_t idx = hasIndex ? index : 0x04;
-      put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | 0x04));
-      put8(code_, static_cast<std::uint8_t>((mod << 6 >> 4) | (idx << 3) | lowRm));
-    } else {
-      put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | rm));
-    }
+  if (ripForm(hasIndex, rm)) {
+    // [rip + disp]: mod=00 rm=101 without SIB; the displacement is always
+    // 32 bits, so the mod hint computed above is overridden here.
+    put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (regField << 3) | 0x05));
+    put32(code_, static_cast<std::int32_t>(disp));
+    return;
+  }
+  if (needsSib) {
+    // ModRM selects the SIB form (rm=100); the SIB byte carries scale=00,
+    // the index (rsp/100 means "no index") and the base register.
+    std::uint8_t idx = hasIndex ? (index & 7) : 0x04;
+    put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | 0x04));
+    put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (idx << 3) | lowRm));
+  } else {
+    put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | rm));
   }
   if (mod == 0x01) {
     put8(code_, static_cast<std::uint8_t>(static_cast<std::int8_t>(disp)));
@@ -123,11 +129,15 @@ void CodeGen::movImm(X64Reg dst, std::int64_t value) {
   if (value >= -2147483648LL && value <= 2147483647LL) {
     rex(true, 0, false, 0, d);
     put8(code_, 0xC7);
-    put8(code_, static_cast<std::uint8_t>(0x00 | (d & 0x07)));
+    put8(code_, static_cast<std::uint8_t>(0xC0 | (d & 0x07)));  // ModRM reg=/0, rm=dst
     put32(code_, static_cast<std::int32_t>(value));
     return;
   }
-  rex(true, 0, false, 0, d);
+  // movabs: opcode B8+r encodes the full register number in the low nibble,
+  // so extended registers need REX.B but never a ModRM byte.
+  std::uint8_t byte = 0x40 | 0x08;  // REX.W
+  if (d >= 8) byte |= 0x01;         // REX.B
+  put8(code_, byte);
   put8(code_, static_cast<std::uint8_t>(0xB8 + (d & 0x07)));
   put64(code_, value);
 }
@@ -229,12 +239,12 @@ void CodeGen::testReg(X64Reg reg) {
 void CodeGen::sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int srcXmm) {
   std::uint8_t d = static_cast<std::uint8_t>(dstXmm - kXmmBase);
   std::uint8_t s = static_cast<std::uint8_t>(srcXmm - kXmmBase);
-  if (d >= 8 || s >= 8) {
-    std::uint8_t byte = 0x40;
-    if (d >= 8) byte |= 0x04;
-    if (s >= 8) byte |= 0x01;
-    put8(code_, byte);
-  }
+  // Legacy SSE never needs REX.W; xmm8-15 are selected through REX.R (the
+  // ModRM reg field) and REX.B (the ModRM rm field).
+  std::uint8_t byte = 0x40;
+  if (d >= 8) byte |= 0x04;
+  if (s >= 8) byte |= 0x01;
+  if (byte != 0x40) put8(code_, byte);
   if (prefix != 0) put8(code_, prefix);
   put8(code_, 0x0F);
   put8(code_, opcode);
@@ -252,12 +262,11 @@ void CodeGen::sseMemOp(std::uint8_t prefix, std::uint8_t opcode, int xmm, X64Reg
                        std::int64_t disp) {
   std::uint8_t d = static_cast<std::uint8_t>(xmm - kXmmBase);
   std::uint8_t b = enc(base);
-  if (d >= 8 || b >= 8) {
-    std::uint8_t byte = 0x40;
-    if (d >= 8) byte |= 0x04;
-    if (b >= 8) byte |= 0x01;
-    put8(code_, byte);
-  }
+  // REX.R selects xmm8-15 in the reg field; REX.B is only for GPR r12-r15.
+  std::uint8_t byte = 0x40;
+  if (d >= 8) byte |= 0x04;
+  if (b >= 8) byte |= 0x01;
+  if (byte != 0x40) put8(code_, byte);
   if (prefix != 0) put8(code_, prefix);
   put8(code_, 0x0F);
   put8(code_, opcode);

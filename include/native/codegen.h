@@ -130,6 +130,7 @@ class CodeGen {
   static std::uint8_t enc(X64Reg reg) { return static_cast<std::uint8_t>(reg); }
 
   void rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t index, std::uint8_t rm);
+  static bool ripForm(bool hasIndex, std::uint8_t rm);
   void modRmDisp(std::uint8_t modBits, std::uint8_t regField, bool hasIndex, std::uint8_t index,
                  std::uint8_t rm, std::int64_t disp);
   void aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src);
