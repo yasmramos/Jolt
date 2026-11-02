@@ -180,9 +180,13 @@ duplicated arithmetic in `vm.cpp`.
 
 > **PHASE 7 note:** the `Runtime` introduced in slice 6a.0 must be designed as
 > a linkable, embeddable component (no dependency on the compiler front-end or
-> the VM). The AOT backend statically links this same runtime into every
-> generated native binary, so anything that keeps it tied to the VM would have
-> to be refactored later. See PHASE 7 in `AGENT.md`.
+> the VM) and must reach the outside world only through the minimal `Platform`
+> interface (write, read, alloc, exit, file I/O). The AOT backend statically
+> links this same runtime into every generated binary, which is **freestanding
+> — no libc**: there it runs on `PlatformFreestanding` (direct syscalls), while
+> the dev engine uses `PlatformPosix`. Anything that keeps the runtime tied to
+> the VM or to libc would have to be refactored later. See PHASE 7 in
+> `AGENT.md`.
 
 ## 3. Final opcode set (39 + `IN` = 40)
 
