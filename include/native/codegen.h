@@ -73,6 +73,7 @@ class CodeGen {
   void subReg(X64Reg dst, X64Reg src);
   void imulReg(X64Reg dst, X64Reg src);
   void idiv(X64Reg divisor);  // signed divide rdx:rax by divisor -> rax, remainder rdx
+  void cdq();                 // sign-extend rax into rdx:rax (needed before idiv)
   void negReg(X64Reg dst);
   void notReg(X64Reg dst);
   void andReg(X64Reg dst, X64Reg src);

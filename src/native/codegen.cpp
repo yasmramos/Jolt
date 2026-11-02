@@ -75,25 +75,47 @@ void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t ind
 }
 
 // Encodes ModRM (+ SIB and displacement) for memory operands with a base
-// register and a signed 32-bit displacement. disp32 is always used, which
-// keeps the encoding simple and lets the caller patch it later.
+// register and a signed displacement. The encoding is size-optimized:
+// disp8 when it fits (mod=01), disp32 otherwise (mod=10), no displacement
+// for [reg] (mod=00, except rbp/r12 which always need disp8, and rsp/r12 as
+// base which require a SIB byte).
 void CodeGen::modRmDisp(std::uint8_t modBits, std::uint8_t regField, bool hasIndex,
                         std::uint8_t index, std::uint8_t rm, std::int64_t disp) {
-  bool needsSib = rm == 4 || hasIndex;             // rsp as base -> SIB needed
-  bool disp32 = true;                              // see comment above
-  bool ripRelative = rm == 5 && !hasIndex;         // [rip + disp32]
-  if (ripRelative) disp32 = true;
+  (void)modBits;  // caller-provided hint is recomputed below from the value
+  const bool baseNeedsDisp = (rm & 7) == 5;   // rbp/r12: mod=00 means disp32-RIP
+  const bool baseIsRsp = (rm & 7) == 4;        // rsp/r12: requires SIB
+  bool needsSib = baseIsRsp || hasIndex;
+  std::int8_t lowRm = static_cast<std::int8_t>(rm & 7);
 
-  if (!ripRelative) {
+  std::uint8_t mod = 0x00;
+  if (disp == 0 && !baseNeedsDisp && !needsSib) {
+    mod = 0x00;  // [reg]
+  } else if (disp >= -128 && disp <= 127) {
+    mod = 0x01;  // disp8
+  } else {
+    mod = 0x10;  // disp32
+  }
+
+  if (!ripForm(hasIndex, rm)) {
     if (needsSib) {
-      put8(code_, static_cast<std::uint8_t>((modBits << 6) | (regField << 3) | 0x04));
-      put8(code_, static_cast<std::uint8_t>((disp32 ? 0b10 : 0b00) << 6 | (index << 3) | rm));
+      // SIB base = rm, index = rsp(100) when unused => "no index".
+      std::uint8_t idx = hasIndex ? index : 0x04;
+      put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | 0x04));
+      put8(code_, static_cast<std::uint8_t>((mod << 6 >> 4) | (idx << 3) | lowRm));
     } else {
-      put8(code_, static_cast<std::uint8_t>((modBits << 6) | (regField << 3) | rm));
+      put8(code_, static_cast<std::uint8_t>((mod << 6) | (regField << 3) | rm));
     }
   }
-  // Displacement bytes are written little-endian.
-  put32(code_, static_cast<std::int32_t>(disp));
+  if (mod == 0x01) {
+    put8(code_, static_cast<std::uint8_t>(static_cast<std::int8_t>(disp)));
+  } else if (mod != 0x00) {
+    put32(code_, static_cast<std::int32_t>(disp));
+  }
+}
+
+bool CodeGen::ripForm(bool hasIndex, std::uint8_t rm) {
+  // [rip + disp32]: rm = 101 without SIB.
+  return rm == 5 && !hasIndex;
 }
 
 void CodeGen::movImm(X64Reg dst, std::int64_t value) {
@@ -102,9 +124,6 @@ void CodeGen::movImm(X64Reg dst, std::int64_t value) {
     rex(true, 0, false, 0, d);
     put8(code_, 0xC7);
     put8(code_, static_cast<std::uint8_t>(0x00 | (d & 0x07)));
-    if (d >= 8) {
-      // REX.B already covers r8-r15; opcode C7 /0 with ModRM 000 is enough.
-    }
     put32(code_, static_cast<std::int32_t>(value));
     return;
   }
@@ -173,11 +192,12 @@ void CodeGen::imulReg(X64Reg dst, X64Reg src) {
 
 void CodeGen::idiv(X64Reg divisor) {
   std::uint8_t e = enc(divisor);
-  rex(false, 0, false, 0, e);  // F7 /7 with 64-bit operand size needs W=1
   rex(true, 7, false, 0, e);
   put8(code_, 0xF7);
   put8(code_, static_cast<std::uint8_t>(0xC0 | (7 << 3) | (e & 0x07)));
 }
+
+void CodeGen::cdq() { put8(code_, 0x99); }
 
 void CodeGen::unaryAlu(std::uint8_t ext, X64Reg dst) {
   std::uint8_t d = enc(dst);
