@@ -26,6 +26,7 @@
 class VM : public Runtime {
  public:
   VM() = default;
+  explicit VM(Platform& platform) : Runtime(platform) {}
 
   // Runs the bytecode from the first instruction until HALT or the end.
   // Throws `RuntimeError` if the bytecode attempts an invalid operation.
