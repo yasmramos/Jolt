@@ -54,6 +54,24 @@ static void checkBytes(const char* label, CodeGen& gen, const std::string& expec
         std::string(label) + " encoding [" + actual + "] expected [" + expected + "]");
 }
 
+static void test_target_descriptor() {
+  CodeGen g;
+  check(g.target().arch == Arch::X86_64 && g.target().os == Os::Linux &&
+            g.target().abi == Abi::SysV,
+        "codegen defaults to x86_64-linux-sysv");
+  check(targetName(Target::linuxX64()) == "x86_64-linux-sysv",
+        "target name is stable");
+
+  bool rejected = false;
+  try {
+    CodeGen unsupported(Target{Arch::X86_64, Os::Windows, Abi::Win64});
+    (void)unsupported;
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  check(rejected, "codegen rejects a target with no backend");
+}
+
 static void test_mov_imm() {
   // Small immediates take the sign-extended `mov r/m64, imm32` form
   // (REX.W C7 /0 id), which is correct for 64-bit registers.
@@ -740,6 +758,7 @@ static void test_exec_syscall_write() {
 #endif
 
 int main() {
+  test_target_descriptor();
   test_mov_imm();
   test_mov_reg_and_stack();
   test_memory_operands();
