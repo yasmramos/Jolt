@@ -858,7 +858,7 @@ assertEq(coded["1.5"], "one and a half");
 
 // Computed keys use the [expr] syntax and are evaluated at runtime.
 let n = 2;
-let dyn = {[n * 10]: "twenty", ["a" + n]: "a2"};
+let dyn = {[n * 10]: "twenty", ["a" + str(n)]: "a2"};
 assertEq(dyn["20"], "twenty");
 ```
 
