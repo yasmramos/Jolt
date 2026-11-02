@@ -128,7 +128,9 @@ class CodeGen {
     bool emittedBeforeBind = false;
   };
 
-  PendingFixup makeFixup(Label label);
+  // Like `makeFixup` but for a rel32 slot already written to the buffer
+  // (jmp/jcc): records the start of that slot instead of the write position.
+  PendingFixup makeInPlaceFixup(Label label);
 
   std::vector<std::uint8_t> code_;
   std::vector<std::size_t> labelOffset_;  // label id -> offset, kUnbound until bound
@@ -140,8 +142,10 @@ class CodeGen {
   void rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t index, std::uint8_t rm);
   // ModRM (+ SIB + disp8/disp32) for [base+disp] memory operands. Never
   // emits the RIP form; `leaRip()` handles that addressing explicitly.
-  void modRmDisp(std::uint8_t regField, bool hasIndex, std::uint8_t index, std::uint8_t rm,
-                 std::int64_t disp);
+  void modRmDisp(std::uint8_t regField, std::uint8_t rm, std::int64_t disp);
+  // Shared body of `movToMem`/`movsdFromXmm`: store `src` (a GPR or, when
+  // `isSse` is set, an xmm register encoded as kXmmBase + N) to [base+disp].
+  void storeToMem(X64Reg base, std::int64_t disp, std::uint8_t src, bool isSse);
   void aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src);
   void unaryAlu(std::uint8_t ext, X64Reg dst);
   void shiftCl(std::uint8_t ext, X64Reg dst);

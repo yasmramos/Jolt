@@ -58,9 +58,15 @@ void CodeGen::resolveFixups() {
       continue;
     }
     std::size_t target = labelOffset_[static_cast<std::size_t>(fixup.labelId)];
-    // rel32 displacements are always measured from the end of the
-    // instruction, which is four bytes after the start of the patch slot.
-    std::int32_t distance = static_cast<std::int32_t>(target - (fixup.patchAt + 4));
+    // rel32 displacements are measured from the end of the instruction that
+    // carries them. Forward references sit inside the instruction and their
+    // slot ends at the instruction boundary (patchAt + 4). Backward ones are
+    // recorded four bytes past the end of the slot, so the write position
+    // captured at makeInPlaceFixup() time minus 4 is the instruction end;
+    // since patchAt = size - 4 there, the end is patchAt + 8.
+    std::size_t nextRip = fixup.emittedBeforeBind ? (fixup.patchAt + 4) : (fixup.patchAt + 8);
+    std::int32_t distance = static_cast<std::int32_t>(static_cast<std::int64_t>(target) -
+                                                      static_cast<std::int64_t>(nextRip));
     code_[fixup.patchAt + 0] = static_cast<std::uint8_t>(distance & 0xFF);
     code_[fixup.patchAt + 1] = static_cast<std::uint8_t>((distance >> 8) & 0xFF);
     code_[fixup.patchAt + 2] = static_cast<std::uint8_t>((distance >> 16) & 0xFF);
@@ -69,9 +75,18 @@ void CodeGen::resolveFixups() {
   fixups_ = std::move(remaining);
 }
 
-CodeGen::PendingFixup CodeGen::makeFixup(Label label) {
+// Records a reference to `label` for a rel32 displacement. jmp/jcc call
+// this right after writing the four placeholder bytes, so patchAt points at
+// the start of the displacement slot inside the instruction; the pending
+// flag distinguishes forward from backward references:
+//   - Forward (flag set): the label binds at the instruction boundary that
+//     follows the slot, so next_rip = patchAt + 4.
+//   - Backward (flag clear): bind() already ran and the whole instruction
+//     has been emitted, so the current write position sits four bytes past
+//     the end of the slot; next_rip = patchAt + 8 = code size at emit time.
+CodeGen::PendingFixup CodeGen::makeInPlaceFixup(Label label) {
   PendingFixup fixup;
-  fixup.patchAt = code_.size();
+  fixup.patchAt = code_.size() - 4;
   fixup.labelId = label.id;
   fixup.emittedBeforeBind = !labelBound_[static_cast<std::size_t>(label.id)];
   return fixup;
@@ -96,30 +111,27 @@ void CodeGen::rex(bool w, std::uint8_t regField, bool hasIndex, std::uint8_t ind
 // RIP-relative addressing is never produced here: base registers are always
 // real GPRs, so rm=101 means rbp/r12, not [rip+disp]. `leaRip()` emits the
 // RIP form explicitly.
-void CodeGen::modRmDisp(std::uint8_t regField, bool hasIndex, std::uint8_t index,
-                        std::uint8_t rm, std::int64_t disp) {
+void CodeGen::modRmDisp(std::uint8_t regField, std::uint8_t rm, std::int64_t disp) {
   const bool baseNeedsDisp = (rm & 7) == 5;   // rbp/r12: mod=00 would mean disp32
   const bool baseIsRspOrR12 = (rm & 7) == 4;  // requires a SIB byte as base
-  const bool needsSib = baseIsRspOrR12 || hasIndex;
-  // Use the full register number for the REX selection below, but keep the
-  // low three bits inside the ModRM/SIB bytes.
+  // Use the full register number for the REX selection by the caller, but
+  // keep the low three bits inside the ModRM/SIB bytes.
   const std::uint8_t lowRm = static_cast<std::uint8_t>(rm & 7);
 
   std::uint8_t mod;
   if (disp == 0 && !baseNeedsDisp) {
-    mod = 0x00;  // [reg] or [reg+index] without displacement
+    mod = 0x00;  // [reg] without displacement
   } else if (disp >= -128 && disp <= 127) {
     mod = 0x01;  // disp8
   } else {
     mod = 0x10;  // disp32
   }
 
-  if (needsSib) {
+  if (baseIsRspOrR12) {
     // ModRM selects the SIB form (rm=100); the SIB byte carries scale=00,
-    // the index (rsp/100 means "no index") and the base register.
-    const std::uint8_t idx = hasIndex ? static_cast<std::uint8_t>(index & 7) : 0x04;
+    // index=100 ("no index") and the base register.
     put8(code_, static_cast<std::uint8_t>((mod << 6) | ((regField & 7) << 3) | 0x04));
-    put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (idx << 3) | lowRm));
+    put8(code_, static_cast<std::uint8_t>((0x00 << 6) | (0x04 << 3) | lowRm));
   } else {
     put8(code_, static_cast<std::uint8_t>((mod << 6) | ((regField & 7) << 3) | lowRm));
   }
@@ -156,11 +168,28 @@ void CodeGen::movImm(X64Reg dst, std::int64_t value) {
 void CodeGen::movReg(X64Reg dst, X64Reg src) { aluRegOp(0x89, dst, src); }
 
 void CodeGen::movToMem(X64Reg base, std::int64_t disp, X64Reg src) {
+  storeToMem(base, disp, enc(src), false);
+}
+
+// Shared body of the two store forms. The GPR form is `mov [base+disp], r`
+// (opcode 0x89, reg field = source). The SSE form is `movsd [base+disp],
+// xmm` (F2 0F 11): legacy SSE never uses REX.W, and an extended source is
+// xmm8-15 (REX.R) instead of r8-r15 (which would set REX.B on the reg
+// field). The base register contributes REX.B in either case.
+void CodeGen::storeToMem(X64Reg base, std::int64_t disp, std::uint8_t src, bool isSse) {
   std::uint8_t b = enc(base);
-  std::uint8_t s = enc(src);
-  rex(true, s, false, 0, b);
-  put8(code_, 0x89);
-  modRmDisp(s, false, 0, b, disp);
+  std::uint8_t byte = 0x40 | (isSse ? 0x00 : 0x08);
+  if (isSse ? (src >= kXmmBase + 8) : (src >= 8)) byte |= 0x04;
+  if (b >= 8) byte |= 0x01;
+  if (byte != 0x40) put8(code_, byte);
+  if (isSse) {
+    put8(code_, 0xF2);
+    put8(code_, 0x0F);
+    put8(code_, 0x11);
+  } else {
+    put8(code_, 0x89);
+  }
+  modRmDisp(static_cast<std::uint8_t>(src & 7), b, disp);
 }
 
 void CodeGen::movFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
@@ -168,14 +197,14 @@ void CodeGen::movFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
   std::uint8_t d = enc(dst);
   rex(true, d, false, 0, b);
   put8(code_, 0x8B);
-  modRmDisp(d, false, 0, b, disp);
+  modRmDisp(d, b, disp);
 }
 
 void CodeGen::movImmToMem(X64Reg base, std::int64_t disp, std::int64_t value) {
   std::uint8_t b = enc(base);
   rex(true, 0, false, 0, b);
   put8(code_, 0xC7);
-  modRmDisp(0, false, 0, b, disp);
+  modRmDisp(0, b, disp);
   put32(code_, static_cast<std::int32_t>(value));
 }
 
@@ -285,7 +314,7 @@ void CodeGen::sseMemOp(std::uint8_t prefix, std::uint8_t opcode, int xmm, X64Reg
   if (prefix != 0) put8(code_, prefix);
   put8(code_, 0x0F);
   put8(code_, opcode);
-  modRmDisp(d, false, 0, b, disp);
+  modRmDisp(d, b, disp);
 }
 
 void CodeGen::movsdToXmm(int xmm, X64Reg base, std::int64_t disp) {
@@ -326,15 +355,15 @@ void CodeGen::cvtsi2sd(int dstXmm, X64Reg src) {
 
 void CodeGen::jmp(Label label) {
   put8(code_, 0xE9);
-  fixups_.push_back(makeFixup(label));
   put32(code_, 0);
+  fixups_.push_back(makeInPlaceFixup(label));
 }
 
 void CodeGen::jcc(Jcc cc, Label label) {
   put8(code_, 0x0F);
   put8(code_, static_cast<std::uint8_t>(cc));
-  fixups_.push_back(makeFixup(label));
   put32(code_, 0);
+  fixups_.push_back(makeInPlaceFixup(label));
 }
 
 void CodeGen::callRel(std::int32_t offsetBytes) {
