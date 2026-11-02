@@ -40,6 +40,36 @@ runtime to install); end users never install Jolt or any runtime.
 | `vm.cpp` | `Bytecode*` | execution | ✅ PHASE 5 |
 | `main.cpp` | CLI | full pipeline | ⬜ PHASE 4 (VM as the engine) |
 | `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
+| `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime: values and lexical `Env` | ✅ PHASE 6 groundwork |
+| `gc.cpp` | tracked `GcNode`s | reclamation of reference cycles | ✅ PHASE 6 groundwork |
+| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a (emitter only) |
+
+### Toolchain binaries and the compiler boundary
+
+`jolt` ships as a single binary until PHASE 7d. Split the toolchain only once
+`jolt build` exists and something actually consumes it (CI, third-party
+builds); end users never install Jolt (PHASE 7), so an early split adds
+packaging and build cost without removing any user-facing surface.
+
+The split, when it happens:
+
+- `jolt` keeps run, REPL and `-c`: the development engine.
+- `joltc` becomes the host compiler (`joltc file.jolt -o app`). It reads
+  sources and writes the ELF, so it links libc; the freestanding part is what
+  it emits, not the compiler itself.
+- `jolt build` stays a thin alias over the same library, never a second
+  implementation of the pipeline.
+
+Boundary rule, in force before the split: `src/compiler.*` and `src/native/*`
+must not include `interpreter.h` or `vm.h`. Both are libraries that any entry
+point may link (the `compiler_test` target already builds the compiler without
+the interpreter), which is what makes the later split a second `main` instead
+of a refactor. The `compiler_boundary` CTest case
+(tests/check_compiler_boundary.cmake) enforces the rule on every run.
+
+Rationale: it keeps the PHASE 7 anti-goal (no compiler and no eval reachable
+from the AOT runtime) enforceable mechanically, and it keeps the compiler
+reusable by a leaner entry point.
 
 ---
 
@@ -47,6 +77,8 @@ runtime to install); end users never install Jolt or any runtime.
 
 These rules are **not negotiable**. If a proposal violates them, reject it
 and propose an alternative.
+
+### 3.1 Representation
 
 1. **Register-based**, NOT stack-based. Registers are an array of dynamic
    values in the VM (`Value regs[256]`). Do not use `double` alone: Jolt also
@@ -59,12 +91,63 @@ and propose an alternative.
    In C++17, `Value` is a 16-byte tagged union with non-atomic reference
    counting (the interpreter/VM is single-threaded). Strings are immutable
    and shared, so `MOVE` does not duplicate text.
-2. **Each opcode maps to 1 x86-64 ASM instruction** (or close to it). If it
-   does not map, it is badly designed.
-3. **At most ~40 opcodes** in total. If more are needed, redesign. PHASE 6
-   sits exactly at the limit: 40.
+
+### 3.2 Lowering tiers (the native backend contract)
+
+2. **Every opcode has exactly one direct lowering**, but not every lowering is
+   a single machine instruction. There are two tiers:
+
+   | Tier | Lowering | Opcodes |
+   |------|----------|---------|
+   | **Inline** | 1–3 instructions that read/write registers and frame cells, no call | `LOADK`, `MOVE`, `ADD`–`POW` (int/float fast paths), `UNOP`, `BAND`–`SHR`, `EQ`–`GTE`, `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`, `GETLOCAL`, `SETLOCAL` |
+   | **Runtime primitive** | Load arguments into ABI registers and `call` one named helper in the embedded runtime | `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`, `NEWTABLE`, `GETTABLE`, `SETTABLE`, `IN`, `ITER`, `PRINT`, `DECLLOCAL`, `GETGLOBAL`, `SETGLOBAL` (until globals are resolved to fixed slots) |
+
+   A runtime primitive still satisfies the anti-goal: it is one small typed
+   operation (e.g. `jolt_table_get`), never the compiler, the AST or `eval`.
+   **Do not claim 1:1 ASM for the second tier.** An earlier version of this
+   document did, which contradicted the PHASE 7c plan; the table in
+   "Expected bytecode → native lowering" is now the normative one.
+
+   Some inline opcodes also fall back to a runtime primitive on the generic
+   path (`ADD` with strings, comparisons of non-numbers). That fallback is
+   part of the same opcode's lowering, not a second opcode.
+
+### 3.3 Opcode budget and retirement ladder
+
+3. **At most 40 opcodes** in total. **40 is a hard ceiling, not a target.**
+   PHASE 6 sits exactly at it (40/40), so there is no free slot. The policy for
+   the next opcode is fixed now:
+
+   - A proposal that needs a new opcode must name the rung it consumes **and**
+     land that consolidation in the same slice, with all suites green.
+   - The ladder is ordered; do not skip a rung to protect a favorite opcode.
+     A rung may only be skipped if it has already been executed.
+   - Never emit a 41st opcode, not even temporarily.
+   - If the feature can be expressed with the current set (`switch` and
+     pattern matching lower to `JMP_IF_FALSE`/`JMP`), it gets no opcode.
+
+   The ceiling is enforced at compile time: `include/bytecode.h` has
+   `static_assert(kOpcodeCount <= 40)`, so a 41st enumerator fails the build
+   before it can land. `PRINT`'s deletion (39) is the only planned decrease.
+
+   | Rung | Consolidation | Saves | Notes |
+   |------|---------------|-------|-------|
+   | 1 | `EQ` `NEQ` `LT` `LTE` `GT` `GTE` → `CMP R[a], R[b], R[c]` with the operator in `c` | -5 | Same selector trick already used by `UNOP`; native code still lowers to `cmp` + `setcc`. **Pre-approved default answer** to "which opcode is dropped". |
+   | 2 | `JMP_IF_FALSE` + `JMP_IF_TRUE` → `JMP_IF` with polarity in `c` | -1 | One `test` + one `jcc` either way. |
+   | 3 | `BAND` `BOR` `BXOR` `SHL` `SHR` → `BITOP` with the operator in `c` | -4 | The ASM already selects the operation. |
+   | 4 | `ADD` `SUB` `MUL` `DIV` `MOD` `POW` → `ARITH` with the operator in `c` | -5 | Last resort: one dispatch in the hot path instead of six. |
+
+   At 40/40, **any** feature that wants a new opcode starts at rung 1. If a
+   future review prefers 20–25 opcodes, this ladder is the route there; it is
+   not a redesign.
+
+### 3.4 Forbidden instructions
+
 4. **Forbidden instructions** (too high level):
    - `OP_EVAL_EXPR`, `OP_EXECUTE_STATEMENT`, `OP_CALL_METHOD_DYNAMIC`
+
+### 3.5 Allowed instructions (the complete 40)
+
 5. **Allowed instructions** (low level):
    - Load: `LOADK` (tagged constant: nil, bool, int, float, string), `MOVE`
    - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `UNOP` (`c` selects
@@ -76,8 +159,27 @@ and propose an alternative.
    - Functions: `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
    - Collections: `NEWTABLE`, `GETTABLE`, `SETTABLE`, `IN`
    - Iteration: `ITER`
-   - I/O: `PRINT`
+   - I/O: `PRINT` (**temporary**, see §3.6)
    - End: `HALT`
+
+### 3.6 `PRINT` is temporary
+
+`PRINT` is the only opcode that touches the outside world. It is a deliberate,
+time-boxed exception to the rule that the core knows no std, and it is
+**scheduled for deletion**, not kept:
+
+- 6c/6e: the compiler emits `CALL` to the `print` builtin for every arity, so
+  no new code contains `PRINT`.
+- 6f: the `OpCode::PRINT` case and its VM implementation are removed. This is
+  part of the parity gate (D9 in `docs/phase6-design.md`), not an optional
+  cleanup.
+- 7c: the freestanding runtime provides the same `print` builtin on
+  `PlatformFreestanding`; I/O goes through `Platform::write`, never through an
+  opcode.
+
+Removing `PRINT` frees one slot (39/40). It does **not** postpone rung 1 of
+§3.3: the ladder applies to any opcode requested before 6f, and `PRINT` is
+already promised to the gate.
 
 ### Explicit anti-goal
 
@@ -99,15 +201,42 @@ and propose an alternative.
    interface (see PHASE 7): write, read, alloc, exit and file I/O go through
    it, never through libc or libstdc++ symbols.
 
-### Expected bytecode → ASM mapping
+### Expected bytecode → native lowering
 
-| Bytecode | x86-64 ASM |
-|----------|-----------|
-| `LOADK R0, 10` | `movq $10, %rax` |
-| `ADD R2, R0, R1` | `addq %rbx, %rax` |
-| `JMP_IF_FALSE R2, +2` | `testq %rax, %rax; jz .label` |
-| `SETGLOBAL R2, "x"` | `movq %rax, x(%rip)` |
-| `PRINT R3` | `call printf` |
+This table is normative for PHASE 7. **Sequence** means inline instructions;
+**call** means one call into the embedded runtime. The instruction count is a
+budget, not a promise that every opcode is one instruction.
+
+| Bytecode | Lowering |
+|----------|----------|
+| `LOADK R0, K1` | sequence: write tag + payload (2–3 insns) |
+| `MOVE R0, R1` | sequence: tagged move (2 insns) |
+| `ADD R2, R0, R1` | sequence: int/float fast path; generic path calls `jolt_add` |
+| `SUB`–`POW` | sequence: same fast-path shape as `ADD`; generic path calls `jolt_arith` |
+| `UNOP R0, R1, op` | sequence: 1–2 insns (negate/not/bit-not) |
+| `BAND`–`SHR` | sequence: 1–2 insns (integer only) |
+| `EQ`–`GTE` | sequence: `cmp` + `setcc`; generic path calls `jolt_compare` |
+| `JMP +n` | sequence: `jmp rel32` |
+| `JMP_IF_FALSE R2, +2` | sequence: `test`; `jz .label` |
+| `JMP_IF_TRUE R2, +2` | sequence: `test`; `jnz .label` |
+| `GETGLOBAL R0, K1` | call: `jolt_global_get` until globals are fixed slots |
+| `SETGLOBAL R2, K3` | call: `jolt_global_set` until globals are fixed slots |
+| `DECLLOCAL R0, 3` | call: `jolt_cell_new` (arena alloc) |
+| `GETLOCAL R1, 10` | sequence: cell load + tagged load |
+| `SETLOCAL R0, 10` | sequence: tagged store into the cell |
+| `CALL R0, 2` | call: `jolt_call` (frame setup + dispatch) |
+| `RETURN R0` | call: `jolt_return` (frame teardown) |
+| `CLOSURE R0, 1` | call: `jolt_closure` (capture cells) |
+| `GETUPVAL R0, 0` | call: `jolt_upval_get` (shared cell deref) |
+| `SETUPVAL R0, 0` | call: `jolt_upval_set` (write barrier + cell store) |
+| `NEWTABLE R0, 8` | call: `jolt_table_new` (arena alloc) |
+| `GETTABLE R0, R1, R2` | call: `jolt_table_get` (bounds/hash/type checks) |
+| `SETTABLE R1, R2, R0` | call: `jolt_table_set` (grow + write barrier) |
+| `IN R0, R1, R2` | call: `jolt_contains` |
+| `ITER R0, R1` | call: `jolt_iter_next` |
+| `PRINT R3` | call: `jolt_print` → `Platform::write` (temporary, §3.6) |
+| `HALT` | sequence: frame epilogue + `ret` |
+
 
 ---
 
@@ -142,7 +271,8 @@ previous one.
 - Compile-time immutability tracking (`isImmutable` on locals and globals):
   assigning to a `let` binding throws a
   `CompileError` with the same message as the interpreter
-- `print(expr)` → compile the expression, emit `PRINT`; in the current AST
+- `print(expr)` → compile the expression, emit `PRINT` (temporary; see §3.6;
+  every arity becomes a `CALL` to the builtin at 6c/6e); in the current AST
   `print` is a call, so it is detected as a `CallExpr`
 - Register allocation with a counter that goes up and down
 - Update `numRegisters` when reserving registers
@@ -162,7 +292,8 @@ previous one.
   and bit-not
 - Comparisons with `EQ`/`NEQ`/`LT`/`LTE`/`GT`/`GTE` and the same ordering
   relation as `Interpreter::lessThan`
-- `PRINT` uses `Value::toString()`
+- `PRINT` uses `Value::toString()` (temporary; removed at the 6f gate, see
+  §3.6)
 - Runtime errors through `RuntimeError`
 - `run()` resets the registers and keeps the globals between executions
 - Each opcode: 2-3 lines of C++
@@ -196,7 +327,7 @@ previous one.
 - Do **NOT** add `OP_IF` or `OP_WHILE` (high level)
 - `in` and `for-in` are left for PHASE 6 (they depend on collections)
 
-### PHASE 6 — Functions, collections and library ⬜ ← NEXT
+### PHASE 6 — Functions, collections and library 🔶 in progress ← NEXT
 - `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`
 - Call stack in the VM and registers per frame
 - `Bytecode` evolves into **per-function protos** with child protos (Lua style)
@@ -206,10 +337,13 @@ previous one.
   re-entering the AST
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
+- Retire the temporary `PRINT` opcode: from 6c/6e every `print` arity compiles
+  to `CALL`, and the opcode is deleted at the 6f gate (§3.6)
+- Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. Slice 6a is done: top-level `fn` declarations, parameters, `return`, recursion and general calls compile and run on the VM. The compiler still rejects upvalues, lambdas, local `fn` declarations, collections and `for-in` with a `(Phase 6)`/`(Phase 6b)` message.
 
-### PHASE 7 — Bytecode → native backend (AOT, freestanding) ⬜
+### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
-  x86-64 following the bytecode→ASM mapping table of §3.
+  x86-64 following the bytecode → native lowering table of §3.
 - **Own machine-code and static ELF executable emitter** (~500-1000 lines:
   ELF header, program headers, `.text`, `.rodata`, entry point), keeping the
   zero-dependency rule of §5.1/§8. LIEF, AsmJit and LLVM were evaluated and
@@ -220,26 +354,39 @@ previous one.
   `close`, `mmap`, `brk`, `exit_group`), a custom arena/bump allocator on top
   of `mmap`, and no libc or libstdc++ linked into the generated binary —
   `ldd` must report "not a dynamic executable". Custom dtoa/formatting for
-  printing floats with `PRINT`.
+  printing floats in the `print` builtin.
 - **Platform layer**: extract a minimal `Platform` interface from
   `vm.cpp`/runtime (write, read, alloc, exit, file I/O) with two
   implementations: `PlatformPosix` (dev engine; may use libc) and
   `PlatformFreestanding` (AOT; direct syscalls only). The `Runtime` of slice
   6a.0 (PHASE 6) must be built on this interface from the start.
+- **Target descriptor from day one**: `include/native/target.h` defines
+  `Target { arch, os, abi }` and every backend entry point takes one.
+  `CodeGen` validates it and currently accepts only `x86_64-linux-sysv`, so
+  adding Windows, macOS or WebAssembly is a new backend behind the same
+  descriptor instead of a driver rewrite.
 - Initial target: Linux x86-64 only (direct syscalls = one concrete ABI).
 - Subslices:
   - **7a** — "hello world" spike: hand-written `_start` + `write` syscall →
     static freestanding ELF → `./hello` runs, no libc.
   - **7b** — lowering of opcodes that need no runtime (int/float arithmetic,
     jumps, comparisons).
-  - **7c** — freestanding embedded runtime calls (strings, `PRINT`,
-    collections on top of the custom allocator).
+  - **7c** — freestanding embedded runtime calls (strings, the `print`
+    builtin, collections on top of the custom allocator).
   - **7d** — `jolt build` wired into the CLI.
 - Deferred: per-instruction type annotations for fast paths without dynamic
   dispatch (bridge toward the speculative work in
   `docs/ARCHITECTURE_ANALYSIS.md`); other targets (macOS/Windows via libc or
   stubs).
 - Afterwards, LuaJIT's JIT as a reference.
+- **In the tree now**: the `Target` descriptor (`include/native/target.h`) and
+  the x86-64 instruction emitter (`include/native/codegen.h`,
+  `src/native/codegen.cpp`): labels with backpatching, `mov`/`lea`, integer
+  ALU, shifts, compares, `jmp`/`jcc`, SSE2 float ops, `push`/`pop`, `call
+  rel32`, `syscall` and `ret`, covered by the byte-exact tests in
+  `tests/codegen_test.cpp` (the mmap/execution checks run on Linux x86-64
+  only). Still missing: opcode→emitter lowering, the ELF/freestanding emitter,
+  `_start`, the arena allocator, the `Platform` layer and `jolt build`.
 
 ### Current status
 Phase 1: ✅ completed and reviewed
@@ -247,10 +394,11 @@ Phase 2: ✅ completed
 Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
-Phase 6: ⬜ pending ← NEXT
-Phase 7: ⬜ pending
+Phase 6: 🔶 in progress ← NEXT (6a.0 and 6a done: shared `Runtime`, per-function protos, `CALL`/`RETURN`/`CLOSURE`, top-level functions, recursion; upvalues, lambdas, collections and `for-in` are still missing)
+Phase 7: 🔶 in progress (7a: target descriptor + x86-64 instruction emitter with tests; no ELF emitter, freestanding runtime or `jolt build` yet)
 Distribution model: freestanding AOT native binary (PHASE 7, Linux x86-64).
-VM = dev engine only. AST interpreter removed after 6f parity gate.
+VM = dev engine only. The AST interpreter leaves the product path at the 6f
+parity gate (D9 in `docs/phase6-design.md`) and is deleted in PHASE 4.
 
 
 ---

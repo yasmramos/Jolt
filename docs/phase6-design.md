@@ -1,7 +1,7 @@
 # PHASE 6 design — functions, closures, collections and iteration
 
-Status: **approved and in progress**. Slice 6a.0 is implemented; the rest is
-queued.
+Status: **approved and in progress**. Slices 6a.0 and 6a are implemented; the
+rest is queued.
 
 Scope (from `AGENT.md` §4, PHASE 6): `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`,
 `SETUPVAL`, per-function protos, a call stack with per-frame registers,
@@ -19,12 +19,13 @@ backend). They come after parity is proven.
 | Slice | Status | Notes |
 |-------|--------|-------|
 | 6a.0 | ✅ done | `Runtime` bridge and `src/ops.{h,cpp}` extraction |
-| 6a | next | protos, `CALL`/`RETURN`/`CLOSURE`, 0 upvalues |
+| 6a | ✅ done | protos, `CALL`/`RETURN`/`CLOSURE`, 0 upvalues |
 | 6b-6f | pending | upvalues, tables, `ITER`, callbacks, parity gate |
 
 The 40-opcode consolidation (D1) is done: `Bytecode::constants` replaces the
-`numbers`/`strings` pools and `UNOP` replaces `NEG`/`NOT`/`BNOT`. The PHASE 6
-opcodes are declared and the VM rejects them until their slice lands.
+`numbers`/`strings` pools and `UNOP` replaces `NEG`/`NOT`/`BNOT`. `CALL`,
+`RETURN` and `CLOSURE` execute in the VM; the table, upvalue, `ITER` and `IN`
+cases still reject with "opcode not implemented yet" until their slice.
 
 Decisions taken while implementing 6a.0, superseding the text below:
 
@@ -40,6 +41,34 @@ Decisions taken while implementing 6a.0, superseding the text below:
   needs.
 - `ops::memberGet` still calls `bindMethod` from `builtins.h`, so anything
   that links `ops.cpp` must link `builtins.cpp` too.
+
+Decisions taken while implementing 6a, superseding the text below:
+
+- `CALL` copies the callee's arguments into a fresh register window
+  (`regBase = registers_.size()`) instead of aliasing the caller's registers at
+  `a + 1`. The argument registers are reused by the caller after the call, and
+  the frame shares one growable `Value` stack, so a copy keeps the two windows
+  independent and makes the return path a simple resize. Correctness first;
+  PHASE 7 can remove the copy when it specializes the calling convention.
+- `Bytecode` owns its children as `shared_ptr<Bytecode>`; a `Function` holds a
+  `shared_ptr<const Bytecode>` proto. The root chunk is referenced by a
+  non-owning `shared_ptr` during `run`, so a closure still keeps its proto
+  alive after the root `Bytecode` is gone (REPL entries, successive runs).
+- 6a only compiles top-level `fn` declarations. Local (nested) declarations
+  are a targeted `CompileError` until 6b, because without upvalues a function
+  could not see the locals it should close over. Top-level declarations are
+  hoisted before any statement, matching `Interpreter::execBlock`.
+- A function that refers to an outer local resolves it as a global until 6b.
+  This is a deliberate 6a limitation: it keeps recursion and top-level helpers
+  working without upvalues, and 6b replaces the resolution with
+  `GETUPVAL`/`SETUPVAL`.
+- 6a's exit criterion is a VM test subset (calls, parameters, return, early
+  return, recursion, mutual recursion, native re-entry, arity and depth
+  errors), not full `tests/04_functions.jolt` parity: that file also uses
+  lambdas, closures and collections, so its parity lands with 6b/6c.
+- `print` keeps the `PRINT` opcode only for exactly one unshadowed argument.
+  Other arities compile to a normal `CALL`, so they need `registerBuiltins`
+  like any other native.
 
 
 ---
@@ -81,6 +110,13 @@ to one instruction each):
 `GETTABLE`/`SETTABLE` take a mode bit (index vs member) in `c`; like `UNOP`
 and `NEWTABLE`'s kind bit it is a compiler constant, so it becomes a
 specialized instruction later.
+
+The ceiling is hard, not a target (`AGENT.md` §3.3). Any later slice or
+PHASE 7 feature that needs a new opcode must first execute the next rung of
+the retirement ladder: comparisons → `CMP` (-5), conditional jumps → `JMP_IF`
+(-1), bitwise → `BITOP` (-4), arithmetic → `ARITH` (-5). Never emit a 41st
+opcode. `PRINT` is already scheduled for deletion at the 6f gate, so the
+effective budget after PHASE 6 is 39.
 
 ### D2 — A proto is a `Bytecode`
 
@@ -186,7 +222,52 @@ duplicated arithmetic in `vm.cpp`.
 > — no libc**: there it runs on `PlatformFreestanding` (direct syscalls), while
 > the dev engine uses `PlatformPosix`. Anything that keeps the runtime tied to
 > the VM or to libc would have to be refactored later. See PHASE 7 in
-> `AGENT.md`.
+> `AGENT.md`. The AOT backend also takes the `Target { arch, os, abi }`
+> descriptor from `include/native/target.h` from the first slice; only
+> `x86_64-linux-sysv` is implemented, but no entry point hardcodes it.
+
+### D9 — 6f parity gate (objective, normative)
+
+The AST interpreter is the oracle only until the gate below is green on a
+single commit. "Parity" is not a judgement call; it is these checks, run by
+`tests/parity_test.cpp` in CTest and in CI:
+
+**Corpus.** Every script matched by the existing CTest globs:
+`tests/*.jolt`, `tests/parity/**/*.jolt` and `examples/*.jolt`, plus the
+committed grammar-fuzzer corpus from 6e. `tests/errors/**` are included as
+diagnostics cases. The list is generated by the glob, never hand-picked; a
+feature slice adds its script in the same commit.
+
+**Pass criteria — all mandatory, zero tolerance.**
+
+| # | Surface | Criterion |
+|---|---------|-----------|
+| 1 | stdout | Byte-for-byte identical: same bytes, newlines, float formatting and ordering. No normalization, no trimming. |
+| 2 | exit code | Identical for success (`0`) and for every failure (non-zero). |
+| 3 | diagnostics | Identical message text and identical `line`/`col` for compile and runtime errors. The harness compares structured `{message, line, col}`, not a rendered prefix. |
+| 4 | stack traces | Identical `function@line:col` frame sequence, innermost first. Empty or engine-specific prefixes are not allowed. |
+| 5 | observable state | After each run, a canonical globals dump (keys sorted, values as `repr`, cycles rendered as `<cycle>`, no addresses) is identical. |
+| 6 | fuzz | The 6e grammar-fuzzer corpus completes with no crash and satisfies 1–5; non-terminating programs are bounded by a per-case timeout committed with the corpus. |
+
+**Not part of parity:** memory addresses, allocation counts, GC timing,
+register values, bytecode dumps and instruction counts. Those are
+implementation-private; comparing them would freeze the VM to the interpreter
+instead of to the language.
+
+**Exclusions.** `tests/parity/excluded.txt` names each excluded script with a
+reason and the slice that removes the exclusion. The gate fails if the file is
+non-empty at 6f. A "known divergence" without an entry is a failing test.
+
+**Conflict rule.** If the engines disagree, `docs/language.md` decides. If the
+interpreter is wrong, fix the interpreter and its spec test first; never
+change the VM to copy a bug. If the interpreter cannot be fixed cheaply, move
+the script to `excluded.txt` with the reason, and 6f cannot pass until the
+entry is gone.
+
+**Oracle expiry.** Once the gate is green, `interpreter.cpp` is linked only
+into `parity_test`, never into `jolt`. PHASE 4 deletes it together with the
+`--ast` flag once the VM is the dev engine. There is no state in which the
+interpreter remains a supported execution mode.
 
 ## 3. Final opcode set (39 + `IN` = 40)
 
@@ -202,7 +283,7 @@ functions CALL RETURN CLOSURE GETUPVAL SETUPVAL
 tables    NEWTABLE GETTABLE SETTABLE
 iteration ITER
 membership IN
-io        PRINT
+io        PRINT             (temporary; deleted at 6f, AGENT.md §3.6)
 end       HALT
 ```
 
@@ -211,16 +292,17 @@ end       HALT
 | Slice | Content | Exit criterion |
 |-------|---------|----------------|
 | 6a.0 | `Runtime` + `src/ops` extraction, `NativeFn` change, VM gets natives and error positions (`Bytecode::lines`, frame names) | Existing suites unchanged; VM can call `assertEq`/`print` natively |
-| 6a | Protos, `CALL`/`RETURN`/`CLOSURE` (0 upvalues), function declarations, parameters, recursion, arity | `tests/04_functions.jolt` runs on the VM with identical stdout |
+| 6a | Protos, `CALL`/`RETURN`/`CLOSURE` (0 upvalues), top-level `fn`, parameters, recursion, arity | VM test subset: calls/return, early return, recursion, mutual recursion, native re-entry, arity/depth errors. Full `tests/04_functions.jolt` parity needs 6b/6c (lambdas, closures, collections) |
 | 6b | `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas, closures escaping their scope | `examples/closures.jolt`, `tests/09_lambdas.jolt` parity |
 | 6c | `NEWTABLE`/`GETTABLE`/`SETTABLE`, array/map literals, indexing, members, methods, ranges, interpolation, `IN` | `tests/02_strings`, `05_collections`, `06_operators` parity |
 | 6d | `ITER` + `for-in` (arrays, strings, maps, lazy ranges), loop-variable cells per iteration | `tests/03_control`, `05_collections` parity |
-| 6e | Builtins that take callbacks (`map`, `filter`, `reduce`, `sort`) against VM closures | full suite parity + fuzz harness |
-| 6f | Parity harness as CI gate (`tests/parity_test.cpp` over `tests/parity/*.jolt`), then PHASE 4 planning | red/green gate; interpreter demoted to oracle |
+| 6e | Builtins that take callbacks (`map`, `filter`, `reduce`, `sort`) against VM closures; every `print` arity compiles to `CALL` | full suite parity + fuzz harness |
+| 6f | Parity harness as CI gate (`tests/parity_test.cpp` over the D9 corpus), delete `PRINT`, then PHASE 4 planning | D9 green with an empty exclusion list; interpreter demoted to oracle |
 
-The parity harness compares stdout and the error text/position of both
-engines for the same file; it grows one directory per slice and is what makes
-"parity" measurable instead of aspirational.
+The gate is defined in D9: stdout bytes, exit code, structured diagnostics,
+structured stack traces, a canonical globals dump and the 6e fuzz corpus, all
+compared by `tests/parity_test.cpp`. That is what makes "parity" measurable
+instead of aspirational, and it is the expiry date for `interpreter.cpp`.
 
 ## 5. Risks
 

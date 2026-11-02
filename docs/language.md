@@ -842,7 +842,7 @@ assertEq("5".padStart(3, "0"), "005");
 
 ### 10.1 Literals
 
-Keys in a literal can be identifiers, string literals, scalar literals (`int`, `true`, `false`, `nil`) or computed expressions in brackets:
+Keys in a literal can be identifiers, string literals, scalar literals (`int`, `float`, `true`, `false`, `nil`) or computed expressions in brackets:
 
 ```jolt
 let person = {
@@ -852,16 +852,17 @@ let person = {
 };
 
 // Scalar literals are canonicalized to their string form.
-let coded = {1: "one", true: "yes", nil: "nothing"};
+let coded = {1: "one", 1.5: "one and a half", true: "yes", nil: "nothing"};
 assertEq(coded["1"], "one");
+assertEq(coded["1.5"], "one and a half");
 
 // Computed keys use the [expr] syntax and are evaluated at runtime.
 let n = 2;
-let dyn = {[n * 10]: "twenty", ["a" + n]: "a2"};
+let dyn = {[n * 10]: "twenty", ["a" + str(n)]: "a2"};
 assertEq(dyn["20"], "twenty");
 ```
 
-All map keys are strings internally: scalar and computed keys are normalized with the value's canonical string form (for example `1` becomes `"1"`), so lookups always use strings. If a key is repeated, the last value wins, but the position of its first appearance is kept.
+All map keys are strings internally: scalar and computed keys are normalized with the value's canonical string form (for example `1` becomes `"1"` and `1.5` becomes `"1.5"`), so lookups always use strings. If a key is repeated, the last value wins, but the position of its first appearance is kept.
 
 ### 10.2 Access and assignment
 
@@ -1156,7 +1157,7 @@ for argument in args() {
 - No `try`/`catch` or exceptions that can be caught from the language.
 - No modules or `import`. In the REPL you can use `:load`.
 - No `switch`, `do`/`while`, `++`, `--`, default parameters or variadic arguments in user functions.
-- Map keys are always strings. Literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
+- Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
 - `for ... in` does not accept parentheses around the variable and the iterable.
 - No slicing syntax for strings or arrays; methods such as `substr` and `slice` are used.

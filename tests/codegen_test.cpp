@@ -54,6 +54,24 @@ static void checkBytes(const char* label, CodeGen& gen, const std::string& expec
         std::string(label) + " encoding [" + actual + "] expected [" + expected + "]");
 }
 
+static void test_target_descriptor() {
+  CodeGen g;
+  check(g.target().arch == Arch::X86_64 && g.target().os == Os::Linux &&
+            g.target().abi == Abi::SysV,
+        "codegen defaults to x86_64-linux-sysv");
+  check(targetName(Target::linuxX64()) == "x86_64-linux-sysv",
+        "target name is stable");
+
+  bool rejected = false;
+  try {
+    CodeGen unsupported(Target{Arch::X86_64, Os::Windows, Abi::Win64});
+    (void)unsupported;
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  check(rejected, "codegen rejects a target with no backend");
+}
+
 static void test_mov_imm() {
   // Small immediates take the sign-extended `mov r/m64, imm32` form
   // (REX.W C7 /0 id), which is correct for 64-bit registers.
@@ -271,6 +289,71 @@ static void test_sse() {
   checkBytes("cvtsi2sd xmm0, rax", g5, "F2480F2AC0");
 }
 
+// Byte-level companion for the backward-jmp fix: `jmp rel32` must encode
+// disp = target - (instruction_end), pinned when the slot is reserved,
+// regardless of epilogue bytes emitted afterwards. The expectation is
+// computed from the offsets recorded by the emitter itself (label position
+// and displacement-slot end), so it cannot drift out of sync with the
+// instruction layout.
+static void checkBackwardJmpBytes(const char* name, CodeGen& g,
+                                  CodeGen::Label target) {
+  const std::size_t jmpStart = g.offset();
+  g.jmp(target);
+  // The jump was backward (label already bound), so the emitter patched it
+  // immediately. Locate the displacement slot by scanning backwards for the
+  // `jmp rel32` opcode: the instruction length is variable because movImm
+  // may emit either a 7-byte sign-extended form or a 10-byte movabs form.
+  const std::size_t dispSlot = jmpStart + 1;  // tentative: opcode at jmpStart
+  std::size_t opcode = dispSlot - 1;
+  if (opcode >= 1 && g.code()[dispSlot - 1] != 0xE9) {
+    // REX prefix precedes the opcode byte; step back over it.
+    opcode = dispSlot - 2;
+  }
+  const std::size_t instrEnd = dispSlot + 4;  // next RIP after the jmp
+  const int32_t disp = static_cast<int32_t>(g.labelOffset(target)) -
+                       static_cast<int32_t>(instrEnd);
+  std::string expected;
+  for (std::size_t i = 0; i < opcode; ++i) {  // bytes before the opcode
+    char buf[3];
+    std::snprintf(buf, sizeof(buf), "%02X", g.code()[i]);
+    expected += buf;
+  }
+  expected += "E9";
+  for (int b = 0; b < 4; ++b) {
+    char buf[3];
+    std::snprintf(buf, sizeof(buf), "%02X", (static_cast<uint32_t>(disp) >> (8 * b)) & 0xFF);
+    expected += buf;
+  }
+  // Trailing bytes after the jump (if any) must stay untouched.
+  for (std::size_t i = instrEnd; i < g.code().size(); ++i) {
+    char buf[3];
+    std::snprintf(buf, sizeof(buf), "%02X", g.code()[i]);
+    expected += buf;
+  }
+  checkBytes(name, g, expected);
+}
+
+static void test_backward_jmp_bytes() {
+  // Backward `jmp` followed by a trailing epilogue: the displacement must
+  // be target - jmp_end, NOT target - buffer-size-at-patch-time.
+  CodeGen m;
+  CodeGen::Label s2 = m.newLabel();
+  m.movImm(X64Reg::Rax, 0);
+  m.bind(s2);
+  m.movImm(X64Reg::Rcx, 1);
+  checkBackwardJmpBytes("backward jmp pins next_rip before trailing epilogue", m, s2);
+  m.movImm(X64Reg::Rax, 0xAD);
+  m.retInsn();
+
+  // Same check for a jump at the very end of the buffer (no trailing code).
+  CodeGen n;
+  CodeGen::Label t2 = n.newLabel();
+  n.movImm(X64Reg::Rcx, 1);
+  n.bind(t2);
+  n.movImm(X64Reg::Rax, 0);
+  checkBackwardJmpBytes("backward jmp with no trailing code", n, t2);
+}
+
 #ifdef CODEGEN_EXEC_TESTS
 // Maps the emitted bytes as executable memory and returns an entry point.
 static void* emitExecutable(const std::vector<std::uint8_t>& code) {
@@ -386,71 +469,6 @@ static int runGuarded(void* fn, void* arg, std::int64_t* resultSlot) {
   }
   if (WIFSIGNALED(status)) return -1;  // SIGALRM/SIGSEGV -> hang or crash
   return WEXITSTATUS(status);
-}
-
-// Byte-level companion for the backward-jmp fix: `jmp rel32` must encode
-// disp = target - (instruction_end), pinned when the slot is reserved,
-// regardless of epilogue bytes emitted afterwards. The expectation is
-// computed from the offsets recorded by the emitter itself (label position
-// and displacement-slot end), so it cannot drift out of sync with the
-// instruction layout.
-static void checkBackwardJmpBytes(const char* name, CodeGen& g,
-                                  CodeGen::Label target) {
-  const std::size_t jmpStart = g.offset();
-  g.jmp(target);
-  // The jump was backward (label already bound), so the emitter patched it
-  // immediately. Locate the displacement slot by scanning backwards for the
-  // `jmp rel32` opcode: the instruction length is variable because movImm
-  // may emit either a 7-byte sign-extended form or a 10-byte movabs form.
-  const std::size_t dispSlot = jmpStart + 1;  // tentative: opcode at jmpStart
-  std::size_t opcode = dispSlot - 1;
-  if (opcode >= 1 && g.code()[dispSlot - 1] != 0xE9) {
-    // REX prefix precedes the opcode byte; step back over it.
-    opcode = dispSlot - 2;
-  }
-  const std::size_t instrEnd = dispSlot + 4;  // next RIP after the jmp
-  const int32_t disp = static_cast<int32_t>(g.labelOffset(target)) -
-                       static_cast<int32_t>(instrEnd);
-  std::string expected;
-  for (std::size_t i = 0; i < opcode; ++i) {  // bytes before the opcode
-    char buf[3];
-    std::snprintf(buf, sizeof(buf), "%02X", g.code()[i]);
-    expected += buf;
-  }
-  expected += "E9";
-  for (int b = 0; b < 4; ++b) {
-    char buf[3];
-    std::snprintf(buf, sizeof(buf), "%02X", (static_cast<uint32_t>(disp) >> (8 * b)) & 0xFF);
-    expected += buf;
-  }
-  // Trailing bytes after the jump (if any) must stay untouched.
-  for (std::size_t i = instrEnd; i < g.code().size(); ++i) {
-    char buf[3];
-    std::snprintf(buf, sizeof(buf), "%02X", g.code()[i]);
-    expected += buf;
-  }
-  checkBytes(name, g, expected);
-}
-
-static void test_backward_jmp_bytes() {
-  // Backward `jmp` followed by a trailing epilogue: the displacement must
-  // be target - jmp_end, NOT target - buffer-size-at-patch-time.
-  CodeGen m;
-  CodeGen::Label s2 = m.newLabel();
-  m.movImm(X64Reg::Rax, 0);
-  m.bind(s2);
-  m.movImm(X64Reg::Rcx, 1);
-  checkBackwardJmpBytes("backward jmp pins next_rip before trailing epilogue", m, s2);
-  m.movImm(X64Reg::Rax, 0xAD);
-  m.retInsn();
-
-  // Same check for a jump at the very end of the buffer (no trailing code).
-  CodeGen n;
-  CodeGen::Label t2 = n.newLabel();
-  n.movImm(X64Reg::Rcx, 1);
-  n.bind(t2);
-  n.movImm(X64Reg::Rax, 0);
-  checkBackwardJmpBytes("backward jmp with no trailing code", n, t2);
 }
 
 static void test_exec_backward_jmp_with_trailing_epilogue() {
@@ -740,6 +758,7 @@ static void test_exec_syscall_write() {
 #endif
 
 int main() {
+  test_target_descriptor();
   test_mov_imm();
   test_mov_reg_and_stack();
   test_memory_operands();

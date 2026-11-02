@@ -1,6 +1,5 @@
 #include "vm.h"
 
-#include <iostream>
 #include <string>
 #include <utility>
 
@@ -33,19 +32,25 @@ const std::string& VM::nameAt(const Bytecode& bytecode, int index) const {
 // ------------------------------------------------------------------ registers
 
 Value& VM::getReg(int index) {
-  if (index < 0 || static_cast<size_t>(index) >= registers_.size()) {
+  if (frames_.empty()) fail("register access outside of a call frame");
+  if (index < 0) fail("register index out of range: " + std::to_string(index));
+  const std::size_t absolute = frames_.back().regBase + static_cast<std::size_t>(index);
+  if (absolute >= registers_.size()) {
     fail("register index out of range: " + std::to_string(index));
   }
-  return registers_[static_cast<size_t>(index)];
+  return registers_[absolute];
 }
 
 void VM::setReg(int index, Value value) { getReg(index) = std::move(value); }
 
 CellPtr& VM::localAt(int index) {
-  if (index < 0 || static_cast<size_t>(index) >= locals_.size()) {
+  if (frames_.empty()) fail("local access outside of a call frame");
+  if (index < 0) fail("local index out of range: " + std::to_string(index));
+  const std::size_t absolute = frames_.back().localBase + static_cast<std::size_t>(index);
+  if (absolute >= locals_.size()) {
     fail("local index out of range: " + std::to_string(index));
   }
-  return locals_[static_cast<size_t>(index)];
+  return locals_[absolute];
 }
 
 // -------------------------------------------------------------------- runtime
@@ -56,6 +61,64 @@ void VM::defineGlobal(const std::string& name, Value value, bool /*isImmutable*/
   globals_[name] = std::move(value);
 }
 
+Value VM::callNative(Function& fn, std::vector<Value> args, int line, int col) {
+  int savedLine = currentLine;
+  int savedCol = currentCol;
+  currentLine = line;
+  currentCol = col;
+  try {
+    Value result = fn.native(*this, args);
+    currentLine = savedLine;
+    currentCol = savedCol;
+    return result;
+  } catch (RuntimeError& error) {
+    if (error.line == 0) {
+      error.line = line;
+      error.col = col;
+    }
+    currentLine = savedLine;
+    currentCol = savedCol;
+    throw;
+  }
+}
+
+void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
+                       int col) {
+  if (!function->proto) {
+    // An AST function (or a bare `Function`) has no bytecode to run; the VM
+    // never falls back to executing the AST.
+    fail("cannot call '" + function->name + "' from the bytecode VM yet", line, col);
+  }
+
+  const Bytecode& proto = *function->proto;
+  if (args.size() != static_cast<std::size_t>(proto.numParams)) {
+    fail(function->name + "() expects " + std::to_string(proto.numParams) + " argument" +
+             (proto.numParams == 1 ? "" : "s") + ", got " + std::to_string(args.size()),
+         line, col);
+  }
+  if (depth >= maxDepth) {
+    fail("maximum call depth exceeded (possible infinite recursion)", line, col);
+  }
+
+  // The new window starts where the caller's data ends. Arguments are copied
+  // into R0 .. R(n-1), which is exactly the parameter layout the compiler
+  // expects; the prologue then boxes them into local cells.
+  const std::size_t regBase = registers_.size();
+  const int registerCount = proto.numRegisters > proto.numParams ? proto.numRegisters
+                                                                 : proto.numParams;
+  registers_.resize(regBase + static_cast<std::size_t>(registerCount));
+  for (std::size_t i = 0; i < args.size(); ++i) registers_[regBase + i] = std::move(args[i]);
+
+  const std::size_t localBase = locals_.size();
+  const int localCount = proto.numLocals > 0 ? proto.numLocals : 0;
+  locals_.resize(localBase + static_cast<std::size_t>(localCount));
+
+  frames_.push_back(
+      CallFrame{function->proto, 0, resultReg, regBase, localBase});
+  ++depth;
+  stack.push_back(Frame{function->name, line, col});
+}
+
 Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) {
   if (!callee.isFunc()) {
     fail(std::string("cannot call a value of type '") + callee.typeName() + "'", line, col);
@@ -64,32 +127,23 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
   // Keep the callee alive for the whole call: a temporary bound method owns
   // the only strong reference to its `Function` (see Interpreter::call).
   FuncPtr function = callee.funcPtr();
-  Function& fn = *function;
 
-  if (fn.isNative()) {
-    int savedLine = currentLine;
-    int savedCol = currentCol;
-    currentLine = line;
-    currentCol = col;
-    try {
-      Value result = fn.native(*this, args);
-      currentLine = savedLine;
-      currentCol = savedCol;
-      return result;
-    } catch (RuntimeError& error) {
-      if (error.line == 0) {
-        error.line = line;
-        error.col = col;
-      }
-      currentLine = savedLine;
-      currentCol = savedCol;
-      throw;
-    }
+  if (function->isNative()) return callNative(*function, std::move(args), line, col);
+
+  const int savedLine = currentLine;
+  const int savedCol = currentCol;
+  const std::size_t stopDepth = frames_.size() + 1;
+  pushJoltFrame(std::move(function), std::move(args), kNoResult, line, col);
+  try {
+    Value result = runFrames(stopDepth);
+    currentLine = savedLine;
+    currentCol = savedCol;
+    return result;
+  } catch (...) {
+    currentLine = savedLine;
+    currentCol = savedCol;
+    throw;
   }
-
-  // PHASE 6a adds CALL/RETURN and per-function protos. Until then the VM
-  // cannot enter a Jolt function, and it says so instead of executing AST.
-  fail("cannot call '" + fn.name + "' from the bytecode VM yet", line, col);
 }
 
 Value VM::indexGet(const Value& object, const Value& index, int line, int col) {
@@ -123,14 +177,48 @@ void VM::run(const Bytecode& bytecode) {
   const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
   locals_.assign(static_cast<size_t>(localCount), CellPtr{});
+  frames_.clear();
   depth = 0;
   stack.clear();
 
-  const size_t size = bytecode.code.size();
-  size_t pc = 0;
+  // The root chunk is owned by the caller, so the frame keeps a non-owning
+  // handle. Child protos are owned by the Function values that instantiate
+  // them and outlive both the frame and this call to `run`.
+  std::shared_ptr<const Bytecode> root(&bytecode, [](const Bytecode*) {});
+  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, 0, 0});
+  runFrames(0);
+}
 
-  while (pc < size) {
-    const Instruction& instruction = bytecode.code[pc++];
+Value VM::runFrames(std::size_t stopDepth) {
+  while (!frames_.empty()) {
+    const std::size_t frameIndex = frames_.size() - 1;
+    const Bytecode& chunk = *frames_[frameIndex].proto;
+    const std::size_t size = chunk.code.size();
+
+    // Pops the current frame, publishing its result into the caller's window.
+    // Returns true when the pop crossed `stopDepth`, so the nested `call()`
+    // that owns this loop must return the value to its caller.
+    auto leaveFrame = [&](const Value& result) {
+      CallFrame finished = std::move(frames_.back());
+      frames_.pop_back();
+      if (finished.resultReg != kNoResult) {
+        registers_[finished.resultReg] = result;
+      }
+      registers_.resize(finished.regBase);
+      locals_.resize(finished.localBase);
+      if (!stack.empty()) stack.pop_back();
+      if (depth > 0) --depth;
+      return frames_.size() < stopDepth;
+    };
+
+    if (frames_[frameIndex].pc >= size) {
+      // Falling off the end is an implicit `return nil`.
+      Value result;
+      if (leaveFrame(result)) return result;
+      continue;
+    }
+
+    const Instruction instruction = chunk.code[frames_[frameIndex].pc++];
     if (instruction.line > 0) {
       currentLine = instruction.line;
       currentCol = instruction.col;
@@ -142,7 +230,7 @@ void VM::run(const Bytecode& bytecode) {
 
     switch (instruction.op) {
       case OpCode::LOADK:
-        setReg(instruction.a, constantAt(bytecode, instruction.b));
+        setReg(instruction.a, constantAt(chunk, instruction.b));
         break;
 
       case OpCode::MOVE:
@@ -245,7 +333,7 @@ void VM::run(const Bytecode& bytecode) {
         if (instruction.jump < 0 || static_cast<size_t>(instruction.jump) > size) {
           fail("invalid jump target: " + std::to_string(instruction.jump));
         }
-        pc = static_cast<size_t>(instruction.jump);
+        frames_[frameIndex].pc = static_cast<size_t>(instruction.jump);
         break;
 
       case OpCode::JMP_IF_FALSE:
@@ -253,7 +341,7 @@ void VM::run(const Bytecode& bytecode) {
           if (instruction.jump < 0 || static_cast<size_t>(instruction.jump) > size) {
             fail("invalid jump target: " + std::to_string(instruction.jump));
           }
-          pc = static_cast<size_t>(instruction.jump);
+          frames_[frameIndex].pc = static_cast<size_t>(instruction.jump);
         }
         break;
 
@@ -262,16 +350,16 @@ void VM::run(const Bytecode& bytecode) {
           if (instruction.jump < 0 || static_cast<size_t>(instruction.jump) > size) {
             fail("invalid jump target: " + std::to_string(instruction.jump));
           }
-          pc = static_cast<size_t>(instruction.jump);
+          frames_[frameIndex].pc = static_cast<size_t>(instruction.jump);
         }
         break;
 
       case OpCode::SETGLOBAL:
-        globals_[nameAt(bytecode, instruction.b)] = getReg(instruction.a);
+        globals_[nameAt(chunk, instruction.b)] = getReg(instruction.a);
         break;
 
       case OpCode::GETGLOBAL: {
-        const std::string& name = nameAt(bytecode, instruction.b);
+        const std::string& name = nameAt(chunk, instruction.b);
         auto it = globals_.find(name);
         if (it == globals_.end()) fail("undefined variable '" + name + "'", line, col);
         setReg(instruction.a, it->second);
@@ -299,12 +387,55 @@ void VM::run(const Bytecode& bytecode) {
         break;
       }
 
-      // PHASE 6 opcodes are declared now so the instruction budget stays at
-      // 40. The compiler does not emit them until their slice lands, so
+      case OpCode::CALL: {
+        // The callee and its arguments occupy a contiguous window:
+        // R[a] = callee, R[a+1 .. a+b] = arguments. Copy them before entering
+        // the callee, since the register stack may be resized by the call.
+        const Value& calleeValue = getReg(instruction.a);
+        if (!calleeValue.isFunc()) {
+          fail(std::string("cannot call a value of type '") + calleeValue.typeName() + "'", line,
+               col);
+        }
+        FuncPtr function = calleeValue.funcPtr();
+        const int argc = instruction.b;
+        std::vector<Value> args;
+        args.reserve(static_cast<std::size_t>(argc));
+        for (int i = 1; i <= argc; ++i) args.push_back(getReg(instruction.a + i));
+
+        if (function->isNative()) {
+          setReg(instruction.a, callNative(*function, std::move(args), line, col));
+        } else {
+          // A bytecode function gets a new frame; its RETURN publishes the
+          // result into the caller's R[a].
+          const std::size_t resultReg =
+              frames_[frameIndex].regBase + static_cast<std::size_t>(instruction.a);
+          pushJoltFrame(std::move(function), std::move(args), resultReg, line, col);
+        }
+        break;
+      }
+
+      case OpCode::RETURN: {
+        Value result = getReg(instruction.a);
+        if (leaveFrame(result)) return result;
+        break;
+      }
+
+      case OpCode::CLOSURE: {
+        const int child = instruction.b;
+        if (child < 0 || static_cast<std::size_t>(child) >= chunk.children.size()) {
+          fail("invalid function prototype index: " + std::to_string(child), line, col);
+        }
+        std::shared_ptr<const Bytecode> proto = chunk.children[static_cast<std::size_t>(child)];
+        FuncPtr function = makeRef<Function>();
+        function->name = proto->name;
+        function->proto = std::move(proto);
+        setReg(instruction.a, Value(std::move(function)));
+        break;
+      }
+
+      // PHASE 6b-6d opcodes are declared now so the instruction budget stays
+      // at 40. The compiler does not emit them until their slice lands, so
       // reaching one of these cases would be a compiler bug.
-      case OpCode::CALL:
-      case OpCode::RETURN:
-      case OpCode::CLOSURE:
       case OpCode::GETUPVAL:
       case OpCode::SETUPVAL:
       case OpCode::NEWTABLE:
@@ -314,15 +445,19 @@ void VM::run(const Bytecode& bytecode) {
       case OpCode::IN:
         fail("opcode not implemented yet", line, col);
 
-      case OpCode::PRINT:
-        std::cout << getReg(instruction.a).toString() << '\n';
-        std::cout.flush();
+      case OpCode::PRINT: {
+        const std::string text = getReg(instruction.a).toString();
+        platform().write(Platform::kStdout, text.data(), text.size());
+        platform().write(Platform::kStdout, "\n", 1);
+        platform().flush(Platform::kStdout);
         break;
+      }
 
       case OpCode::HALT:
-        return;
+        return Value();
     }
   }
+  return Value();
 }
 
 const Value* VM::findGlobal(const std::string& name) const {

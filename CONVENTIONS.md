@@ -71,6 +71,9 @@ Rules:
 * Summary line in imperative mood ("add", not "added"/"adds").
 * One logical change per commit; stage selectively (`git add -p`).
 * No messages in Spanish; no vague messages such as "wip", "fix bug", "updates".
+* No AI or tool attribution: no `Generated with ...` lines, no `Co-Authored-By:`
+  bot trailers, nothing similar. The footer is reserved for `BREAKING CHANGE:`
+  and `Refs:`.
 
 ## 4. Source code language: English only
 

@@ -47,6 +47,26 @@ struct CoutCapture {
   ~CoutCapture() { std::cout.rdbuf(previous); }
 };
 
+// Host double used to prove that the engine writes through `Platform` instead
+// of touching std::cout/std::cerr directly.
+struct StringPlatform final : Platform {
+  std::string out;
+  std::string err;
+
+  void write(int fd, const char* data, std::size_t length) override {
+    if (fd == kStdout) out.append(data, length);
+  }
+  void writeErr(const char* data, std::size_t length) override { err.append(data, length); }
+  void flush(int) override {}
+  std::size_t read(int, char*, std::size_t) override { return 0; }
+  int open(const char*, OpenMode) override { return kInvalidFd; }
+  void close(int) override {}
+  bool seek(int, std::int64_t, SeekOrigin) override { return false; }
+  [[noreturn]] void exit(int) override { std::abort(); }
+  void* alloc(std::size_t, std::size_t) override { return nullptr; }
+  void dealloc(void*) override {}
+};
+
 std::string runAndCapture(const std::string& source) {
   Bytecode bytecode = compileSource(source);
   VM vm;
@@ -261,6 +281,27 @@ void testComparisons() {
 void testPrint() {
   std::string output = runAndCapture("print(1 + 2);\nprint(\"hola\");\nprint(true);\n");
   assert(output == "3\nhola\ntrue\n");
+}
+
+void testPrintUsesInjectedPlatform() {
+  Bytecode bytecode = compileSource("print(1 + 2);\n");
+  StringPlatform platform;
+  VM vm(platform);
+  vm.run(bytecode);
+
+  assert(platform.out == "3\n");
+  assert(platform.err.empty());
+}
+
+void testBuiltinIoUsesInjectedPlatform() {
+  Bytecode bytecode = compileSource("print(1, 2);\nwrite(\"a\");\neprint(\"e\");\n");
+  StringPlatform platform;
+  VM vm(platform);
+  registerBuiltins(vm);
+  vm.run(bytecode);
+
+  assert(platform.out == "1 2\na");
+  assert(platform.err == "e\n");
 }
 
 void testDivisionByZero() {
@@ -480,8 +521,10 @@ void testLocalCount() {
       "  print(a);\n"
       "}\n");
   VM vm;
+  CoutCapture capture;
   vm.run(bytecode);
 
+  assert(capture.stream.str() == "2\n1\n");
   // Slots are reused when each scope closes.
   assert(vm.localCount() == 2);
 }
@@ -611,9 +654,224 @@ void testRuntimeErrorCarriesSourcePosition() {
   assert(threw);
 }
 
-void testVmRejectsUserFunctionCallsForNow() {
-  // Until CALL/RETURN land (slice 6a), the VM must refuse to enter a Jolt
-  // function instead of silently running the AST.
+// ------------------------------------------------- PHASE 6a: functions
+// Note: slice 6a supports top-level `fn` declarations with parameters,
+// `return`, recursion and general calls. Lambdas, upvalues, collections and
+// for-in arrive in 6b-6d.
+
+void testFunctionCallAndReturn() {
+  Bytecode bytecode = compileSource(
+      "fn add(a, b) { return a + b; }\n"
+      "let sum = add(2, 3);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "sum").isInt() && requireGlobal(vm, "sum").asInt() == 5);
+
+  const Value& add = requireGlobal(vm, "add");
+  assert(add.isFunc() && add.func().isVm());
+  assert(add.func().name == "add");
+}
+
+void testFunctionWithoutReturnYieldsNil() {
+  Bytecode bytecode = compileSource(
+      "fn noop() {}\n"
+      "let r = noop();\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "r").isNil());
+}
+
+void testEarlyReturn() {
+  Bytecode bytecode = compileSource(
+      "fn sign(n) {\n"
+      "  if (n < 0) { return -1; }\n"
+      "  if (n == 0) { return 0; }\n"
+      "  return 1;\n"
+      "}\n"
+      "let a = sign(-5);\n"
+      "let b = sign(0);\n"
+      "let c = sign(7);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "a").asInt() == -1);
+  assert(requireGlobal(vm, "b").asInt() == 0);
+  assert(requireGlobal(vm, "c").asInt() == 1);
+}
+
+void testRecursion() {
+  Bytecode bytecode = compileSource(
+      "fn fact(n) {\n"
+      "  if (n <= 1) { return 1; }\n"
+      "  return n * fact(n - 1);\n"
+      "}\n"
+      "fn fib(n) {\n"
+      "  if (n < 2) { return n; }\n"
+      "  return fib(n - 1) + fib(n - 2);\n"
+      "}\n"
+      "let a = fact(0);\n"
+      "let b = fact(5);\n"
+      "let c = fact(10);\n"
+      "let d = fib(10);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "a").asInt() == 1);
+  assert(requireGlobal(vm, "b").asInt() == 120);
+  assert(requireGlobal(vm, "c").asInt() == 3628800);
+  assert(requireGlobal(vm, "d").asInt() == 55);
+}
+
+void testMutualRecursion() {
+  Bytecode bytecode = compileSource(
+      "fn isEven(n) { if (n == 0) { return true; } return isOdd(n - 1); }\n"
+      "fn isOdd(n) { if (n == 0) { return false; } return isEven(n - 1); }\n"
+      "let a = isEven(10);\n"
+      "let b = isOdd(7);\n"
+      "let c = isEven(7);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "a").isBool() && requireGlobal(vm, "a").asBool());
+  assert(requireGlobal(vm, "b").isBool() && requireGlobal(vm, "b").asBool());
+  assert(requireGlobal(vm, "c").isBool() && !requireGlobal(vm, "c").asBool());
+}
+
+void testFunctionParametersAreLocals() {
+  // A parameter shadows a global of the same name, and can be called.
+  Bytecode bytecode = compileSource(
+      "let x = 100;\n"
+      "fn double(x) { return x * 2; }\n"
+      "fn apply(f, a) { return f(a); }\n"
+      "let a = double(21);\n"
+      "let b = apply(double, 21);\n"
+      "let c = x;\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "a").asInt() == 42);
+  assert(requireGlobal(vm, "b").asInt() == 42);
+  // The global was not mutated by the parameter with the same name.
+  assert(requireGlobal(vm, "c").asInt() == 100);
+}
+
+void testFunctionLocalsAndLoops() {
+  Bytecode bytecode = compileSource(
+      "fn sum(n) {\n"
+      "  var total = 0;\n"
+      "  for (var i = 1; i <= n; i += 1) { total += i; }\n"
+      "  return total;\n"
+      "}\n"
+      "let a = sum(5);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "a").asInt() == 15);
+  // `total` and `i` lived in the call frame, never in the global table.
+  assert(vm.findGlobal("total") == nullptr);
+  assert(vm.findGlobal("i") == nullptr);
+}
+
+void testFunctionValueInVariable() {
+  Bytecode bytecode = compileSource(
+      "fn double(x) { return x * 2; }\n"
+      "let d = double;\n"
+      "let r = d(21);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 42);
+}
+
+void testPrintInsideFunction() {
+  std::string output = runAndCapture(
+      "fn show(x) { print(x); }\n"
+      "show(5);\n");
+  assert(output == "5\n");
+}
+
+void testFunctionSurvivesRunBoundary() {
+  // The closure owns its proto, so a global function stays callable after the
+  // Bytecode that produced it has been destroyed.
+  VM vm;
+  vm.run(compileSource("fn inc(x) { return x + 1; }\n"));
+  vm.run(compileSource("let y = inc(41);\n"));
+  assert(requireGlobal(vm, "y").asInt() == 42);
+}
+
+void testVmCallIntoBytecodeFunction() {
+  VM vm;
+  vm.run(compileSource("fn add(a, b) { return a + b; }\n"));
+
+  const Value* add = vm.findGlobal("add");
+  assert(add != nullptr && add->isFunc());
+  Value result = vm.call(*add, {Value(20), Value(22)}, 1, 1);
+  assert(result.isInt() && result.asInt() == 42);
+}
+
+void testFunctionArityErrors() {
+  assert(runtimeError("fn f(a) { return a; }\nf();\n") ==
+         "f() expects 1 argument, got 0");
+  assert(runtimeError("fn f(a) { return a; }\nf(1, 2);\n") ==
+         "f() expects 1 argument, got 2");
+  assert(runtimeError("fn f() { return nil; }\nf(1);\n") ==
+         "f() expects 0 arguments, got 1");
+}
+
+void testFunctionDepthLimit() {
+  Bytecode bytecode = compileSource(
+      "fn loop(n) { return loop(n + 1); }\n"
+      "let x = loop(0);\n");
+  VM vm;
+  vm.maxDepth = 20;
+  bool threw = false;
+  try {
+    vm.run(bytecode);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message.find("maximum call depth exceeded") != std::string::npos);
+  }
+  assert(threw);
+}
+
+void testFunctionStackTrace() {
+  Bytecode bytecode = compileSource(
+      "fn inner() { return 1 / 0; }\n"
+      "fn outer() { return inner(); }\n"
+      "let x = outer();\n");
+  VM vm;
+  bool threw = false;
+  try {
+    vm.run(bytecode);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message == "division by zero");
+    bool sawOuter = false;
+    bool sawInner = false;
+    for (const Frame& frame : error.stack) {
+      if (frame.function == "outer") sawOuter = true;
+      if (frame.function == "inner") sawInner = true;
+    }
+    assert(sawOuter && sawInner);
+  }
+  assert(threw);
+}
+
+void testMultiArgumentPrintThroughNative() {
+  Bytecode bytecode = compileSource("print(1, 2, 3);\n");
+  VM vm;
+  registerBuiltins(vm);
+  CoutCapture capture;
+  vm.run(bytecode);
+
+  assert(capture.stream.str() == "1 2 3\n");
+}
+
+void testVmRejectsAstFunctions() {
+  // A function with neither a native body nor a proto cannot be executed by
+  // the VM; it must refuse instead of silently running the AST.
   VM vm;
   auto function = makeRef<Function>();
   function->name = "user";
@@ -643,6 +901,8 @@ int main() {
   testUnaryOperators();
   testComparisons();
   testPrint();
+  testPrintUsesInjectedPlatform();
+  testBuiltinIoUsesInjectedPlatform();
   testDivisionByZero();
   testModuloByZero();
   testUndefinedGlobal();
@@ -672,7 +932,22 @@ int main() {
   testVmCallsNatives();
   testVmCallsBoundMethods();
   testRuntimeErrorCarriesSourcePosition();
-  testVmRejectsUserFunctionCallsForNow();
+  testFunctionCallAndReturn();
+  testFunctionWithoutReturnYieldsNil();
+  testEarlyReturn();
+  testRecursion();
+  testMutualRecursion();
+  testFunctionParametersAreLocals();
+  testFunctionLocalsAndLoops();
+  testFunctionValueInVariable();
+  testPrintInsideFunction();
+  testFunctionSurvivesRunBoundary();
+  testVmCallIntoBytecodeFunction();
+  testFunctionArityErrors();
+  testFunctionDepthLimit();
+  testFunctionStackTrace();
+  testMultiArgumentPrintThroughNative();
+  testVmRejectsAstFunctions();
 
   std::puts("vm tests passed");
   return 0;

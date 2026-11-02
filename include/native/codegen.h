@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "native/target.h"
+
 // Minimal x86-64 machine-code emitter (PHASE 7a).
 //
 // Emits native instructions directly as bytes, with labels resolved in two
@@ -63,7 +65,12 @@ class CodeGen {
     int id = -1;
   };
 
-  CodeGen() = default;
+  // CodeGen is the x86-64 backend. It takes a Target so callers never hardcode
+  // the platform; another architecture gets its own backend behind the same
+  // descriptor. Construction throws for a target that has no backend.
+  explicit CodeGen(Target target = Target::linuxX64());
+
+  const Target& target() const { return target_; }
 
   Label newLabel();
   void bind(Label label);
@@ -172,6 +179,7 @@ class CodeGen {
   std::vector<std::size_t> labelOffset_;  // label id -> offset, kUnbound until bound
   std::vector<bool> labelBound_;          // label id -> bound (offset 0 is valid)
   std::vector<PendingFixup> fixups_;
+  Target target_;
 
   static std::uint8_t enc(X64Reg reg) { return static_cast<std::uint8_t>(reg); }
 

@@ -6,6 +6,7 @@
 
 #include "errors.h"
 #include "lexer.h"
+#include "platform.h"
 #include "value.h"
 
 // Engine interface shared by the AST interpreter (PHASE 2) and the bytecode
@@ -22,7 +23,13 @@
 // error reporting).
 class Runtime {
  public:
+  explicit Runtime(Platform& platform) : platform_(&platform) {}
   virtual ~Runtime() = default;
+
+  // Host boundary: nothing below this class may call libc or <iostream>
+  // directly. The dev engine injects `platformPosix()`; the freestanding
+  // runtime injects its own implementation.
+  Platform& platform() const { return *platform_; }
 
   // Calls `callee` with `args`, reporting errors at `line`/`col`.
   virtual Value call(const Value& callee, std::vector<Value> args, int line, int col) = 0;
@@ -53,5 +60,10 @@ class Runtime {
   int currentCol = 1;
 
  protected:
-  Runtime() = default;
+  // Derived engines that do not bring their own Platform get the development
+  // implementation.
+  Runtime() : platform_(&platformPosix()) {}
+
+ private:
+  Platform* platform_ = nullptr;
 };

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +26,7 @@
 class VM : public Runtime {
  public:
   VM() = default;
+  explicit VM(Platform& platform) : Runtime(platform) {}
 
   // Runs the bytecode from the first instruction until HALT or the end.
   // Throws `RuntimeError` if the bytecode attempts an invalid operation.
@@ -51,13 +54,40 @@ class VM : public Runtime {
   bool lessThan(const Value& left, const Value& right, int line, int col) override;
 
  private:
+  static constexpr std::size_t kNoResult = static_cast<std::size_t>(-1);
+
+  // One activation record. Registers and local cells live in two stacks shared
+  // by every live frame; `regBase`/`localBase` are the frame's windows in them.
+  // `resultReg` is the absolute register that receives the return value, or
+  // kNoResult for the root chunk and for calls started outside `run()`.
+  struct CallFrame {
+    std::shared_ptr<const Bytecode> proto;
+    std::size_t pc = 0;
+    std::size_t resultReg = kNoResult;
+    std::size_t regBase = 0;
+    std::size_t localBase = 0;
+  };
+
+  // Registers of every live frame, one window per frame, in call order.
   std::vector<Value> registers_;
+  std::vector<CallFrame> frames_;
   std::vector<CellPtr> locals_;
   std::unordered_map<std::string, Value> globals_;
 
   Value& getReg(int index);
   void setReg(int index, Value value);
   CellPtr& localAt(int index);
+
+  // Runs until HALT or until a RETURN drops below `stopDepth`; the latter
+  // returns the value produced by the frame that crossed the boundary.
+  Value runFrames(std::size_t stopDepth);
+
+  // Pushes the frame for a bytecode function, copying its arguments into the
+  // new window. Throws on arity, depth or a function without a proto.
+  void pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
+                     int col);
+
+  Value callNative(Function& fn, std::vector<Value> args, int line, int col);
 
   const Value& constantAt(const Bytecode& bytecode, int index) const;
   const std::string& nameAt(const Bytecode& bytecode, int index) const;

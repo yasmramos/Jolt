@@ -13,6 +13,7 @@
 #include "gc.h"
 
 class Runtime;
+struct Bytecode;
 struct Env;
 struct Stmt;
 
@@ -426,7 +427,13 @@ struct Function : RefCounted, GcNode {
   // see the full `Env` type destroys the chain correctly.
   std::shared_ptr<Env> closure;
   NativeFn native;
+  // Bytecode function (PHASE 6). A VM function has a proto and no native; an
+  // AST function has neither. `upvalues` keeps the captured cells alive and
+  // is empty until PHASE 6b.
+  std::shared_ptr<const Bytecode> proto;
+  std::vector<CellPtr> upvalues;
   bool isNative() const { return static_cast<bool>(native); }
+  bool isVm() const { return static_cast<bool>(proto); }
 };
 
 // Start/end are integers. `0..5` is exclusive, `0..=5` is inclusive.

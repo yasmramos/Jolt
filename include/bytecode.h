@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -9,13 +10,16 @@
 
 // Low-level bytecode for Jolt's register-based VM.
 //
-// Every instruction works on registers and is designed to map to a single
-// native instruction in PHASE 7. The set is deliberately small: literals share
-// one tagged constant pool, unary operators share one opcode whose `c` field
-// selects the operation, and collections share the GET/SET table pair.
+// Every instruction works on registers and has exactly one direct native
+// lowering in PHASE 7: either a short inline instruction sequence or one call
+// to a named runtime primitive (AGENT.md §3.2). The set is deliberately small:
+// literals share one tagged constant pool, unary operators share one opcode
+// whose `c` field selects the operation, and collections share the GET/SET
+// table pair.
 //
-// PHASE 6 adds functions, collections and iteration, so the budget is exactly
-// 40 opcodes: the ones below. Anything that needs more must first consolidate.
+// PHASE 6 adds functions, collections and iteration, so the set is exactly 40
+// opcodes: the ones below. 40 is a hard ceiling; the retirement ladder for a
+// new opcode is in AGENT.md §3.3.
 
 enum class OpCode : std::uint8_t {
   LOADK,   // R[a] = constants[b]  (nil, bool, int, float or string)
@@ -57,9 +61,9 @@ enum class OpCode : std::uint8_t {
 
   // Functions (PHASE 6). `CALL` uses a contiguous argument window starting at
   // `b + 1`, so a call needs no separate argument-array allocation.
-  CALL,       // R[a] = call(R[b], R[b+1 .. b+c])
+  CALL,       // R[a] = call(R[a], R[a+1 .. a+b]); `b` is the argument count
   RETURN,     // return R[a] from the current frame
-  CLOSURE,    // R[a] = closure(proto constants[b], captures listed in `c`)
+  CLOSURE,    // R[a] = closure of child proto `b` (captures in proto->upvalues)
   GETUPVAL,   // R[a] = upvalues[b]->value
   SETUPVAL,   // upvalues[b]->value = R[a]
 
@@ -71,9 +75,17 @@ enum class OpCode : std::uint8_t {
   ITER,       // R[a] = next item of R[b], or R[a] = nil when exhausted
   IN,         // R[a] = R[b] in R[c]
 
-  PRINT,      // print R[a]
+  PRINT,      // print R[a] (temporary: CALL to the print builtin from 6c/6e,
+              // deleted at the 6f parity gate; AGENT.md §3.6)
   HALT,       // stop execution
 };
+
+// Hard budget gate (AGENT.md §3.3). HALT must stay the last enumerator: adding
+// an opcode without first executing a retirement rung trips this assertion at
+// compile time, so the ceiling cannot drift silently.
+inline constexpr int kOpcodeCount = static_cast<int>(OpCode::HALT) + 1;
+static_assert(kOpcodeCount <= 40,
+              "opcode budget exceeded: execute a retirement rung first (AGENT.md §3.3)");
 
 // Selector stored in `Instruction::c` for `UNOP`. Keeping the operator in the
 // instruction lets PHASE 7 emit one native instruction per case without a
@@ -96,12 +108,27 @@ struct Instruction {
   int col = 0;
 };
 
+// One entry of a proto's capture list. `index` is a local slot in the parent
+// when `inParentLocal` is true, or one of the parent's upvalues otherwise.
+// PHASE 6a only builds protos with an empty list; 6b fills it in.
+struct UpvalDesc {
+  bool inParentLocal = true;
+  int index = 0;
+};
+
+// A function prototype. The root chunk is the `<main>` proto and nested
+// functions are its `children`, instantiated by `CLOSURE` at runtime. Protos
+// are shared pointers so a closure keeps its code alive after the chunk that
+// produced it is gone (REPL entries, `:load`, dynamically returned functions).
 struct Bytecode {
+  std::string name = "<main>";
+  int numParams = 0;
   std::vector<Instruction> code;
   // Tagged constant pool. Uses `Value` so the difference between integers and
   // floats survives, and so strings and global names live in the same pool.
-  // From PHASE 6 the pool also holds function protos.
   std::vector<Value> constants;
+  std::vector<std::shared_ptr<Bytecode>> children;
+  std::vector<UpvalDesc> upvalues;
   int numRegisters = 0;
   // Number of local cells the frame needs.
   int numLocals = 0;

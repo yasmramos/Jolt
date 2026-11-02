@@ -23,6 +23,10 @@ void put8(std::vector<std::uint8_t>& out, std::uint8_t value) { out.push_back(va
 
 }  // namespace
 
+CodeGen::CodeGen(Target target) : target_(target) {
+  requireSupportedTarget(target_);
+}
+
 CodeGen::Label CodeGen::newLabel() {
   Label label;
   label.id = static_cast<int>(labelOffset_.size());

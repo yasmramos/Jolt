@@ -1,9 +1,10 @@
 #include "diagnostic.h"
 
 #include <algorithm>
-#include <iostream>
+#include <algorithm>
 #include <string>
 
+#include "platform.h"
 #include "value.h"
 
 namespace {
@@ -36,34 +37,39 @@ size_t displayColumns(const std::string& text, size_t byteCount) {
 }
 
 void printSnippet(const std::string& sourceName, const std::string& source, int line, int col,
-                  const std::string& kind, const std::string& message) {
+                  const std::string& kind, const std::string& message, Platform& platform) {
   std::string text = lineText(source, line);
   size_t gutter = std::to_string(std::max(line, 1)).size();
   size_t byteColumn = col > 0 ? static_cast<size_t>(col - 1) : 0;
   size_t caret = displayColumns(text, std::min(byteColumn, text.size()));
 
-  std::cout << sourceName << ':' << line << ':' << col << ": " << kind << ": " << message << '\n';
-  std::cout << std::string(gutter + 2, ' ') << "|\n";
-  std::cout << line << ' ' << '|' << ' ' << text << '\n';
-  std::cout << std::string(gutter + 2, ' ') << '|' << ' ' << std::string(caret, ' ') << "^\n";
+  std::string out;
+  out += sourceName + ':' + std::to_string(line) + ':' + std::to_string(col) + ": " + kind + ": " + message + '\n';
+  out += std::string(gutter + 2, ' ') + "|\n";
+  out += std::to_string(line) + ' ' + '|' + ' ' + text + '\n';
+  out += std::string(gutter + 2, ' ') + '|' + ' ' + std::string(caret, ' ') + "^\n";
+  platform.write(Platform::kStdout, out.data(), out.size());
+  platform.flush(Platform::kStdout);
 }
 
 }  // namespace
 
 void printCompileError(const std::string& sourceName, const std::string& source,
-                       const CompileError& error) {
-  printSnippet(sourceName, source, error.line, error.col, "error", error.message);
+                       const CompileError& error, Platform& platform) {
+  printSnippet(sourceName, source, error.line, error.col, "error", error.message, platform);
 }
 
 void printRuntimeError(const std::string& sourceName, const std::string& source,
-                       const RuntimeError& error) {
-  printSnippet(sourceName, source, error.line, error.col, "runtime error", error.message);
+                       const RuntimeError& error, Platform& platform) {
+  printSnippet(sourceName, source, error.line, error.col, "runtime error", error.message, platform);
 
   if (!error.stack.empty()) {
-    std::cout << "stack trace:\n";
+    std::string out = "stack trace:\n";
     for (auto it = error.stack.rbegin(); it != error.stack.rend(); ++it) {
-      std::cout << "  at " << it->function << " (" << sourceName << ':' << it->line << ':'
-                << it->col << ")\n";
+      out += "  at " + it->function + " (" + sourceName + ':' + std::to_string(it->line) + ':'
+             + std::to_string(it->col) + ")\n";
     }
+    platform.write(Platform::kStdout, out.data(), out.size());
+    platform.flush(Platform::kStdout);
   }
 }

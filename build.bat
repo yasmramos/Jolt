@@ -14,6 +14,7 @@ g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe ^
     src\compiler.cpp ^
     src\vm.cpp ^
     src\ops.cpp ^
+    src\platform_posix.cpp ^
     src\interpreter.cpp ^
     src\builtins.cpp ^
     src\diagnostic.cpp ^
