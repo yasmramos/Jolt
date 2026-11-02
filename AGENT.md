@@ -236,7 +236,7 @@ previous one.
   re-entering the AST
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
-- Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. The compiler still rejects collections, lambdas, general calls and `for-in` with a `(Phase 6)` message.
+- Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. Slice 6a is done: top-level `fn` declarations, parameters, `return`, recursion and general calls compile and run on the VM. The compiler still rejects upvalues, lambdas, local `fn` declarations, collections and `for-in` with a `(Phase 6)`/`(Phase 6b)` message.
 
 ### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
@@ -279,7 +279,7 @@ Phase 2: ✅ completed
 Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
-Phase 6: 🔶 in progress ← NEXT (shared runtime and cycle collector in place; collections, lambdas and `for-in` are still missing from the compiler)
+Phase 6: 🔶 in progress ← NEXT (6a.0 and 6a done: shared `Runtime`, per-function protos, `CALL`/`RETURN`/`CLOSURE`, top-level functions, recursion; upvalues, lambdas, collections and `for-in` are still missing)
 Phase 7: 🔶 in progress (7a: x86-64 instruction emitter with tests; no ELF emitter, freestanding runtime or `jolt build` yet)
 Distribution model: freestanding AOT native binary (PHASE 7, Linux x86-64).
 VM = dev engine only. AST interpreter removed after 6f parity gate.

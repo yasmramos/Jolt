@@ -1,7 +1,7 @@
 # PHASE 6 design — functions, closures, collections and iteration
 
-Status: **approved and in progress**. Slice 6a.0 is implemented; the rest is
-queued.
+Status: **approved and in progress**. Slices 6a.0 and 6a are implemented; the
+rest is queued.
 
 Scope (from `AGENT.md` §4, PHASE 6): `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`,
 `SETUPVAL`, per-function protos, a call stack with per-frame registers,
@@ -19,12 +19,13 @@ backend). They come after parity is proven.
 | Slice | Status | Notes |
 |-------|--------|-------|
 | 6a.0 | ✅ done | `Runtime` bridge and `src/ops.{h,cpp}` extraction |
-| 6a | next | protos, `CALL`/`RETURN`/`CLOSURE`, 0 upvalues |
+| 6a | ✅ done | protos, `CALL`/`RETURN`/`CLOSURE`, 0 upvalues |
 | 6b-6f | pending | upvalues, tables, `ITER`, callbacks, parity gate |
 
 The 40-opcode consolidation (D1) is done: `Bytecode::constants` replaces the
-`numbers`/`strings` pools and `UNOP` replaces `NEG`/`NOT`/`BNOT`. The PHASE 6
-opcodes are declared and the VM rejects them until their slice lands.
+`numbers`/`strings` pools and `UNOP` replaces `NEG`/`NOT`/`BNOT`. `CALL`,
+`RETURN` and `CLOSURE` execute in the VM; the table, upvalue, `ITER` and `IN`
+cases still reject with "opcode not implemented yet" until their slice.
 
 Decisions taken while implementing 6a.0, superseding the text below:
 
@@ -40,6 +41,34 @@ Decisions taken while implementing 6a.0, superseding the text below:
   needs.
 - `ops::memberGet` still calls `bindMethod` from `builtins.h`, so anything
   that links `ops.cpp` must link `builtins.cpp` too.
+
+Decisions taken while implementing 6a, superseding the text below:
+
+- `CALL` copies the callee's arguments into a fresh register window
+  (`regBase = registers_.size()`) instead of aliasing the caller's registers at
+  `a + 1`. The argument registers are reused by the caller after the call, and
+  the frame shares one growable `Value` stack, so a copy keeps the two windows
+  independent and makes the return path a simple resize. Correctness first;
+  PHASE 7 can remove the copy when it specializes the calling convention.
+- `Bytecode` owns its children as `shared_ptr<Bytecode>`; a `Function` holds a
+  `shared_ptr<const Bytecode>` proto. The root chunk is referenced by a
+  non-owning `shared_ptr` during `run`, so a closure still keeps its proto
+  alive after the root `Bytecode` is gone (REPL entries, successive runs).
+- 6a only compiles top-level `fn` declarations. Local (nested) declarations
+  are a targeted `CompileError` until 6b, because without upvalues a function
+  could not see the locals it should close over. Top-level declarations are
+  hoisted before any statement, matching `Interpreter::execBlock`.
+- A function that refers to an outer local resolves it as a global until 6b.
+  This is a deliberate 6a limitation: it keeps recursion and top-level helpers
+  working without upvalues, and 6b replaces the resolution with
+  `GETUPVAL`/`SETUPVAL`.
+- 6a's exit criterion is a VM test subset (calls, parameters, return, early
+  return, recursion, mutual recursion, native re-entry, arity and depth
+  errors), not full `tests/04_functions.jolt` parity: that file also uses
+  lambdas, closures and collections, so its parity lands with 6b/6c.
+- `print` keeps the `PRINT` opcode only for exactly one unshadowed argument.
+  Other arities compile to a normal `CALL`, so they need `registerBuiltins`
+  like any other native.
 
 
 ---
@@ -211,7 +240,7 @@ end       HALT
 | Slice | Content | Exit criterion |
 |-------|---------|----------------|
 | 6a.0 | `Runtime` + `src/ops` extraction, `NativeFn` change, VM gets natives and error positions (`Bytecode::lines`, frame names) | Existing suites unchanged; VM can call `assertEq`/`print` natively |
-| 6a | Protos, `CALL`/`RETURN`/`CLOSURE` (0 upvalues), function declarations, parameters, recursion, arity | `tests/04_functions.jolt` runs on the VM with identical stdout |
+| 6a | Protos, `CALL`/`RETURN`/`CLOSURE` (0 upvalues), top-level `fn`, parameters, recursion, arity | VM test subset: calls/return, early return, recursion, mutual recursion, native re-entry, arity/depth errors. Full `tests/04_functions.jolt` parity needs 6b/6c (lambdas, closures, collections) |
 | 6b | `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas, closures escaping their scope | `examples/closures.jolt`, `tests/09_lambdas.jolt` parity |
 | 6c | `NEWTABLE`/`GETTABLE`/`SETTABLE`, array/map literals, indexing, members, methods, ranges, interpolation, `IN` | `tests/02_strings`, `05_collections`, `06_operators` parity |
 | 6d | `ITER` + `for-in` (arrays, strings, maps, lazy ranges), loop-variable cells per iteration | `tests/03_control`, `05_collections` parity |

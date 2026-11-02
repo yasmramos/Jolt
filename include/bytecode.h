@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -57,9 +58,9 @@ enum class OpCode : std::uint8_t {
 
   // Functions (PHASE 6). `CALL` uses a contiguous argument window starting at
   // `b + 1`, so a call needs no separate argument-array allocation.
-  CALL,       // R[a] = call(R[b], R[b+1 .. b+c])
+  CALL,       // R[a] = call(R[a], R[a+1 .. a+b]); `b` is the argument count
   RETURN,     // return R[a] from the current frame
-  CLOSURE,    // R[a] = closure(proto constants[b], captures listed in `c`)
+  CLOSURE,    // R[a] = closure of child proto `b` (captures in proto->upvalues)
   GETUPVAL,   // R[a] = upvalues[b]->value
   SETUPVAL,   // upvalues[b]->value = R[a]
 
@@ -96,12 +97,27 @@ struct Instruction {
   int col = 0;
 };
 
+// One entry of a proto's capture list. `index` is a local slot in the parent
+// when `inParentLocal` is true, or one of the parent's upvalues otherwise.
+// PHASE 6a only builds protos with an empty list; 6b fills it in.
+struct UpvalDesc {
+  bool inParentLocal = true;
+  int index = 0;
+};
+
+// A function prototype. The root chunk is the `<main>` proto and nested
+// functions are its `children`, instantiated by `CLOSURE` at runtime. Protos
+// are shared pointers so a closure keeps its code alive after the chunk that
+// produced it is gone (REPL entries, `:load`, dynamically returned functions).
 struct Bytecode {
+  std::string name = "<main>";
+  int numParams = 0;
   std::vector<Instruction> code;
   // Tagged constant pool. Uses `Value` so the difference between integers and
   // floats survives, and so strings and global names live in the same pool.
-  // From PHASE 6 the pool also holds function protos.
   std::vector<Value> constants;
+  std::vector<std::shared_ptr<Bytecode>> children;
+  std::vector<UpvalDesc> upvalues;
   int numRegisters = 0;
   // Number of local cells the frame needs.
   int numLocals = 0;

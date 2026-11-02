@@ -24,8 +24,10 @@
 //   - if/else, while, classic for, break and continue
 //   - short-circuit operators && and ||, and the ternary operator
 //   - print(expr) with a single argument
+//   - top-level `fn` declarations, parameters, `return` and general calls
 //
-// PHASE 6: functions, closures, calls, collections and for-in.
+// PHASE 6b: upvalues, lambdas and local function declarations.
+// PHASE 6c-6d: collections, `in` and for-in.
 class Compiler {
  public:
   Compiler() = default;
@@ -59,6 +61,10 @@ class Compiler {
   std::vector<Loop> loops_;
   std::unordered_set<std::string> globalConsts_;
 
+  // True while compiling a function body. It keeps block locals local even
+  // when the body's own scope is the innermost one.
+  bool inFunction_ = false;
+
   // Position of the node being compiled; stamped onto every emitted
   // instruction so the VM can report runtime errors with line/column.
   int currentLine_ = 1;
@@ -76,7 +82,7 @@ class Compiler {
   int currentOffset() const;
 
   // Scopes and variables.
-  bool inGlobalScope() const { return scopes_.size() <= 1; }
+  bool inGlobalScope() const { return !inFunction_ && scopes_.size() <= 1; }
   void pushScope();
   void popScope();
   int declareLocal(const std::string& name, bool isImmutable);
@@ -87,11 +93,14 @@ class Compiler {
   int compileVariable(const std::string& name);
   int compileAssign(const AssignExpr& assign, int line, int col);
   int compileTernary(const TernaryExpr& expr);
+  int compileCall(const CallExpr& call, int line, int col);
 
   void compileStmt(const Stmt& stmt);
   void compileBlockBody(const BlockStmt& block);
   void compileScopedBlock(const Stmt& stmt);
   void compileLet(const LetStmt& stmt);
+  void compileFnDecl(const FnDeclStmt& fn, int line, int col);
+  void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);
   void compileFor(const ForStmt& stmt);
@@ -99,6 +108,11 @@ class Compiler {
   void compileContinue(const Stmt& stmt);
   void compilePrint(const Expr& expr);
   bool isPrintCall(const Expr& expr) const;
+
+  // Compiles `body` as a child proto of the chunk being built and returns its
+  // index in `bc_.children`. The parent compiler state is saved and restored.
+  int compileFunctionProto(const std::string& name, const std::vector<std::string>& params,
+                           const StmtPtr& body, int line, int col);
 };
 
 // Shortcut equivalent to `Compiler{}.compile(program)`.

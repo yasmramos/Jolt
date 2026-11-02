@@ -1,5 +1,6 @@
 #include "compiler.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <variant>
@@ -277,6 +278,7 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   scopes_.clear();
   loops_.clear();
   globalConsts_.clear();
+  inFunction_ = false;
 
   if (!program) fail("empty program", 1, 1);
 
@@ -284,7 +286,19 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   // interpreter (and so the REPL keeps definitions between entries).
   scopes_.push_back(Scope{});
   if (const auto* block = std::get_if<BlockStmt>(&program->node)) {
-    compileBlockBody(*block);
+    // Top-level function declarations are hoisted, like `execBlock` does in
+    // the interpreter, so a call can appear before the declaration.
+    for (const auto& child : block->stmts) {
+      if (!child) continue;
+      if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        compileFnDecl(*fn, child->line, child->col);
+      }
+    }
+    for (const auto& child : block->stmts) {
+      if (!child) continue;
+      if (std::holds_alternative<FnDeclStmt>(child->node)) continue;
+      compileStmt(*child);
+    }
   } else {
     compileStmt(*program);
   }
@@ -331,11 +345,13 @@ void Compiler::compileStmt(const Stmt& stmt) {
             }
           },
           [&](const LetStmt& s) { compileLet(s); },
+          [&](const FnDeclStmt& s) { compileFnDecl(s, stmt.line, stmt.col); },
           [&](const BlockStmt& s) {
             pushScope();
             compileBlockBody(s);
             popScope();
           },
+          [&](const ReturnStmt& s) { compileReturn(s); },
           [&](const IfStmt& s) { compileIf(s); },
           [&](const WhileStmt& s) { compileWhile(s); },
           [&](const ForStmt& s) { compileFor(s); },
@@ -369,6 +385,111 @@ void Compiler::compileLet(const LetStmt& s) {
     emit(OpCode::DECLLOCAL, reg, slot);
   }
   freeReg();
+}
+
+void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
+  if (!inGlobalScope()) {
+    fail("local function declarations are not supported by the bytecode compiler yet (Phase 6b)",
+         line, col);
+  }
+
+  currentLine_ = line;
+  currentCol_ = col;
+  int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col);
+  int reg = allocReg();
+  emit(OpCode::CLOSURE, reg, child);
+  // Top-level functions are globals; the interpreter hoists them in the global
+  // scope, where they persist across REPL entries.
+  emit(OpCode::SETGLOBAL, reg, addString(fn.name));
+  declareGlobal(fn.name, false);
+  freeReg();
+}
+
+void Compiler::compileReturn(const ReturnStmt& stmt) {
+  if (!inFunction_) fail("'return' outside of a function", currentLine_, currentCol_);
+
+  int reg;
+  if (stmt.value) {
+    reg = compileExpr(*stmt.value);
+  } else {
+    reg = allocReg();
+    emit(OpCode::LOADK, reg, addConstant(Value()));
+  }
+  emit(OpCode::RETURN, reg);
+  freeReg();
+}
+
+int Compiler::compileFunctionProto(const std::string& name,
+                                   const std::vector<std::string>& params, const StmtPtr& body,
+                                   int line, int col) {
+  // Save the parent chunk and its compilation state. Functions are compiled
+  // into their own proto with fresh registers, locals, scopes and loops.
+  Bytecode parent = std::move(bc_);
+  const int parentNextReg = nextReg_;
+  const int parentMaxReg = maxReg_;
+  const int parentNextLocal = nextLocal_;
+  const int parentMaxLocal = maxLocal_;
+  std::vector<Scope> parentScopes = std::move(scopes_);
+  std::vector<Loop> parentLoops = std::move(loops_);
+  const int parentLine = currentLine_;
+  const int parentCol = currentCol_;
+  const bool parentInFunction = inFunction_;
+
+  bc_ = Bytecode{};
+  bc_.name = name;
+  bc_.numParams = static_cast<int>(params.size());
+  nextReg_ = 0;
+  maxReg_ = 0;
+  nextLocal_ = 0;
+  maxLocal_ = 0;
+  scopes_.clear();
+  loops_.clear();
+  inFunction_ = true;
+
+  // The function body lives in the parameter scope; it is not a nested block.
+  pushScope();
+  for (const std::string& param : params) declareLocal(param, false);
+
+  // Incoming arguments already sit in R0 .. R(n-1), so the prologue only has
+  // to box each one into its cell. Afterwards the registers are reusable.
+  for (size_t i = 0; i < params.size(); ++i) {
+    emit(OpCode::DECLLOCAL, static_cast<int>(i), static_cast<int>(i));
+  }
+  maxReg_ = bc_.numParams;
+  nextReg_ = 0;
+
+  if (!body) {
+    fail("internal compiler error: function body is missing", line, col);
+  }
+  if (const auto* block = std::get_if<BlockStmt>(&body->node)) {
+    compileBlockBody(*block);
+  } else {
+    compileStmt(*body);
+  }
+
+  // Falling off the end of a function returns nil, like the interpreter.
+  int nilReg = allocReg();
+  emit(OpCode::LOADK, nilReg, addConstant(Value()));
+  emit(OpCode::RETURN, nilReg);
+
+  bc_.numRegisters = maxReg_;
+  bc_.numLocals = maxLocal_;
+
+  Bytecode proto = std::move(bc_);
+  bc_ = std::move(parent);
+  nextReg_ = parentNextReg;
+  maxReg_ = parentMaxReg;
+  nextLocal_ = parentNextLocal;
+  maxLocal_ = parentMaxLocal;
+  scopes_ = std::move(parentScopes);
+  loops_ = std::move(parentLoops);
+  currentLine_ = parentLine;
+  currentCol_ = parentCol;
+  inFunction_ = parentInFunction;
+
+  int index = static_cast<int>(bc_.children.size());
+  bc_.children.push_back(std::make_shared<Bytecode>(std::move(proto)));
+  return index;
 }
 
 void Compiler::compileIf(const IfStmt& s) {
@@ -470,6 +591,26 @@ int Compiler::compileVariable(const std::string& name) {
     emit(OpCode::GETGLOBAL, reg, addString(name));
   }
   return reg;
+}
+
+int Compiler::compileCall(const CallExpr& call, int line, int col) {
+  // `CALL` reads a contiguous window, so the callee and every argument must be
+  // in consecutive registers. The counter discipline of `compileExpr` already
+  // guarantees it; the check turns a future regression into a clear error.
+  int callee = compileExpr(*call.callee);
+  for (const auto& arg : call.args) {
+    int expected = nextReg_;
+    int reg = compileExpr(*arg);
+    if (reg != expected) {
+      fail("internal compiler error: call arguments are not contiguous", line, col);
+    }
+  }
+
+  currentLine_ = line;
+  currentCol_ = col;
+  emit(OpCode::CALL, callee, static_cast<int>(call.args.size()));
+  freeReg(static_cast<int>(call.args.size()));
+  return callee;
 }
 
 int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
@@ -607,6 +748,7 @@ int Compiler::compileExpr(const Expr& expr) {
           [&](const AssignExpr& assign) -> int {
             return compileAssign(assign, expr.line, expr.col);
           },
+          [&](const CallExpr& call) -> int { return compileCall(call, expr.line, expr.col); },
           [&](const TernaryExpr& ternary) -> int { return compileTernary(ternary); },
           [&](const auto&) -> int {
             fail("this expression is not supported by the bytecode compiler yet (Phase 6)",
@@ -620,9 +762,14 @@ int Compiler::compileExpr(const Expr& expr) {
 
 bool Compiler::isPrintCall(const Expr& expr) const {
   const auto* call = std::get_if<CallExpr>(&expr.node);
-  if (!call || !call->callee) return false;
+  // Only the single-argument form uses the PRINT opcode, which needs no
+  // registered builtin. Other arities become normal calls to `print`.
+  if (!call || !call->callee || call->args.size() != 1) return false;
   const auto* callee = std::get_if<VariableExpr>(&call->callee->node);
-  return callee != nullptr && callee->name == "print";
+  if (callee == nullptr || callee->name != "print") return false;
+  // A local named `print` shadows the builtin and must be called normally.
+  LocalVar local;
+  return !resolveLocal("print", local);
 }
 
 void Compiler::compilePrint(const Expr& expr) {

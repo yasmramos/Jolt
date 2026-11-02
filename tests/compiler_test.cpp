@@ -421,11 +421,79 @@ void testBitwiseOps() {
   assert(bc.code[21].c == static_cast<int>(UnaryOp::BitNot));
 }
 
+void testFunctionProtosAndCalls() {
+  Bytecode bc = compileSource(
+      "fn add(a, b) { return a + b; }\n"
+      "let r = add(2, 3);\n");
+
+  // The declaration becomes a child proto, not a constant.
+  assert(bc.children.size() == 1);
+  const Bytecode& add = *bc.children[0];
+  assert(add.name == "add");
+  assert(add.numParams == 2);
+  assert(add.numLocals == 2);
+  assert(add.numRegisters == 2);
+
+  // Parameters arrive in R0/R1 and are boxed into cells by the prologue.
+  assert(add.code.size() == 8);
+  assert(add.code[0].op == OpCode::DECLLOCAL);
+  assert(add.code[0].a == 0 && add.code[0].b == 0);
+  assert(add.code[1].op == OpCode::DECLLOCAL);
+  assert(add.code[1].a == 1 && add.code[1].b == 1);
+  assert(add.code[2].op == OpCode::GETLOCAL && add.code[2].b == 0);
+  assert(add.code[3].op == OpCode::GETLOCAL && add.code[3].b == 1);
+  assert(add.code[4].op == OpCode::ADD);
+  assert(add.code[4].a == 0 && add.code[4].b == 0 && add.code[4].c == 1);
+  assert(add.code[5].op == OpCode::RETURN && add.code[5].a == 0);
+
+  // Falling off the end returns nil.
+  assert(add.code[6].op == OpCode::LOADK);
+  assert(add.code[7].op == OpCode::RETURN);
+
+  // The root instantiates the proto and stores it as a global.
+  assert(bc.code[0].op == OpCode::CLOSURE);
+  assert(bc.code[0].a == 0 && bc.code[0].b == 0);
+  assert(bc.code[1].op == OpCode::SETGLOBAL);
+
+  // Callee and arguments occupy a contiguous window; `b` is the arity.
+  bool sawCall = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::CALL) {
+      sawCall = true;
+      assert(instruction.a == 0);
+      assert(instruction.b == 2);
+    }
+  }
+  assert(sawCall);
+}
+
+void testFunctionHoisting() {
+  // A call may precede the declaration: the compiler emits every top-level
+  // `fn` before the statements that use it.
+  Bytecode bc = compileSource(
+      "let r = add(1, 2);\n"
+      "fn add(a, b) { return a + b; }\n");
+  assert(bc.children.size() == 1);
+  assert(bc.code[0].op == OpCode::CLOSURE);
+  assert(bc.code[1].op == OpCode::SETGLOBAL);
+}
+
+void testMultiArgumentPrint() {
+  // Only the single-argument form uses PRINT; other arities are real calls.
+  Bytecode bc = compileSource("print(1, 2);\n");
+  assert(bc.code.size() == 5);
+  assert(bc.code[0].op == OpCode::GETGLOBAL);
+  assert(bc.code[1].op == OpCode::LOADK);
+  assert(bc.code[2].op == OpCode::LOADK);
+  assert(bc.code[3].op == OpCode::CALL);
+  assert(bc.code[3].a == 0 && bc.code[3].b == 2);
+  assert(bc.code[4].op == OpCode::HALT);
+}
+
 void testUnsupportedConstructs() {
-  // PHASE 6: functions, calls, collections and iteration.
-  expectCompileError("fn f() { return 1; }\n", "function declaration");
-  expectCompileError("print(1, 2);\n", "multiple print arguments");
-  expectCompileError("foo(1);\n", "arbitrary call");
+  // PHASE 6b-6d: local functions, collections and iteration.
+  expectCompileError("fn outer() { fn inner() {} }\n", "nested function declaration");
+  expectCompileError("{ fn f() {} }\n", "block-level function declaration");
   expectCompileError("let x = [1, 2];\n", "array literal");
   expectCompileError("let m = {a: 1};\n", "map literal");
   expectCompileError("let s = \"a${b}\";\n", "string interpolation");
@@ -466,6 +534,9 @@ int main() {
   testLogicalShortCircuit();
   testTernary();
   testBitwiseOps();
+  testFunctionProtosAndCalls();
+  testFunctionHoisting();
+  testMultiArgumentPrint();
   testUnsupportedConstructs();
 
   std::puts("compiler tests passed");
