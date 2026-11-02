@@ -29,3 +29,8 @@ build-cmake/
 *.obj
 sanitizer*
 LSan.*
+
+# Native codegen scratch build directory
+build-native-test/
+build-fix/
+.scratch-test.txt

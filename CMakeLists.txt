@@ -100,6 +100,16 @@ if(BUILD_TESTING)
   target_compile_options(gc_test PRIVATE ${JOLT_WARNINGS})
   add_test(NAME gc_test COMMAND gc_test)
 
+  # x86-64 machine-code emitter unit tests (PHASE 7a). The byte-exact checks
+  # run everywhere; the behavioral mmap/exec checks only on Linux x86-64.
+  add_executable(codegen_test
+    src/native/codegen.cpp
+    tests/codegen_test.cpp
+  )
+  target_include_directories(codegen_test PRIVATE src include)
+  target_compile_options(codegen_test PRIVATE ${JOLT_WARNINGS})
+  add_test(NAME codegen_test COMMAND codegen_test)
+
   file(GLOB jolt_tests CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.jolt"
   )
