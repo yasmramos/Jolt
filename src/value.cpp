@@ -3,7 +3,7 @@
 #include "env.h"
 
 #include <cmath>
-#include <cstdio>
+#include <charconv>
 
 const char* Value::typeName() const {
   switch (type()) {
@@ -85,8 +85,9 @@ static std::string formatFloat(double d) {
   if (std::isnan(d)) return "nan";
   if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
   char buffer[64];
-  std::snprintf(buffer, sizeof buffer, "%.15g", d);
-  return buffer;
+  auto result = std::to_chars(buffer, buffer + sizeof(buffer), d, std::chars_format::general, 15);
+  if (result.ec != std::errc()) return "nan";
+  return std::string(buffer, result.ptr);
 }
 
 static void writeValue(std::string& out, const Value& value, bool repr, int depth) {
