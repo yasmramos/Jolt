@@ -182,7 +182,11 @@ void CodeGen::movImm(X64Reg dst, std::int64_t value) {
 void CodeGen::movReg(X64Reg dst, X64Reg src) { aluRegOp(0x89, dst, src); }
 
 void CodeGen::movToMem(X64Reg base, std::int64_t disp, X64Reg src) {
-  storeToMem(base, disp, enc(src), false);
+  // `enc()` returns the full register number (0-15); it must be widened to
+  // int64_t before being passed as the `src` byte, otherwise a value above
+  // 127 is sign-truncated to a negative int and the low-byte conversion at
+  // the call site corrupts REX.R detection and the ModRM reg field.
+  storeToMem(base, disp, static_cast<std::uint8_t>(enc(src)), false);
 }
 
 // Shared body of the two store forms. The GPR form is `mov [base+disp], r`
