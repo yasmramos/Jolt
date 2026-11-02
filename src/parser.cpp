@@ -887,7 +887,7 @@ ExprPtr Parser::parsePrimary() {
         } else if (check(Tok::Int)) {
           key = std::to_string(advance().intValue);
         } else if (check(Tok::Float)) {
-          key = Value(previous().floatValue).toString();
+          key = Value(advance().floatValue).toString();
         } else if (check(Tok::True)) {
           advance();
           key = "true";
