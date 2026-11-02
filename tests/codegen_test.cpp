@@ -19,7 +19,10 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 #define CODEGEN_EXEC_TESTS 1
+#include <csignal>
+#include <cstdlib>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -198,13 +201,16 @@ static void test_control_flow() {
   checkBytes("je rel32 patched", g4, "0F84030000004889F7");
 
   // Backward jump: bind first, then jump back to it.
-  //   bind(top): top=0 ; mov rax,-1 (7) ; jmp top -> disp = 0 - (7+4) = -11
+  //   bind(top): top=0 ; mov rax,-1 (7 bytes) ; jmp top at offset 7 with a
+  //   4-byte displacement slot ending at 12 -> disp = 0 - 12 = -12 (0xF4).
+  //   The origin is the end of the jump instruction itself, pinned when the
+  //   slot is reserved -- not the buffer size at patch time.
   CodeGen g5;
   CodeGen::Label top = g5.newLabel();
   g5.bind(top);
   g5.movImm(X64Reg::Rax, -1);
   g5.jmp(top);
-  checkBytes("jmp rel32 backward", g5, "48C7C0FFFFFFFFE9F5FFFFFF");
+  checkBytes("jmp rel32 backward", g5, "48C7C0FFFFFFFFE9F4FFFFFF");
 
   // Binding an unknown or twice-bound label must be rejected: `bind()`
   // throws std::logic_error in both cases.
@@ -342,6 +348,259 @@ static void test_exec_stack_and_mem() {
   check(result == 18, "exec: push/add/pop sequence returns 18 (got " + std::to_string(result) + ")");
 }
 
+// Runs the emitted function in a forked child with a 2-second alarm so a
+// mis-patched jump (infinite loop or crash) fails the test instead of
+// hanging the suite. Returns the child exit code, or -1 on signal/timeout.
+// The result slot is a pointer to an int64 inside the shared arena: the
+// child writes the computed value there BEFORE exiting (the parent's copy
+// of the private mapping is snapshotted at fork time, so plain _exit codes
+// cannot carry 64-bit results). A hang is killed after the alarm fires --
+// whatever the child wrote up to that point remains visible to the parent.
+// rsp captured at the most recent runGuarded call site (see below).
+static std::uintptr_t gGuardedCallRsp = 0;
+
+static int runGuarded(void* fn, void* arg, std::int64_t* resultSlot) {
+  fflush(nullptr);
+  // Record rsp at the guarded call site so tests that switch to a private
+  // stack can restore the caller frame exactly (see the roundtrip test).
+  std::uintptr_t rspHere = 0;
+  asm volatile("mov %%rsp, %0" : "=r"(rspHere));
+  gGuardedCallRsp = rspHere;
+  pid_t child = fork();
+  if (child == 0) {
+    alarm(2);
+    auto callable = reinterpret_cast<std::int64_t (*)(void*)>(fn);
+    *resultSlot = callable(arg);
+    _exit(0);
+  }
+  int status = 0;
+  for (int waited = 0;; ++waited) {
+    pid_t done = waitpid(child, &status, WNOHANG);
+    if (done == child) break;
+    usleep(20000);  // 20 ms poll
+    if (waited >= 150) {  // ~3 s wall clock: treat as hang
+      kill(child, SIGKILL);
+      waitpid(child, &status, 0);
+      return -1;
+    }
+  }
+  if (WIFSIGNALED(status)) return -1;  // SIGALRM/SIGSEGV -> hang or crash
+  return WEXITSTATUS(status);
+}
+
+// Byte-level companion for the backward-jmp fix: `jmp rel32` must encode
+// disp = target - (instruction_end), pinned when the slot is reserved,
+// regardless of epilogue bytes emitted afterwards. The expectation is
+// computed from the offsets recorded by the emitter itself (label position
+// and displacement-slot end), so it cannot drift out of sync with the
+// instruction layout.
+static void checkBackwardJmpBytes(const char* name, CodeGen& g,
+                                  CodeGen::Label target) {
+  const std::size_t jmpStart = g.offset();
+  g.jmp(target);
+  // The jump was backward (label already bound), so the emitter patched it
+  // immediately. Locate the displacement slot by scanning backwards for the
+  // `jmp rel32` opcode: the instruction length is variable because movImm
+  // may emit either a 7-byte sign-extended form or a 10-byte movabs form.
+  const std::size_t dispSlot = jmpStart + 1;  // tentative: opcode at jmpStart
+  std::size_t opcode = dispSlot - 1;
+  if (opcode >= 1 && g.code()[dispSlot - 1] != 0xE9) {
+    // REX prefix precedes the opcode byte; step back over it.
+    opcode = dispSlot - 2;
+  }
+  const std::size_t instrEnd = dispSlot + 4;  // next RIP after the jmp
+  const int32_t disp = static_cast<int32_t>(g.labelOffset(target)) -
+                       static_cast<int32_t>(instrEnd);
+  std::string expected;
+  for (std::size_t i = 0; i < opcode; ++i) {  // bytes before the opcode
+    char buf[3];
+    std::snprintf(buf, sizeof(buf), "%02X", g.code()[i]);
+    expected += buf;
+  }
+  expected += "E9";
+  for (int b = 0; b < 4; ++b) {
+    char buf[3];
+    std::snprintf(buf, sizeof(buf), "%02X", (static_cast<uint32_t>(disp) >> (8 * b)) & 0xFF);
+    expected += buf;
+  }
+  // Trailing bytes after the jump (if any) must stay untouched.
+  for (std::size_t i = instrEnd; i < g.code().size(); ++i) {
+    char buf[3];
+    std::snprintf(buf, sizeof(buf), "%02X", g.code()[i]);
+    expected += buf;
+  }
+  checkBytes(name, g, expected);
+}
+
+static void test_backward_jmp_bytes() {
+  // Backward `jmp` followed by a trailing epilogue: the displacement must
+  // be target - jmp_end, NOT target - buffer-size-at-patch-time.
+  CodeGen m;
+  CodeGen::Label s2 = m.newLabel();
+  m.movImm(X64Reg::Rax, 0);
+  m.bind(s2);
+  m.movImm(X64Reg::Rcx, 1);
+  checkBackwardJmpBytes("backward jmp pins next_rip before trailing epilogue", m, s2);
+  m.movImm(X64Reg::Rax, 0xAD);
+  m.retInsn();
+
+  // Same check for a jump at the very end of the buffer (no trailing code).
+  CodeGen n;
+  CodeGen::Label t2 = n.newLabel();
+  n.movImm(X64Reg::Rcx, 1);
+  n.bind(t2);
+  n.movImm(X64Reg::Rax, 0);
+  checkBackwardJmpBytes("backward jmp with no trailing code", n, t2);
+}
+
+static void test_exec_backward_jmp_with_trailing_epilogue() {
+  // Regression for the backward-jmp rel32 off-by-one: the original bug
+  // derived next_rip from the buffer size at patch time instead of pinning
+  // it at the end of the jump instruction when the slot is reserved. Any
+  // code emitted AFTER a backward jmp therefore shifted the displacement
+  // and made the jump land inside the trailing epilogue -- a scenario a
+  // pure byte dump taken right after emission cannot catch. Executed here
+  // under the watchdog: a correct patch returns cleanly, an off-by-one
+  // lands mid-instruction (crash) or loops (timeout).
+  //   mov rax, 3 ; mov rcx, 1 ; top: sub rax, rcx ; cmp rax, 0 ; jne top
+  //   movabs rbx, 0xBEEF   <- trailing epilogue emitted AFTER the jump
+  //   ret                  <- returns rax == 0 only if control flow is exact
+  CodeGen g;
+  CodeGen::Label top = g.newLabel();
+  g.movImm(X64Reg::Rax, 3);
+  g.movImm(X64Reg::Rcx, 1);
+  g.bind(top);
+  g.subReg(X64Reg::Rax, X64Reg::Rcx);
+  g.testReg(X64Reg::Rax);            // ZF set when the counter hits zero
+  g.jcc(Jcc::Ne, top);               // backward jcc fixup
+  g.movImm(X64Reg::Rbx, 0xBEEF);     // extra bytes AFTER the jump: must not
+  g.retInsn();                        // influence the pinned next_rip
+  auto fn = reinterpret_cast<std::int64_t (*)()>(
+      emitExecutable((g.finalize(), g.code())));
+  std::int64_t result = fn();
+  check(result == 0,
+        "exec: backward jcc with trailing epilogue terminates at 0 (got " +
+            std::to_string(result) + ")");
+
+  // Unconditional backward `jmp` executed for real. The loop body cannot
+  // test termination without a jcc, so the counter lives in a private
+  // mmap'd arena and the watchdog child runs the emitted code until it
+  // exits on its own. A correct displacement keeps spinning safely until
+  // the guard kills it (-1 expected); a mis-patched one escapes into the
+  // sentinel epilogue emitted AFTER the jmp and returns normally (0) or
+  // crashes.
+  const std::size_t kSpinArena = 4096;
+  void* sarena = mmap(nullptr, kSpinArena, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (sarena == MAP_FAILED) {
+    std::perror("mmap spin arena");
+    std::exit(1);
+  }
+  CodeGen k;
+  CodeGen::Label spin = k.newLabel();
+  k.movReg(X64Reg::Rbp, X64Reg::Rdi);              // arena base from caller
+  k.movImm(X64Reg::Rax, 0);
+  k.movToMem(X64Reg::Rbp, 0, X64Reg::Rax);         // counter = 0
+  k.movImm(X64Reg::Rcx, 1);                        // step
+  k.movImm(X64Reg::Rdx, 1u << 30);                 // effectively never hit
+  k.bind(spin);                                    // backward target
+  k.movFromMem(X64Reg::Rax, X64Reg::Rbp, 0);       // load counter
+  k.addReg(X64Reg::Rax, X64Reg::Rcx);              // counter += step
+  k.movToMem(X64Reg::Rbp, 0, X64Reg::Rax);         // store counter
+  k.cmpReg(X64Reg::Rax, X64Reg::Rdx);              // flags only
+  k.jmp(spin);                                     // unconditional backward
+                                                   // jmp; epilogue follows
+  k.movImm(X64Reg::Rax, 0xAD);                     // reachable only if the
+                                                   // jmp is mis-patched
+  k.retInsn();
+  std::int64_t spinResult = 0x5EED;  // poison: untouched if the child hangs
+  int guarded = runGuarded(emitExecutable((k.finalize(), k.code())), sarena,
+                           &spinResult);
+  munmap(sarena, kSpinArena);
+  check(guarded == -1 && spinResult == 0x5EED,
+        "exec: unconditional backward jmp spins (watchdog -1), got " +
+            std::to_string(guarded) + " result=" + std::to_string(spinResult));
+}
+
+static void test_exec_rbp_disp32_roundtrip() {
+  // Regression for the ModRM fix: `mov [rbp+disp32], reg` used to encode
+  // mod=00/rm=101 (RIP-relative) for rbp-based disp32 operands, so stores
+  // silently wrote into the executable page neighborhood and loads read
+  // back zeros. This roundtrip runs inside a PRIVATE mmap'd stack frame
+  // (the requested "private stack frame" scenario) and passes only if the
+  // store and the load address the SAME rbp-relative cell with the full
+  // 64-bit imm64 payload.
+  //   Trampoline (entered via `call`, so [rsp] holds the return address):
+  //     mov  rax, rsp                   ; save the caller-frame rsp
+  //     movabs rsp, <private stack top> ; switch to the private frame
+  //     push rax                        ; stash the saved rsp
+  //     mov  rbp, rsp                   ; frame pointer = private stack
+  //     movabs rcx, 0x77AA3355DEADBEEF  ; imm64 payload (forces movabs)
+  //     mov [rbp-0x2000], rcx           ; forced disp32 store (mod=10)
+  //     mov rdx, [rbp-0x2000]           ; forced disp32 load (same cell)
+  //     sub rdx, rcx                    ; zero iff the roundtrip preserved
+  //                                     ; the payload
+  //     mov rax, [rbp]                  ; reload the stashed caller rsp
+  //     mov rsp, rax                    ; restore the caller frame
+  //     ret                             ; return the diff in rax
+  // The caller-frame restoration uses the rsp SAMPLED AT RUNTIME inside
+  // the forked child (via `mov rax, rsp`), not an address baked in by the
+  // parent: forked children may relocate their stack mappings, so any
+  // parent-side sample (even one taken just before fork()) can be stale
+  // there and would fault on `ret`. Because the callee restores rsp and
+  // returns normally, runGuarded's child writes the full 64-bit result
+  // into the shared slot and exits cleanly (status 0, diff 0).
+  static std::int64_t gRoundtripDiff = 0xBAD;
+  gRoundtripDiff = 0xBAD;
+
+  const std::int64_t kPayload = static_cast<std::int64_t>(0x77AA3355DEADBEEFULL);
+
+  const std::size_t kPrivateStack = 64 * 1024;
+  void* stack = mmap(nullptr, kPrivateStack, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (stack == MAP_FAILED) {
+    std::perror("mmap private stack");
+    std::exit(1);
+  }
+  std::uintptr_t rawTop =
+      reinterpret_cast<std::uintptr_t>(stack) + kPrivateStack - 64;
+  std::uintptr_t stackTop = rawTop & ~static_cast<std::uintptr_t>(15);
+
+  CodeGen w;
+  w.movReg(X64Reg::Rax, X64Reg::Rsp);              // runtime sample of caller rsp
+  w.movImm(X64Reg::Rsp, static_cast<std::int64_t>(stackTop));  // movabs form
+  w.push(X64Reg::Rax);                             // stash it in the private frame
+  w.movReg(X64Reg::Rbp, X64Reg::Rsp);              // private frame pointer
+  w.movImm(X64Reg::Rcx, kPayload);                // imm64 forces movabs
+  w.movToMem(X64Reg::Rbp, -0x2000, X64Reg::Rcx);   // forced disp32 store
+  w.movFromMem(X64Reg::Rdx, X64Reg::Rbp, -0x2000); // forced disp32 load
+  w.subReg(X64Reg::Rdx, X64Reg::Rcx);              // zero iff identical
+  w.movReg(X64Reg::Rax, X64Reg::Rdx);              // return value = diff
+  w.movFromMem(X64Reg::Rcx, X64Reg::Rbp, 0);       // reload stashed caller rsp
+  w.movReg(X64Reg::Rsp, X64Reg::Rcx);              // restore caller frame
+  w.retInsn();
+
+  void* fnAddr = emitExecutable((w.finalize(), w.code()));
+
+  // runGuarded invokes fn(arg) in a forked child under a watchdog; the
+  // callee returns normally after restoring the caller frame, so the
+  // expected status is 0 and the verdict is the published 64-bit diff.
+  int status = runGuarded(fnAddr, nullptr, &gRoundtripDiff);
+  check(status == 0 && gRoundtripDiff == 0,
+        "exec: [rbp+disp32] store->load roundtrip on private stack preserves "
+        "imm64 (status=" +
+            std::to_string(status) + ", diff=" + std::to_string(gRoundtripDiff) + ")");
+
+  // Byte-level companion: rbp-based disp32 must use mod=10/rm=101 (never
+  // the RIP-relative mod=00 encoding that produced the original bug).
+  CodeGen b;
+  b.movToMem(X64Reg::Rbp, 0x1234, X64Reg::Rax);
+  b.movFromMem(X64Reg::Rcx, X64Reg::Rbp, 0x1234);
+  check(toHex((b.finalize(), b.code())) == "48898534120000488B8D34120000",
+        "mov [rbp+0x1234]/[rbp+0x1234] byte-exact ModRM (mod=10, rm=101)");
+  munmap(stack, kPrivateStack);
+}
+
 static void test_exec_syscall_write() {
   // Emits `write(1, "Jolt\n", 5)` followed by a zero return, proving the
   // syscall gate and rip-relative addressing work end to end.
@@ -375,12 +634,15 @@ int main() {
   test_memory_operands();
   test_alu();
   test_control_flow();
+  test_backward_jmp_bytes();
   test_sse();
 #ifdef CODEGEN_EXEC_TESTS
   test_exec_arithmetic();
   test_exec_division();
   test_exec_labels_loop();
   test_exec_stack_and_mem();
+  test_exec_backward_jmp_with_trailing_epilogue();
+  test_exec_rbp_disp32_roundtrip();
   test_exec_syscall_write();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
