@@ -150,11 +150,27 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
   // into `registers_` would be unsafe anyway, because `leaveFrame` truncates
   // the shared register stack to the callee's regBase before any outer code
   // could observe the slot.
-  const std::size_t stopDepth = frames_.size() + 1;
+  // The callee's frame index (0-based) inside `runFrames`. A RETURN pops the
+  // callee and leaves the caller's loop running; a nested call returning from
+  // its own callee must not pop this frame again.
+  const std::size_t stopDepth = frames_.size();
+  // Slot `stopDepth` in the shared cell stack is this frame's scratch cell:
+  // it sits directly below the callee's local window, so it survives the
+  // window shrink when the callee pops. `leaveFrame` writes the return value
+  // there (kNoResult protocol) and `call` reads it back after `runFrames`.
+  if (locals_.size() <= stopDepth) locals_.resize(stopDepth + 1);
+  if (!locals_[stopDepth]) locals_[stopDepth] = makeRef<Cell>();
   pushJoltFrame(std::move(function), std::move(args), kNoResult, line, col);
   Value result;
   try {
-    result = runFrames(stopDepth);
+    runFrames(stopDepth + 1);
+    // The return value travels through the shared cell stack: `leaveFrame`
+    // stores it in the absolute slot below the popped frame's local window
+    // (the caller's scratch cell), which survives the window shrink because
+    // captured cells are retired by reference. Reading it here avoids writing
+    // into `registers_`, whose top belongs to the callee and is truncated on
+    // pop (PHASE 6b).
+    result = locals_[stopDepth]->value;
   } catch (...) {
     // Unwind: drop every frame this call pushed (and any deeper ones) so the
     // VM stays consistent for a subsequent run(). `leaveFrame` normally does
@@ -241,6 +257,14 @@ Value VM::runFrames(std::size_t stopDepth) {
       frames_.pop_back();
       if (finished.resultReg != kNoResult) {
         registers_[finished.resultReg] = result;
+      } else {
+        // kNoResult protocol (nested `call`): hand the value back through the
+        // shared cell stack. The slot directly below the popped frame's local
+        // window belongs to the caller's scratch cell, which outlives the
+        // shrink below (PHASE 6b).
+        if (finished.localBase > 0 && locals_[finished.localBase - 1]) {
+          locals_[finished.localBase - 1]->value = result;
+        }
       }
       // Retire the locals this frame still shares with escaping closures
       // before shrinking the shared cell stack (PHASE 6b).

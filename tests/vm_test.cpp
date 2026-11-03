@@ -75,6 +75,18 @@ std::string runAndCapture(const std::string& source) {
   return capture.stream.str();
 }
 
+// Runs a program through the VM and aborts with the error message if the
+// runtime raises. Keeps the test harness from terminating on an uncaught
+// RuntimeError (Phase 6b closure tests rely on this).
+void runOrFail(VM& vm, const Bytecode& bytecode) {
+  try {
+    vm.run(bytecode);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "runtime failure: %s\n", error.what());
+    std::exit(1);
+  }
+}
+
 const Value& requireGlobal(const VM& vm, const std::string& name) {
   const Value* value = vm.findGlobal(name);
   if (!value) {
@@ -879,7 +891,7 @@ void testLambdaCompilesToClosureAndGetUpval() {
       "let add5 = makeAdder(5);\n"
       "let r = add5(40);\n");
   VM vm;
-  vm.run(bytecode);
+  runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "r").asInt() == 45);
   const Value& adder = requireGlobal(vm, "add5");
@@ -908,7 +920,7 @@ void testCounterClosuresShareMutableCell() {
       "let p = peek1();\n"
       "let d = bump2();\n");
   VM vm;
-  vm.run(bytecode);
+  runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "a").asInt() == 1);
   assert(requireGlobal(vm, "b").asInt() == 2);
@@ -932,7 +944,7 @@ void testCapturedLocalsSurviveFrameExit() {
       "let f = scopeTest();\n"
       "let r = f();\n");
   VM vm;
-  vm.run(bytecode);
+  runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "r").asInt() == 6);
   assert(vm.retiredCellCount() >= 2);  // both `y` and `z` were adopted
@@ -946,7 +958,7 @@ void testNestedClosureThroughTwoLevels() {
       "let g = outer(10)(3);\n"
       "let r = g();\n");
   VM vm;
-  vm.run(bc);
+  runOrFail(vm, bc);
 
   assert(requireGlobal(vm, "r").asInt() == 13);
 }
@@ -981,7 +993,7 @@ void testClosureWriteBackIntoEnclosingLocal() {
       "}\n"
       "let r = writer();\n");
   VM vm;
-  vm.run(bytecode);
+  runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "r").asInt() == 42);
 }
