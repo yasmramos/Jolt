@@ -231,6 +231,7 @@ void VM::run(const Bytecode& bytecode) {
   // Closures created by a previous entry may still hold cells that this run
   // adopts through `retiredCells_`; keep them alive, drop the stale ones.
   pruneRetiredCells();
+  openUpvalueSlots_.clear();
   frames_.clear();
   depth = 0;
   stack.clear();
@@ -266,8 +267,9 @@ Value VM::runFrames(std::size_t stopDepth) {
           locals_[finished.localBase - 1]->value = result;
         }
       }
-      // Retire the locals this frame still shares with escaping closures
-      // before shrinking the shared cell stack (PHASE 6b).
+      // Close the upvalues this frame owns before shrinking the shared cell
+      // stack: any slot opened by a CLOSURE must be retired so escaping
+      // closures keep observing the final value (PHASE 6b).
       closeCapturedUpvalues(finished);
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
@@ -513,12 +515,18 @@ Value VM::runFrames(std::size_t stopDepth) {
             if (absolute >= locals_.size()) locals_.resize(absolute + 1);
             cell = locals_[absolute];
             if (!cell) {
-              // Lazily allocate the cell when the captured local was written
-              // through SETUPVAL/assignment before this frame returned. This
-              // mirrors the eager allocation done by DECLLOCAL and keeps the
-              // shared `Cell` valid across closures (PHASE 6b).
+              // A captured slot that was never declared still needs a cell so
+              // the closure can read/write it; treat it as an open upvalue.
               cell = makeRef<Cell>();
               locals_[absolute] = cell;
+            }
+            // Register the slot as an open upvalue: the owning frame's exit
+            // must retire (not destroy) it so closures see the final value
+            // (PHASE 6b). Keep the registry sorted and duplicate-free.
+            auto pos = std::lower_bound(openUpvalueSlots_.begin(),
+                                        openUpvalueSlots_.end(), absolute);
+            if (pos == openUpvalueSlots_.end() || *pos != absolute) {
+              openUpvalueSlots_.insert(pos, absolute);
             }
           } else {
             if (desc.index < 0 || static_cast<std::size_t>(desc.index) >= frame.upvalues.size()) {
@@ -588,8 +596,25 @@ void VM::closeCapturedUpvalues(const CallFrame& frame) {
   const std::size_t end = locals_.size();  // window before `leaveFrame` shrank it
   for (std::size_t i = base; i < end; ++i) {
     const CellPtr& cell = locals_[i];
-    if (cell && cell->refs > 1) retiredCells_.push_back(cell);
+    if (!cell) continue;
+    // Either some closure already shares the cell (refcount > 1) or the
+    // current frame explicitly opened it as an upvalue via CLOSURE. Both
+    // cases must survive the window shrink (PHASE 6b). Slots may be reused
+    // by nested frames, so scan the whole registry instead of assuming a
+    // sorted layout.
+    const bool isOpen =
+        std::find(openUpvalueSlots_.begin(), openUpvalueSlots_.end(), i) !=
+        openUpvalueSlots_.end();
+    if (cell->refs > 1 || isOpen) retiredCells_.push_back(cell);
   }
+  // Forget the slots this frame owned; re-declaring a slot later (a new
+  // frame at the same base) starts from a clean state.
+  openUpvalueSlots_.erase(std::remove_if(openUpvalueSlots_.begin(),
+                                         openUpvalueSlots_.end(),
+                                         [base, end](std::size_t s) {
+                                           return s >= base && s < end;
+                                         }),
+                          openUpvalueSlots_.end());
 }
 
 void VM::pruneRetiredCells() {

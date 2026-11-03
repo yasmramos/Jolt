@@ -85,6 +85,10 @@ class VM : public Runtime {
   // created in one entry keep working in the next; cleared at every top-level
   // run. Keeps each cell alive exactly once, like the old stack window did.
   std::vector<CellPtr> retiredCells_;
+  // Absolute indices into `locals_` of slots opened as upvalues by the
+  // currently executing frames (PHASE 6b). The VM closes them when their
+  // frame exits so closures observe the final value, and `run()` resets it.
+  std::vector<std::size_t> openUpvalueSlots_;
 
   Value& getReg(int index);
   void setReg(int index, Value value);
