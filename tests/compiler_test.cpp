@@ -491,19 +491,26 @@ void testMultiArgumentPrint() {
 }
 
 void testUnsupportedConstructs() {
-  // PHASE 6b-6d: local functions, collections and iteration.
-  expectCompileError("fn outer() { fn inner() {} }\n", "nested function declaration");
-  expectCompileError("{ fn f() {} }\n", "block-level function declaration");
-  expectCompileError("let x = [1, 2];\n", "array literal");
-  expectCompileError("let m = {a: 1};\n", "map literal");
+  // Constructs the compiler still rejects after PHASE 6b-6d. Everything that
+  // landed in those phases (nested fns, arrays, maps, lambdas, for-in, ranges,
+  // indexing, member access) is covered by positive tests instead.
   expectCompileError("let s = \"a${b}\";\n", "string interpolation");
-  expectCompileError("let r = 1..2;\n", "range");
-  expectCompileError("let f = x => x;\n", "lambda");
-  expectCompileError("for (x in 1..2) { print(x); }\n", "for-in loop");
   expectCompileError("let x = 1 in 2;\n", "in operator");
   expectCompileError("return 1;\n", "return statement");
-  expectCompileError("let x = y[0];\n", "index expression");
-  expectCompileError("let x = y.z;\n", "member expression");
+}
+
+void testNestedFunctionDeclarationsAreSupported() {
+  // Regression guard: nested and block-level `fn` declarations compile since
+  // PHASE 6b; they must not be reported as unsupported constructs anymore.
+  expectCompiles("fn outer() { fn inner() {} }\n");
+  expectCompiles("{ fn f() {} }\n");
+  expectCompiles("let x = [1, 2];\n");
+  expectCompiles("let m = {a: 1};\n");
+  expectCompiles("let r = 1..2;\n");
+  expectCompiles("let f = x => x;\n");
+  expectCompiles("for (x in 1..2) { print(x); }\n");
+  expectCompiles("let a = [1]; let x = a[0];\n");
+  expectCompiles("let m = {a: 1}; let x = m.a;\n");
 }
 
 }  // namespace
