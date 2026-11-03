@@ -37,6 +37,16 @@ void expectCompileError(const std::string& source, const char* what) {
   std::exit(1);
 }
 
+void expectCompiles(const std::string& source) {
+  try {
+    compileSource(source);
+  } catch (const CompileError& error) {
+    std::fprintf(stderr, "unexpected CompileError for \"%s\": %s\n", source.c_str(),
+                 error.message.c_str());
+    std::exit(1);
+  }
+}
+
 void testArithmeticAndPrint() {
   Bytecode bc = compileSource("let x = 1 + 2;\nprint(x);\n");
 
@@ -545,6 +555,7 @@ int main() {
   testFunctionHoisting();
   testMultiArgumentPrint();
   testUnsupportedConstructs();
+  testNestedFunctionDeclarationsAreSupported();
 
   std::puts("compiler tests passed");
   return 0;

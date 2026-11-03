@@ -12,6 +12,10 @@ struct Frame {
 
 // Raised by the lexer and the parser.
 struct CompileError : std::exception {
+  CompileError() = default;
+  CompileError(std::string errorMessage, int errorLine, int errorCol)
+      : message(std::move(errorMessage)), line(errorLine), col(errorCol) {}
+
   std::string message;
   int line = 1;
   int col = 1;
@@ -21,6 +25,9 @@ struct CompileError : std::exception {
 
 // Raised while a program is running.
 struct RuntimeError : std::exception {
+  RuntimeError() = default;
+  explicit RuntimeError(std::string errorMessage) : message(std::move(errorMessage)) {}
+
   std::string message;
   int line = 0;
   int col = 0;
