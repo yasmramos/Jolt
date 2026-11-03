@@ -66,6 +66,9 @@ class VM : public Runtime {
     std::size_t resultReg = kNoResult;
     std::size_t regBase = 0;
     std::size_t localBase = 0;
+    // Captured cells of the running closure (PHASE 6b). Empty for the root
+    // chunk and for plain calls without a closure object.
+    std::vector<CellPtr> upvalues;
   };
 
   // Registers of every live frame, one window per frame, in call order.
@@ -73,6 +76,11 @@ class VM : public Runtime {
   std::vector<CallFrame> frames_;
   std::vector<CellPtr> locals_;
   std::unordered_map<std::string, Value> globals_;
+  // Heap cells adopted by `CLOSEUPVALS` when a frame with captured locals
+  // returns (PHASE 6b). Shared across nested `run()` invocations so closures
+  // created in one entry keep working in the next; cleared at every top-level
+  // run. Keeps each cell alive exactly once, like the old stack window did.
+  std::vector<CellPtr> retiredCells_;
 
   Value& getReg(int index);
   void setReg(int index, Value value);
@@ -81,6 +89,10 @@ class VM : public Runtime {
   // Runs until HALT or until a RETURN drops below `stopDepth`; the latter
   // returns the value produced by the frame that crossed the boundary.
   Value runFrames(std::size_t stopDepth);
+
+  // Moves the still-open captured locals of the frame being popped onto the
+  // heap so closures that survive it keep sharing the same cells (PHASE 6b).
+  void closeCapturedUpvalues(const CallFrame& frame);
 
   // Pushes the frame for a bytecode function, copying its arguments into the
   // new window. Throws on arity, depth or a function without a proto.

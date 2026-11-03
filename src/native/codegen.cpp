@@ -282,6 +282,16 @@ void CodeGen::aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src) {
 
 void CodeGen::addReg(X64Reg dst, X64Reg src) { aluRegOp(0x01, dst, src); }
 void CodeGen::subReg(X64Reg dst, X64Reg src) { aluRegOp(0x29, dst, src); }
+
+// sub r/m64, imm32: opcode 0x81 with /5 in the reg field of ModRM. The
+// immediate is sign-extended to 64 bits by the CPU.
+void CodeGen::subRegImm32(X64Reg dst, std::int32_t value) {
+  std::uint8_t d = enc(dst);
+  rex(true, 5, false, 0, d);
+  emitByte(0x81);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (5 << 3) | d));
+  emit32(value);
+}
 void CodeGen::andReg(X64Reg dst, X64Reg src) { aluRegOp(0x21, dst, src); }
 void CodeGen::orReg(X64Reg dst, X64Reg src) { aluRegOp(0x09, dst, src); }
 void CodeGen::xorReg(X64Reg dst, X64Reg src) { aluRegOp(0x31, dst, src); }

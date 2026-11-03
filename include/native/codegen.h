@@ -87,6 +87,7 @@ class CodeGen {
   // Arithmetic/logical on registers (64-bit unless noted).
   void addReg(X64Reg dst, X64Reg src);
   void subReg(X64Reg dst, X64Reg src);
+  void subRegImm32(X64Reg dst, std::int32_t value);  // sub r/m64, imm32
   void imulReg(X64Reg dst, X64Reg src);
   void idiv(X64Reg divisor);  // signed divide rdx:rax by divisor -> rax, remainder rdx
   void cdq();                 // sign-extend rax into rdx:rax (needed before idiv)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,8 +26,9 @@
 //   - short-circuit operators && and ||, and the ternary operator
 //   - print(expr) with a single argument
 //   - top-level `fn` declarations, parameters, `return` and general calls
+//   - lambdas, nested/local `fn` declarations and closures over captured
+//     locals (upvalues resolved at compile time)
 //
-// PHASE 6b: upvalues, lambdas and local function declarations.
 // PHASE 6c-6d: collections, `in` and for-in.
 class Compiler {
  public:
@@ -51,6 +53,45 @@ class Compiler {
     std::vector<int> continues;
   };
 
+  // One entry of the proto stack. `compileFunctionProto` saves the current
+  // state, compiles the child body into a fresh chunk and restores the parent
+  // afterwards, so upvalue resolution can look at every enclosing function at
+  // once (a lambda inside a function body sees that body's locals as capture
+  // candidates). The stack holds every frame except the one being compiled,
+  // which lives in the plain members below.
+  struct FuncState {
+    Bytecode bc;
+    std::vector<Scope> scopes;
+    std::vector<Loop> loops;
+    int nextReg = 0;
+    int maxReg = 0;
+    int nextLocal = 0;
+    int maxLocal = 0;
+    int line = 1;
+    int col = 1;
+    bool inFunction = false;
+    // Capture list of this frame, keyed by variable name and parallel to
+    // `bc.upvalues`, so re-exports can find an existing entry by name.
+    std::unordered_map<std::string, int> upvalueNames;
+    // The frame one level out, or null when this is the outermost function.
+    // Valid pointers into `funcStack_` (deque nodes are stable); rebuilt on
+    // every push/pop of the proto stack.
+    FuncState* enclosing = nullptr;
+  };
+
+  // Upvalue resolution helpers (PHASE 6b). A "frame" is the tuple of the
+  // scope list, the proto under construction and its name-keyed capture
+  // list; the current compilation state and every saved `FuncState` map onto
+  // it, which is why these statics take the pieces explicitly.
+  static bool resolveLocalIn(const std::vector<Scope>& scopes, const std::string& name,
+                             LocalVar& out);
+  static int captureVariable(std::vector<Scope>& scopes, Bytecode& proto,
+                             std::unordered_map<std::string, int>& names,
+                             const std::string& name);
+  static int resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
+                              std::unordered_map<std::string, int>& names, FuncState* parent,
+                              const std::string& name);
+
   Bytecode bc_;
   int nextReg_ = 0;  // next free temporary register
   int maxReg_ = 0;   // maximum number of registers in use at once
@@ -59,7 +100,15 @@ class Compiler {
 
   std::vector<Scope> scopes_;
   std::vector<Loop> loops_;
+  // Proto stack: every enclosing function except the one being compiled.
+  // A deque keeps FuncState addresses stable, so `enclosing` pointers stay
+  // valid while more frames are pushed.
+  std::deque<FuncState> funcStack_;
   std::unordered_set<std::string> globalConsts_;
+
+  // Capture list of the frame currently being compiled, keyed by variable
+  // name and parallel to `bc_.upvalues`.
+  std::unordered_map<std::string, int> currentUpvalueNames_;
 
   // True while compiling a function body. It keeps block locals local even
   // when the body's own scope is the innermost one.
@@ -89,8 +138,16 @@ class Compiler {
   bool resolveLocal(const std::string& name, LocalVar& out) const;
   void declareGlobal(const std::string& name, bool isImmutable);
 
+  // Upvalue resolution (PHASE 6b). Returns the index of `name` in the current
+  // proto's capture list, adding the entry (and, transitively, the re-export
+  // entries in every function in between) when it is not there yet. Returns -1
+  // when the name is not a local or upvalue of any enclosing function, i.e. it
+  // resolves to a global instead.
+  int resolveUpvalue(const std::string& name);
+
   int compileExpr(const Expr& expr);
   int compileVariable(const std::string& name);
+  int compileLambda(const LambdaExpr& lambda, int line, int col);
   int compileAssign(const AssignExpr& assign, int line, int col);
   int compileTernary(const TernaryExpr& expr);
   int compileCall(const CallExpr& call, int line, int col);
