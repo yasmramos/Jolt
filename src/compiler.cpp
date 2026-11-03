@@ -1,5 +1,6 @@
 #include "compiler.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -243,13 +244,14 @@ int Compiler::declareLocal(const std::string& name, bool isImmutable) {
   int slot = nextLocal_++;
   if (nextLocal_ > maxLocal_) maxLocal_ = nextLocal_;
   Scope& scope = scopes_.back();
-  scope.vars[name] = LocalVar{slot, isImmutable};
+  scope.vars[name] = LocalVar{name, slot, isImmutable};
   return slot;
 }
 
-bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
+bool Compiler::resolveLocalIn(const std::vector<Scope>& scopes, const std::string& name,
+                              LocalVar& out) {
   // From the innermost scope to the outermost: the first match wins (shadowing).
-  for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+  for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
     auto found = it->vars.find(name);
     if (found != it->vars.end()) {
       out = found->second;
@@ -257,6 +259,67 @@ bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
     }
   }
   return false;
+}
+
+bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
+  return resolveLocalIn(scopes_, name, out);
+}
+
+// ------------------------------------------------------------------- upvalues
+
+// Adds a capture for `name` to `proto`, whose scopes live in `scopes` and
+// whose transitive captures are tracked in `names`. Returns the index of the
+// new (or already present) entry in `proto.upvalues`, and keeps `names`
+// parallel to that vector so later lookups by name work.
+
+// Walks out from the frame described by (`scopes`, `proto`, `names`) looking
+// for `name`. If it is a local of this frame, captures it directly; otherwise
+// recurses into the enclosing function (when provided) and re-exports that
+// frame's upvalue index. Returns -1 when nothing captures the name, i.e. it
+// resolves to a global.
+int Compiler::resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
+                               std::unordered_map<std::string, int>& names,
+                               FuncState* parent, const std::string& name) {
+  LocalVar local;
+  if (resolveLocalIn(scopes, name, local)) {
+    return captureVariable(proto, names, local);
+  }
+  if (!parent) return -1;
+  int parentIndex = resolveFromFrame(parent->scopes, parent->bc, parent->upvalueNames,
+                                     parent->enclosing, name);
+  if (parentIndex < 0) return -1;
+  // Re-export: the same variable is reached through the parent's slot in its
+  // own capture list, so nested closures share one cell per variable.
+  auto existing = names.find(name);
+  if (existing != names.end()) return existing->second;
+  proto.upvalues.push_back(UpvalDesc{false, parentIndex});
+  names[name] = static_cast<int>(proto.upvalues.size()) - 1;
+  return static_cast<int>(proto.upvalues.size()) - 1;
+}
+
+int Compiler::captureVariable(Bytecode& proto,
+                              std::unordered_map<std::string, int>& names,
+                              const LocalVar& local) {
+  auto existing = names.find(local.name);
+  if (existing != names.end()) return existing->second;
+  proto.upvalues.push_back(UpvalDesc{true, local.slot});
+  // A block-scoped variable can leave its scope (and lower the frame's
+  // high-water mark) before an inner closure captures it. The VM sizes a
+  // frame's local window from `numLocals`, so raise the proto's value to
+  // cover every captured slot even after the variable goes out of scope
+  // (PHASE 6b fix). `proto` is either the frame under construction (`bc_`)
+  // or a completed parent saved in `funcStack_`; both are updated through
+  // this single point because `numLocals` is written whenever a proto is
+  // finished and again when a frame is popped back into `bc_`.
+  const int needed = local.slot + 1;
+  if (needed > proto.numLocals) proto.numLocals = needed;
+  names[local.name] = static_cast<int>(proto.upvalues.size()) - 1;
+  return names[local.name];
+}
+
+int Compiler::resolveUpvalue(const std::string& name) {
+  return resolveFromFrame(scopes_, bc_, currentUpvalueNames_,
+                          funcStack_.empty() ? nullptr : &funcStack_.back(), name);
 }
 
 void Compiler::declareGlobal(const std::string& name, bool isImmutable) {
@@ -306,7 +369,9 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   emit(OpCode::HALT);
 
   bc_.numRegisters = maxReg_;
-  bc_.numLocals = maxLocal_;
+  // Never lower `numLocals`: a captured slot may have raised it past the
+  // current high-water mark (PHASE 6b, see `captureVariable`).
+  if (maxLocal_ > bc_.numLocals) bc_.numLocals = maxLocal_;
   return std::move(bc_);
 }
 
@@ -378,6 +443,19 @@ void Compiler::compileLet(const LetStmt& s) {
     // Top level: global variable (persists in the REPL).
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.kind != Tok::Var);
+  } else if (s.kind == Tok::Var && scopes_.size() > 1) {
+    // `var` redeclares an existing binding of an enclosing scope in the same
+    // frame: it assigns to that slot instead of creating a new cell, matching
+    // the interpreter's `Env::define` overwrite behavior.
+    LocalVar outer;
+    const bool reassign =
+        resolveLocalIn(std::vector<Scope>(scopes_.begin(), scopes_.end() - 1), s.name, outer);
+    if (reassign) {
+      emit(OpCode::SETLOCAL, reg, outer.slot);
+    } else {
+      int slot = declareLocal(s.name, false);
+      emit(OpCode::DECLLOCAL, reg, slot);
+    }
   } else {
     // Nested block: frame-local variable. The declaration happens after the
     // initializer is compiled, exactly like `Env::define`.
@@ -388,20 +466,23 @@ void Compiler::compileLet(const LetStmt& s) {
 }
 
 void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
-  if (!inGlobalScope()) {
-    fail("local function declarations are not supported by the bytecode compiler yet (Phase 6b)",
-         line, col);
-  }
-
   currentLine_ = line;
   currentCol_ = col;
   int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col);
   int reg = allocReg();
   emit(OpCode::CLOSURE, reg, child);
-  // Top-level functions are globals; the interpreter hoists them in the global
-  // scope, where they persist across REPL entries.
-  emit(OpCode::SETGLOBAL, reg, addString(fn.name));
-  declareGlobal(fn.name, false);
+
+  if (inGlobalScope()) {
+    // Top-level functions are globals; the interpreter hoists them in the global
+    // scope, where they persist across REPL entries.
+    emit(OpCode::SETGLOBAL, reg, addString(fn.name));
+    declareGlobal(fn.name, false);
+  } else {
+    // Local declaration: a frame slot holding the closure value (PHASE 6b).
+    // Unlike `let`, a function name is mutable, matching the interpreter.
+    int slot = declareLocal(fn.name, false);
+    emit(OpCode::DECLLOCAL, reg, slot);
+  }
   freeReg();
 }
 
@@ -415,7 +496,14 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
     reg = allocReg();
     emit(OpCode::LOADK, reg, addConstant(Value()));
   }
-  emit(OpCode::RETURN, reg);
+  // A `return` at the top level of a function body is followed by the
+  // implicit epilogue emitted in `compileFunctionProto`. Skipping the second
+  // RETURN when the last instruction already returns keeps the frame stack
+  // consistent: a duplicate RETURN would pop the caller's frame too (PHASE 6b).
+  const bool alreadyReturns = !bc_.code.empty() &&
+                              bc_.code.back().op == OpCode::RETURN &&
+                              bc_.code.back().a == reg;
+  if (!alreadyReturns) emit(OpCode::RETURN, reg);
   freeReg();
 }
 
@@ -425,6 +513,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   // Save the parent chunk and its compilation state. Functions are compiled
   // into their own proto with fresh registers, locals, scopes and loops.
   Bytecode parent = std::move(bc_);
+  auto parentUpvalueNames = std::move(currentUpvalueNames_);
   const int parentNextReg = nextReg_;
   const int parentMaxReg = maxReg_;
   const int parentNextLocal = nextLocal_;
@@ -438,6 +527,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   bc_ = Bytecode{};
   bc_.name = name;
   bc_.numParams = static_cast<int>(params.size());
+  currentUpvalueNames_.clear();
   nextReg_ = 0;
   maxReg_ = 0;
   nextLocal_ = 0;
@@ -445,6 +535,24 @@ int Compiler::compileFunctionProto(const std::string& name,
   scopes_.clear();
   loops_.clear();
   inFunction_ = true;
+
+  // The child frame keeps the parent's state alive so nested closures can
+  // resolve and re-export upvalues through it (see `resolveFromFrame`). A
+  // deque keeps these addresses stable while more frames are pushed.
+  FuncState saved;
+  saved.bc = std::move(parent);
+  saved.scopes = std::move(parentScopes);
+  saved.loops = std::move(parentLoops);
+  saved.nextReg = parentNextReg;
+  saved.maxReg = parentMaxReg;
+  saved.nextLocal = parentNextLocal;
+  saved.maxLocal = parentMaxLocal;
+  saved.line = parentLine;
+  saved.col = parentCol;
+  saved.inFunction = parentInFunction;
+  saved.upvalueNames = std::move(parentUpvalueNames);
+  saved.enclosing = funcStack_.empty() ? nullptr : &funcStack_.back();
+  funcStack_.push_back(std::move(saved));
 
   // The function body lives in the parameter scope; it is not a nested block.
   pushScope();
@@ -473,23 +581,45 @@ int Compiler::compileFunctionProto(const std::string& name,
   emit(OpCode::RETURN, nilReg);
 
   bc_.numRegisters = maxReg_;
-  bc_.numLocals = maxLocal_;
+  // Same rule as the top level: captured slots may have raised `numLocals`
+  // above the frame's current high-water mark (PHASE 6b).
+  if (maxLocal_ > bc_.numLocals) bc_.numLocals = maxLocal_;
 
   Bytecode proto = std::move(bc_);
-  bc_ = std::move(parent);
-  nextReg_ = parentNextReg;
-  maxReg_ = parentMaxReg;
-  nextLocal_ = parentNextLocal;
-  maxLocal_ = parentMaxLocal;
-  scopes_ = std::move(parentScopes);
-  loops_ = std::move(parentLoops);
-  currentLine_ = parentLine;
-  currentCol_ = parentCol;
-  inFunction_ = parentInFunction;
+  // The frame pushed for this child is finished; its `enclosing` pointer was
+  // the previous top, so popping it leaves the parent frame valid.
+  FuncState savedParent = std::move(funcStack_.back());
+  funcStack_.pop_back();
+  bc_ = std::move(savedParent.bc);
+  currentUpvalueNames_ = std::move(savedParent.upvalueNames);
+  nextReg_ = savedParent.nextReg;
+  maxReg_ = savedParent.maxReg;
+  nextLocal_ = savedParent.nextLocal;
+  // A capture into this frame while it was on the stack may have raised its
+  // proto's `numLocals` past the recorded mark; keep the higher value so a
+  // later capture or the final write-out never lowers it again (PHASE 6b).
+  maxLocal_ = std::max(savedParent.maxLocal, bc_.numLocals);
+  scopes_ = std::move(savedParent.scopes);
+  loops_ = std::move(savedParent.loops);
+  currentLine_ = savedParent.line;
+  currentCol_ = savedParent.col;
+  inFunction_ = savedParent.inFunction;
 
   int index = static_cast<int>(bc_.children.size());
   bc_.children.push_back(std::make_shared<Bytecode>(std::move(proto)));
   return index;
+}
+
+int Compiler::compileLambda(const LambdaExpr& lambda, int line, int col) {
+  // A lambda is an anonymous function value: compile its body as a child proto
+  // and instantiate it with CLOSURE, exactly like a named declaration but
+  // without binding a name anywhere.
+  currentLine_ = line;
+  currentCol_ = col;
+  int child = compileFunctionProto("<anonymous>", lambda.params, lambda.body, line, col);
+  int reg = allocReg();
+  emit(OpCode::CLOSURE, reg, child);
+  return reg;
 }
 
 void Compiler::compileIf(const IfStmt& s) {
@@ -587,6 +717,10 @@ int Compiler::compileVariable(const std::string& name) {
   int reg = allocReg();
   if (resolveLocal(name, local)) {
     emit(OpCode::GETLOCAL, reg, local.slot);
+  } else if (int upvalue = resolveUpvalue(name); upvalue >= 0) {
+    // Captured by an enclosing function: a shared cell reached through the
+    // closure's upvalue list (PHASE 6b).
+    emit(OpCode::GETUPVAL, reg, upvalue);
   } else {
     emit(OpCode::GETGLOBAL, reg, addString(name));
   }
@@ -627,7 +761,12 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   if (isLocal && local.isImmutable) {
     fail("cannot assign to immutable variable '" + name + "'", line, col);
   }
-  if (!isLocal && globalConsts_.find(name) != globalConsts_.end()) {
+  // A captured local of an enclosing function becomes an upvalue read/write on
+  // the shared cell (PHASE 6b). The lookup must happen after the compile of
+  // the value below only insofar as register allocation is concerned; doing it
+  // first keeps the resolution stable and mirrors `compileVariable`.
+  int upvalueSlot = isLocal ? -1 : resolveUpvalue(name);
+  if (!isLocal && upvalueSlot < 0 && globalConsts_.find(name) != globalConsts_.end()) {
     fail("cannot assign to immutable variable '" + name + "'", line, col);
   }
 
@@ -635,6 +774,8 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     int value = compileExpr(*assign.value);
     if (isLocal) {
       emit(OpCode::SETLOCAL, value, local.slot);
+    } else if (upvalueSlot >= 0) {
+      emit(OpCode::SETUPVAL, value, upvalueSlot);
     } else {
       emit(OpCode::SETGLOBAL, value, addString(name));
     }
@@ -649,6 +790,8 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   int current = allocReg();
   if (isLocal) {
     emit(OpCode::GETLOCAL, current, local.slot);
+  } else if (upvalueSlot >= 0) {
+    emit(OpCode::GETUPVAL, current, upvalueSlot);
   } else {
     emit(OpCode::GETGLOBAL, current, addString(name));
   }
@@ -658,6 +801,8 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
 
   if (isLocal) {
     emit(OpCode::SETLOCAL, current, local.slot);
+  } else if (upvalueSlot >= 0) {
+    emit(OpCode::SETUPVAL, current, upvalueSlot);
   } else {
     emit(OpCode::SETGLOBAL, current, addString(name));
   }
@@ -749,6 +894,7 @@ int Compiler::compileExpr(const Expr& expr) {
             return compileAssign(assign, expr.line, expr.col);
           },
           [&](const CallExpr& call) -> int { return compileCall(call, expr.line, expr.col); },
+          [&](const LambdaExpr& lambda) -> int { return compileLambda(lambda, expr.line, expr.col); },
           [&](const TernaryExpr& ternary) -> int { return compileTernary(ternary); },
           [&](const auto&) -> int {
             fail("this expression is not supported by the bytecode compiler yet (Phase 6)",

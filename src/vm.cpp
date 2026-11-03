@@ -1,5 +1,7 @@
 #include "vm.h"
 
+#include <algorithm>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -64,10 +66,16 @@ void VM::defineGlobal(const std::string& name, Value value, bool /*isImmutable*/
 Value VM::callNative(Function& fn, std::vector<Value> args, int line, int col) {
   int savedLine = currentLine;
   int savedCol = currentCol;
+  // A native that receives Jolt closures (map/filter/forEach/...) may invoke
+  // them through this very `callNative` entry point. Capturing the raw vector
+  // slot in a `std::function` and re-entering here would invalidate it on
+  // reallocation (PHASE 6b: nested callback support). Copy the arguments so
+  // every level owns its own storage.
+  std::vector<Value> ownedArgs(std::move(args));
   currentLine = line;
   currentCol = col;
   try {
-    Value result = fn.native(*this, args);
+    Value result = fn.native(*this, ownedArgs);
     currentLine = savedLine;
     currentCol = savedCol;
     return result;
@@ -113,8 +121,12 @@ void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t re
   const int localCount = proto.numLocals > 0 ? proto.numLocals : 0;
   locals_.resize(localBase + static_cast<std::size_t>(localCount));
 
-  frames_.push_back(
-      CallFrame{function->proto, 0, resultReg, regBase, localBase});
+  // The closure's captured cells become the frame's upvalue window, so
+  // GETUPVAL/SETUPVAL and nested CLOSUREs resolve through it (PHASE 6b).
+  // `resultScratch` defaults to kNoResult; `call` overwrites it with the
+  // dedicated scratch slot right after pushing the frame.
+  CallFrame frame{function->proto, 0, kNoResult, resultReg, regBase, localBase, function->upvalues};
+  frames_.push_back(std::move(frame));
   ++depth;
   stack.push_back(Frame{function->name, line, col});
 }
@@ -132,18 +144,79 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
 
   const int savedLine = currentLine;
   const int savedCol = currentCol;
-  const std::size_t stopDepth = frames_.size() + 1;
+  // The nested loop must stop when the frame it pushed is popped. Comparing
+  // against the caller's frame count would only stop after the caller itself
+  // returns, running the outer chunk past its epilogue with a dangling frame
+  // reference (PHASE 6b fix). The result always travels back through
+  // `runFrames`' return value, so the new frame gets `kNoResult`: writing
+  // into `registers_` would be unsafe anyway, because `leaveFrame` truncates
+  // the shared register stack to the callee's regBase before any outer code
+  // could observe the slot.
+  // The callee's frame index (0-based) inside `runFrames`. A RETURN pops the
+  // callee and leaves the caller's loop running; a nested call returning from
+  // its own callee must not pop this frame again.
+  const std::size_t stopDepth = frames_.size();
+  // The scratch cell for the kNoResult protocol lives in a dedicated vector,
+  // one slot per nested call, so no callee or nested frame can ever overwrite
+  // it while this call is running (PHASE 6b fix: sharing `locals_` for the
+  // scratch allowed nested calls to clobber the return value). `leaveFrame`
+  // writes the returned value into this cell; `call` reads it back below.
+  if (scratchCells_.size() <= stopDepth) scratchCells_.resize(stopDepth + 1);
+  if (!scratchCells_[stopDepth]) scratchCells_[stopDepth] = makeRef<Cell>();
   pushJoltFrame(std::move(function), std::move(args), kNoResult, line, col);
+  // Tag the freshly pushed frame with its scratch destination.
+  frames_.back().resultScratch = stopDepth;
+  Value result;
   try {
-    Value result = runFrames(stopDepth);
-    currentLine = savedLine;
-    currentCol = savedCol;
-    return result;
+    // `runFrames` returns the callee's value directly when its frame pops
+    // past `stopDepth`; reading only the scratch cell would miss that path
+    // (the cell is written exclusively by `leaveFrame`). Use whichever of
+    // the two channels carries the value: the returned Value is authoritative
+    // when non-empty, otherwise fall back to the scratch cell (root-chunk
+    // implicit-return edge cases).
+    Value returned = runFrames(stopDepth + 1);
+    // `runFrames` returns a default-constructed (Nil) Value when it exits
+    // without crossing `stopDepth` (e.g. the frame stack emptied through an
+    // unrelated path). In that case fall back to the dedicated scratch cell,
+    // which `leaveFrame` wrote before shrinking any shared windows. A real
+    // Nil return from the callee is indistinguishable here, and both channels
+    // agree on Nil, so the fallback is safe either way.
+    if (returned.isNil()) {
+      if (scratchCells_.size() > stopDepth && scratchCells_[stopDepth]) {
+        result = scratchCells_[stopDepth]->value;
+      }
+      // Otherwise keep the Nil `returned` value as the result.
+    } else {
+      result = std::move(returned);
+    }
   } catch (...) {
+    // Unwind: drop every frame this call pushed (and any deeper ones) so the
+    // VM stays consistent for a subsequent run(). `leaveFrame` normally does
+    // this bookkeeping; on an exception we replicate it, retiring captured
+    // cells before shrinking the shared windows. `stopDepth` is the index of
+    // the callee frame, so we unwind while frames remain at or above it.
+    while (frames_.size() > stopDepth) {
+      CallFrame finished = std::move(frames_.back());
+      frames_.pop_back();
+      closeCapturedUpvalues(finished);
+      registers_.resize(finished.regBase);
+      locals_.resize(finished.localBase);
+      // Keep every scratch slot alive: outer nested-call loops still read
+      // their own cell after this frame is popped (PHASE 6b fix).
+      // Slots are reclaimed lazily by the owning `call` scope, never here.
+      if (!stack.empty()) stack.pop_back();
+      if (depth > 0) --depth;
+    }
     currentLine = savedLine;
     currentCol = savedCol;
     throw;
   }
+  // Note: if the root chunk happened to finish within this nested loop its
+  // frame was popped by `leaveFrame`; the next `run()` rebuilds all windows
+  // from scratch, so no restoration is needed here.
+  currentLine = savedLine;
+  currentCol = savedCol;
+  return result;
 }
 
 Value VM::indexGet(const Value& object, const Value& index, int line, int col) {
@@ -177,6 +250,10 @@ void VM::run(const Bytecode& bytecode) {
   const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
   locals_.assign(static_cast<size_t>(localCount), CellPtr{});
+  // Closures created by a previous entry may still hold cells that this run
+  // adopts through `retiredCells_`; keep them alive, drop the stale ones.
+  pruneRetiredCells();
+  openUpvalueSlots_.clear();
   frames_.clear();
   depth = 0;
   stack.clear();
@@ -185,7 +262,7 @@ void VM::run(const Bytecode& bytecode) {
   // handle. Child protos are owned by the Function values that instantiate
   // them and outlive both the frame and this call to `run`.
   std::shared_ptr<const Bytecode> root(&bytecode, [](const Bytecode*) {});
-  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, 0, 0});
+  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, kNoResult, 0, 0, {}});
   runFrames(0);
 }
 
@@ -203,9 +280,22 @@ Value VM::runFrames(std::size_t stopDepth) {
       frames_.pop_back();
       if (finished.resultReg != kNoResult) {
         registers_[finished.resultReg] = result;
+      } else if (finished.resultScratch != kNoResult) {
+        // kNoResult protocol (nested `call`): hand the value back through the
+        // dedicated scratch cell owned by the caller. The cell lives outside
+        // the shared local window, so it is immune to clobbering by nested
+        // frames and survives the shrink below (PHASE 6b fix).
+        scratchCells_[finished.resultScratch]->value = result;
       }
+      // Close the upvalues this frame owns before shrinking the shared cell
+      // stack: any slot opened by a CLOSURE must be retired so escaping
+      // closures keep observing the final value (PHASE 6b).
+      closeCapturedUpvalues(finished);
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
+      // Keep every scratch slot alive: outer nested-call loops still read
+      // their own cell after this frame is popped (PHASE 6b fix).
+      // Slots are reclaimed lazily by the owning `call` scope, never here.
       if (!stack.empty()) stack.pop_back();
       if (depth > 0) --depth;
       return frames_.size() < stopDepth;
@@ -428,16 +518,72 @@ Value VM::runFrames(std::size_t stopDepth) {
         std::shared_ptr<const Bytecode> proto = chunk.children[static_cast<std::size_t>(child)];
         FuncPtr function = makeRef<Function>();
         function->name = proto->name;
-        function->proto = std::move(proto);
+        function->proto = proto;
+        // Bind the capture list (PHASE 6b). Each descriptor points either at
+        // an open local cell of this frame or at one of its upvalues; both
+        // share the same `Cell`, so mutations stay visible across closures.
+        const CallFrame& frame = frames_.back();
+        function->upvalues.reserve(proto->upvalues.size());
+        for (const UpvalDesc& desc : proto->upvalues) {
+          CellPtr cell;
+          if (desc.inParentLocal) {
+            // The captured slot may sit past the frame's declared `numLocals`
+            // window when a block-scoped variable left its scope before this
+            // closure was instantiated. Grow the shared cell stack so the
+            // descriptor stays valid (PHASE 6b).
+            const std::size_t absolute = frame.localBase + static_cast<std::size_t>(desc.index);
+            if (desc.index < 0) {
+              fail("upvalue local index out of range: " + std::to_string(desc.index), line, col);
+            }
+            if (absolute >= locals_.size()) locals_.resize(absolute + 1);
+            cell = locals_[absolute];
+            if (!cell) {
+              // A captured slot that was never declared still needs a cell so
+              // the closure can read/write it; treat it as an open upvalue.
+              cell = makeRef<Cell>();
+              locals_[absolute] = cell;
+            }
+            // Register the slot as an open upvalue: the owning frame's exit
+            // must retire (not destroy) it so closures see the final value
+            // (PHASE 6b). Keep the registry sorted and duplicate-free.
+            auto pos = std::lower_bound(openUpvalueSlots_.begin(),
+                                        openUpvalueSlots_.end(), absolute);
+            if (pos == openUpvalueSlots_.end() || *pos != absolute) {
+              openUpvalueSlots_.insert(pos, absolute);
+            }
+          } else {
+            if (desc.index < 0 || static_cast<std::size_t>(desc.index) >= frame.upvalues.size()) {
+              fail("upvalue index out of range: " + std::to_string(desc.index), line, col);
+            }
+            cell = frame.upvalues[static_cast<std::size_t>(desc.index)];
+          }
+          function->upvalues.push_back(std::move(cell));
+        }
         setReg(instruction.a, Value(std::move(function)));
         break;
       }
 
-      // PHASE 6b-6d opcodes are declared now so the instruction budget stays
+      case OpCode::GETUPVAL: {
+        const std::vector<CellPtr>& upvalues = frames_.back().upvalues;
+        if (instruction.b < 0 || static_cast<std::size_t>(instruction.b) >= upvalues.size()) {
+          fail("upvalue index out of range: " + std::to_string(instruction.b), line, col);
+        }
+        setReg(instruction.a, upvalues[static_cast<std::size_t>(instruction.b)]->value);
+        break;
+      }
+
+      case OpCode::SETUPVAL: {
+        std::vector<CellPtr>& upvalues = frames_.back().upvalues;
+        if (instruction.b < 0 || static_cast<std::size_t>(instruction.b) >= upvalues.size()) {
+          fail("upvalue index out of range: " + std::to_string(instruction.b), line, col);
+        }
+        upvalues[static_cast<std::size_t>(instruction.b)]->value = getReg(instruction.a);
+        break;
+      }
+
+      // PHASE 6c-6d opcodes are declared now so the instruction budget stays
       // at 40. The compiler does not emit them until their slice lands, so
       // reaching one of these cases would be a compiler bug.
-      case OpCode::GETUPVAL:
-      case OpCode::SETUPVAL:
       case OpCode::NEWTABLE:
       case OpCode::GETTABLE:
       case OpCode::SETTABLE:
@@ -458,6 +604,49 @@ Value VM::runFrames(std::size_t stopDepth) {
     }
   }
   return Value();
+}
+
+// ------------------------------------------------------- upvalue cell retiring
+
+void VM::closeCapturedUpvalues(const CallFrame& frame) {
+  // A local slot is "captured" when some live closure's upvalue list points at
+  // the same Cell this frame owns. When the frame dies its window in the
+  // shared `locals_` stack disappears, so any captured cell must be adopted by
+  // `retiredCells_` to keep the sharing intact (PHASE 6b). The reference count
+  // tells us exactly that: a cell with more than one owner outlives this
+  // window shrink, and the extra owners are closures somewhere in the heap.
+  const std::size_t base = frame.localBase;
+  const std::size_t end = locals_.size();  // window before `leaveFrame` shrank it
+  for (std::size_t i = base; i < end; ++i) {
+    const CellPtr& cell = locals_[i];
+    if (!cell) continue;
+    // Either some closure already shares the cell (refcount > 1) or the
+    // current frame explicitly opened it as an upvalue via CLOSURE. Both
+    // cases must survive the window shrink (PHASE 6b). Slots may be reused
+    // by nested frames, so scan the whole registry instead of assuming a
+    // sorted layout.
+    const bool isOpen =
+        std::find(openUpvalueSlots_.begin(), openUpvalueSlots_.end(), i) !=
+        openUpvalueSlots_.end();
+    if (cell->refs > 1 || isOpen) retiredCells_.push_back(cell);
+  }
+  // Forget the slots this frame owned; re-declaring a slot later (a new
+  // frame at the same base) starts from a clean state.
+  openUpvalueSlots_.erase(std::remove_if(openUpvalueSlots_.begin(),
+                                         openUpvalueSlots_.end(),
+                                         [base, end](std::size_t s) {
+                                           return s >= base && s < end;
+                                         }),
+                          openUpvalueSlots_.end());
+}
+
+void VM::pruneRetiredCells() {
+  // Keep only cells that somebody still references. A retired cell with a
+  // single owner (this vector) is dead: no live frame window or closure holds
+  // it anymore, so releasing it here mirrors what shrinking `locals_` did.
+  retiredCells_.erase(std::remove_if(retiredCells_.begin(), retiredCells_.end(),
+                                     [](const CellPtr& cell) { return cell->refs <= 1; }),
+                      retiredCells_.end());
 }
 
 const Value* VM::findGlobal(const std::string& name) const {

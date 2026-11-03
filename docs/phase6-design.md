@@ -20,7 +20,8 @@ backend). They come after parity is proven.
 |-------|--------|-------|
 | 6a.0 | ✅ done | `Runtime` bridge and `src/ops.{h,cpp}` extraction |
 | 6a | ✅ done | protos, `CALL`/`RETURN`/`CLOSURE`, 0 upvalues |
-| 6b-6f | pending | upvalues, tables, `ITER`, callbacks, parity gate |
+| 6b | ✅ done | `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas, escaping closures |
+| 6c-6f | pending | tables, `ITER`, callbacks, parity gate |
 
 The 40-opcode consolidation (D1) is done: `Bytecode::constants` replaces the
 `numbers`/`strings` pools and `UNOP` replaces `NEG`/`NOT`/`BNOT`. `CALL`,

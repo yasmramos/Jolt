@@ -44,6 +44,10 @@ class VM : public Runtime {
   Value call(const Value& callee, std::vector<Value> args, int line, int col) override;
   void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
 
+  // Number of heap cells currently adopted by `closeCapturedUpvalues`
+  // (PHASE 6b). Test hook: proves retired locals survive their defining frame.
+  std::size_t retiredCellCount() const { return retiredCells_.size(); }
+
   [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const override;
 
   Value indexGet(const Value& object, const Value& index, int line, int col) override;
@@ -63,16 +67,39 @@ class VM : public Runtime {
   struct CallFrame {
     std::shared_ptr<const Bytecode> proto;
     std::size_t pc = 0;
+    // Absolute slot in `scratchCells_` receiving the return value when
+    // `resultReg` is kNoResult, or kNoResult for frames without a scratch
+    // destination (the root chunk).
+    std::size_t resultScratch = kNoResult;
     std::size_t resultReg = kNoResult;
     std::size_t regBase = 0;
     std::size_t localBase = 0;
+    // Captured cells of the running closure (PHASE 6b). Empty for the root
+    // chunk and for plain calls without a closure object.
+    std::vector<CellPtr> upvalues;
   };
 
   // Registers of every live frame, one window per frame, in call order.
   std::vector<Value> registers_;
   std::vector<CallFrame> frames_;
   std::vector<CellPtr> locals_;
+  // Dedicated per-call return cells for the kNoResult protocol (PHASE 6b fix).
+  // The scratch used to live one slot below the callee's local window inside
+  // `locals_`, where a nested call could overwrite it while its own frame was
+  // still running. A separate vector indexed by frame removes that structural
+  // collision entirely: the cell cannot be clobbered and survives the shrinking
+  // of the shared local windows.
+  std::vector<CellPtr> scratchCells_;
   std::unordered_map<std::string, Value> globals_;
+  // Heap cells adopted by `CLOSEUPVALS` when a frame with captured locals
+  // returns (PHASE 6b). Shared across nested `run()` invocations so closures
+  // created in one entry keep working in the next; cleared at every top-level
+  // run. Keeps each cell alive exactly once, like the old stack window did.
+  std::vector<CellPtr> retiredCells_;
+  // Absolute indices into `locals_` of slots opened as upvalues by the
+  // currently executing frames (PHASE 6b). The VM closes them when their
+  // frame exits so closures observe the final value, and `run()` resets it.
+  std::vector<std::size_t> openUpvalueSlots_;
 
   Value& getReg(int index);
   void setReg(int index, Value value);
@@ -81,6 +108,14 @@ class VM : public Runtime {
   // Runs until HALT or until a RETURN drops below `stopDepth`; the latter
   // returns the value produced by the frame that crossed the boundary.
   Value runFrames(std::size_t stopDepth);
+
+  // Moves the still-open captured locals of the frame being popped onto the
+  // heap so closures that survive it keep sharing the same cells (PHASE 6b).
+  void closeCapturedUpvalues(const CallFrame& frame);
+
+  // Drops retired cells nobody references anymore; keeps the ones still held
+  // by live closures across `run()` invocations (REPL entries, PHASE 6b).
+  void pruneRetiredCells();
 
   // Pushes the frame for a bytecode function, copying its arguments into the
   // new window. Throws on arity, depth or a function without a proto.

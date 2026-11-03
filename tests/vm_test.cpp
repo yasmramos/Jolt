@@ -75,6 +75,30 @@ std::string runAndCapture(const std::string& source) {
   return capture.stream.str();
 }
 
+// Runs a program through the VM and aborts with the error message if the
+// runtime raises. Keeps the test harness from terminating on an uncaught
+// RuntimeError (Phase 6b closure tests rely on this).
+// Name of the test currently executing; printed by runOrFail so a runtime
+// failure identifies the failing scenario instead of aborting anonymously.
+const char* g_currentTest = "<unknown>";
+
+// RAII helper that records the active test name for diagnostics below.
+struct TestScope {
+  explicit TestScope(const char* name) { g_currentTest = name; }
+};
+
+void runOrFail(VM& vm, const Bytecode& bytecode) {
+  try {
+    vm.run(bytecode);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "runtime failure in %s: %s\n", g_currentTest, error.what());
+    std::exit(1);
+  }
+}
+
+// Records the active test name for the diagnostics above.
+#define TEST_SCOPE() TestScope _testScope(__func__)
+
 const Value& requireGlobal(const VM& vm, const std::string& name) {
   const Value* value = vm.findGlobal(name);
   if (!value) {
@@ -101,6 +125,7 @@ std::string runtimeError(const std::string& source) {
 }
 
 void testIntegerArithmetic() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let x = 2 + 3 * 4;\nlet y = 10 / 4;\n");
   VM vm;
   vm.run(bytecode);
@@ -114,6 +139,7 @@ void testIntegerArithmetic() {
 }
 
 void testFloatArithmetic() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let x = 10.0 / 4;\nlet y = 1.5 + 2;\n");
   VM vm;
   vm.run(bytecode);
@@ -128,6 +154,7 @@ void testFloatArithmetic() {
 }
 
 void testSubtractionAndMultiplication() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let a = 9 - 4;\nlet b = 6 * 7;\n");
   VM vm;
   vm.run(bytecode);
@@ -137,6 +164,7 @@ void testSubtractionAndMultiplication() {
 }
 
 void testModulo() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let a = 5 % 2;\nlet b = 5.5 % 2;\nlet c = -5 % 2;\n");
   VM vm;
   vm.run(bytecode);
@@ -152,6 +180,7 @@ void testModulo() {
 }
 
 void testPower() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "let a = 2 ** 8;\n"
       "let b = 2.0 ** 3;\n"
@@ -172,6 +201,7 @@ void testPower() {
 }
 
 void testStringConcatenation() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let s = \"hola\" + \"!\";\n");
   VM vm;
   vm.run(bytecode);
@@ -181,6 +211,7 @@ void testStringConcatenation() {
 }
 
 void testGlobalAssignmentAndRead() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("var x = 7;\nx = x - 2;\n");
   VM vm;
   vm.run(bytecode);
@@ -190,6 +221,7 @@ void testGlobalAssignmentAndRead() {
 }
 
 void testCompoundAssignment() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var x = 1;\n"
       "x += 2;\n"
@@ -215,6 +247,7 @@ void testCompoundAssignment() {
 }
 
 void testNilAndBoolLiterals() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let a = nil;\nlet b = true;\nlet c = false;\nvar d;\n");
   VM vm;
   vm.run(bytecode);
@@ -226,6 +259,7 @@ void testNilAndBoolLiterals() {
 }
 
 void testUnaryOperators() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "let a = -5;\n"
       "let b = +5;\n"
@@ -252,6 +286,7 @@ void testUnaryOperators() {
 }
 
 void testComparisons() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "let eq = 1 == 1.0;\n"
       "let neq = 1 != 2;\n"
@@ -279,11 +314,13 @@ void testComparisons() {
 }
 
 void testPrint() {
+  TEST_SCOPE();
   std::string output = runAndCapture("print(1 + 2);\nprint(\"hola\");\nprint(true);\n");
   assert(output == "3\nhola\ntrue\n");
 }
 
 void testPrintUsesInjectedPlatform() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("print(1 + 2);\n");
   StringPlatform platform;
   VM vm(platform);
@@ -294,6 +331,7 @@ void testPrintUsesInjectedPlatform() {
 }
 
 void testBuiltinIoUsesInjectedPlatform() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("print(1, 2);\nwrite(\"a\");\neprint(\"e\");\n");
   StringPlatform platform;
   VM vm(platform);
@@ -305,23 +343,28 @@ void testBuiltinIoUsesInjectedPlatform() {
 }
 
 void testDivisionByZero() {
+  TEST_SCOPE();
   assert(runtimeError("let x = 1 / 0;\n") == "division by zero");
 }
 
 void testModuloByZero() {
+  TEST_SCOPE();
   assert(runtimeError("let x = 1 % 0;\n") == "division by zero");
 }
 
 void testUndefinedGlobal() {
+  TEST_SCOPE();
   assert(runtimeError("let y = missing + 1;\n").find("undefined variable") !=
          std::string::npos);
 }
 
 void testInvalidComparison() {
+  TEST_SCOPE();
   assert(runtimeError("let x = 1 < \"a\";\n").find("cannot compare") != std::string::npos);
 }
 
 void testGlobalsPersistBetweenRuns() {
+  TEST_SCOPE();
   VM vm;
   vm.run(compileSource("var x = 5;\n"));
   vm.run(compileSource("x = x + 1;\n"));
@@ -331,6 +374,7 @@ void testGlobalsPersistBetweenRuns() {
 }
 
 void testRegisterCount() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let x = 1 + 2 * 3;\n");
   VM vm;
   vm.run(bytecode);
@@ -340,6 +384,7 @@ void testRegisterCount() {
 // --------------------------------------------------------- PHASE 5: control
 
 void testIfElseExecution() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var a = 0;\n"
       "if (true) { a = 1; } else { a = 2; }\n"
@@ -353,6 +398,7 @@ void testIfElseExecution() {
 }
 
 void testElseIfChain() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "let x = 2;\n"
       "var out = \"\";\n"
@@ -367,6 +413,7 @@ void testElseIfChain() {
 }
 
 void testIfBranchIsSkipped() {
+  TEST_SCOPE();
   std::string output = runAndCapture(
       "if (false) { print(\"then\"); } else { print(\"else\"); }\n"
       "if (true) { print(\"yes\"); }\n");
@@ -374,6 +421,7 @@ void testIfBranchIsSkipped() {
 }
 
 void testTruthinessInConditions() {
+  TEST_SCOPE();
   // Only nil and false are falsy; 0 and "" are truthy.
   std::string output = runAndCapture(
       "if (0) { print(\"zero\"); }\n"
@@ -384,6 +432,7 @@ void testTruthinessInConditions() {
 }
 
 void testWhileLoop() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var sum = 0;\n"
       "var i = 0;\n"
@@ -396,6 +445,7 @@ void testWhileLoop() {
 }
 
 void testForLoop() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var sum = 0;\n"
       "for (var i = 1; i <= 4; i += 1) { sum += i; }\n");
@@ -409,6 +459,7 @@ void testForLoop() {
 }
 
 void testForWithoutCondition() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var n = 0;\n"
       "for (;;) { n += 1; if (n >= 3) { break; } }\n");
@@ -419,6 +470,7 @@ void testForWithoutCondition() {
 }
 
 void testBreakOutOfWhile() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var n = 0;\n"
       "while (true) { n += 1; if (n == 3) { break; } }\n");
@@ -429,6 +481,7 @@ void testBreakOutOfWhile() {
 }
 
 void testContinueInWhile() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var sum = 0;\n"
       "var i = 0;\n"
@@ -446,6 +499,7 @@ void testContinueInWhile() {
 }
 
 void testContinueInForRunsStep() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var sum = 0;\n"
       "for (var i = 1; i <= 4; i += 1) {\n"
@@ -460,6 +514,7 @@ void testContinueInForRunsStep() {
 }
 
 void testNestedLoops() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "var total = 0;\n"
       "for (var i = 0; i < 3; i += 1) {\n"
@@ -477,6 +532,7 @@ void testNestedLoops() {
 }
 
 void testBlockScopingAndShadowing() {
+  TEST_SCOPE();
   std::string output = runAndCapture(
       "let x = 1;\n"
       "{\n"
@@ -488,6 +544,7 @@ void testBlockScopingAndShadowing() {
 }
 
 void testBlockLocalIsNotGlobal() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("{ let inner = 42; print(inner); }\n");
   VM vm;
   CoutCapture capture;
@@ -498,6 +555,7 @@ void testBlockLocalIsNotGlobal() {
 }
 
 void testLocalCompoundAssignment() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "{\n"
       "  var y = 10;\n"
@@ -514,6 +572,7 @@ void testLocalCompoundAssignment() {
 }
 
 void testLocalCount() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "{\n"
       "  let a = 1;\n"
@@ -530,6 +589,7 @@ void testLocalCount() {
 }
 
 void testBitwiseExecution() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "let a = 6 & 3;\n"
       "let b = 4 | 1;\n"
@@ -549,6 +609,7 @@ void testBitwiseExecution() {
 }
 
 void testShiftErrors() {
+  TEST_SCOPE();
   assert(runtimeError("let x = 1 << 64;\n") == "shift count must be between 0 and 63");
   assert(runtimeError("let x = 1 >> -1;\n") == "shift count must be between 0 and 63");
   assert(runtimeError("let x = 1.5 & 1;\n").find("unsupported operand types") !=
@@ -558,6 +619,7 @@ void testShiftErrors() {
 }
 
 void testLogicalShortCircuit() {
+  TEST_SCOPE();
   // The right-hand side must not be evaluated: 1 / 0 would throw a RuntimeError.
   Bytecode bytecode = compileSource(
       "let a = false && (1 / 0);\n"
@@ -574,6 +636,7 @@ void testLogicalShortCircuit() {
 }
 
 void testLogicalOperandValues() {
+  TEST_SCOPE();
   // `&&` and `||` return an operand, not a forced boolean.
   Bytecode bytecode = compileSource(
       "let a = nil || 7;\n"
@@ -594,6 +657,7 @@ void testLogicalOperandValues() {
 }
 
 void testLogicalEvaluatesRightWhenNeeded() {
+  TEST_SCOPE();
   assert(runtimeError("let x = true && (1 / 0);\n") == "division by zero");
   assert(runtimeError("let x = false || (1 / 0);\n") == "division by zero");
   assert(runtimeError("let x = true ? (1 / 0) : 2;\n") == "division by zero");
@@ -602,6 +666,7 @@ void testLogicalEvaluatesRightWhenNeeded() {
 // ------------------------------------------------- PHASE 6: shared Runtime
 
 void testVmCallsNatives() {
+  TEST_SCOPE();
   VM vm;
   registerBuiltins(vm);
 
@@ -626,6 +691,7 @@ void testVmCallsNatives() {
 }
 
 void testVmCallsBoundMethods() {
+  TEST_SCOPE();
   VM vm;
   registerBuiltins(vm);
 
@@ -639,6 +705,7 @@ void testVmCallsBoundMethods() {
 }
 
 void testRuntimeErrorCarriesSourcePosition() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("let a = 1;\nlet b = 1 / 0;\n");
   VM vm;
   bool threw = false;
@@ -660,6 +727,7 @@ void testRuntimeErrorCarriesSourcePosition() {
 // for-in arrive in 6b-6d.
 
 void testFunctionCallAndReturn() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn add(a, b) { return a + b; }\n"
       "let sum = add(2, 3);\n");
@@ -674,6 +742,7 @@ void testFunctionCallAndReturn() {
 }
 
 void testFunctionWithoutReturnYieldsNil() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn noop() {}\n"
       "let r = noop();\n");
@@ -684,6 +753,7 @@ void testFunctionWithoutReturnYieldsNil() {
 }
 
 void testEarlyReturn() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn sign(n) {\n"
       "  if (n < 0) { return -1; }\n"
@@ -702,6 +772,7 @@ void testEarlyReturn() {
 }
 
 void testRecursion() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn fact(n) {\n"
       "  if (n <= 1) { return 1; }\n"
@@ -725,6 +796,7 @@ void testRecursion() {
 }
 
 void testMutualRecursion() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn isEven(n) { if (n == 0) { return true; } return isOdd(n - 1); }\n"
       "fn isOdd(n) { if (n == 0) { return false; } return isEven(n - 1); }\n"
@@ -740,6 +812,7 @@ void testMutualRecursion() {
 }
 
 void testFunctionParametersAreLocals() {
+  TEST_SCOPE();
   // A parameter shadows a global of the same name, and can be called.
   Bytecode bytecode = compileSource(
       "let x = 100;\n"
@@ -758,6 +831,7 @@ void testFunctionParametersAreLocals() {
 }
 
 void testFunctionLocalsAndLoops() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn sum(n) {\n"
       "  var total = 0;\n"
@@ -775,6 +849,7 @@ void testFunctionLocalsAndLoops() {
 }
 
 void testFunctionValueInVariable() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn double(x) { return x * 2; }\n"
       "let d = double;\n"
@@ -786,6 +861,7 @@ void testFunctionValueInVariable() {
 }
 
 void testPrintInsideFunction() {
+  TEST_SCOPE();
   std::string output = runAndCapture(
       "fn show(x) { print(x); }\n"
       "show(5);\n");
@@ -793,6 +869,7 @@ void testPrintInsideFunction() {
 }
 
 void testFunctionSurvivesRunBoundary() {
+  TEST_SCOPE();
   // The closure owns its proto, so a global function stays callable after the
   // Bytecode that produced it has been destroyed.
   VM vm;
@@ -802,6 +879,7 @@ void testFunctionSurvivesRunBoundary() {
 }
 
 void testVmCallIntoBytecodeFunction() {
+  TEST_SCOPE();
   VM vm;
   vm.run(compileSource("fn add(a, b) { return a + b; }\n"));
 
@@ -812,6 +890,7 @@ void testVmCallIntoBytecodeFunction() {
 }
 
 void testFunctionArityErrors() {
+  TEST_SCOPE();
   assert(runtimeError("fn f(a) { return a; }\nf();\n") ==
          "f() expects 1 argument, got 0");
   assert(runtimeError("fn f(a) { return a; }\nf(1, 2);\n") ==
@@ -821,6 +900,7 @@ void testFunctionArityErrors() {
 }
 
 void testFunctionDepthLimit() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn loop(n) { return loop(n + 1); }\n"
       "let x = loop(0);\n");
@@ -837,6 +917,7 @@ void testFunctionDepthLimit() {
 }
 
 void testFunctionStackTrace() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource(
       "fn inner() { return 1 / 0; }\n"
       "fn outer() { return inner(); }\n"
@@ -860,6 +941,7 @@ void testFunctionStackTrace() {
 }
 
 void testMultiArgumentPrintThroughNative() {
+  TEST_SCOPE();
   Bytecode bytecode = compileSource("print(1, 2, 3);\n");
   VM vm;
   registerBuiltins(vm);
@@ -869,7 +951,131 @@ void testMultiArgumentPrintThroughNative() {
   assert(capture.stream.str() == "1 2 3\n");
 }
 
+// ------------------------------------------- PHASE 6b: lambdas, upvalues, closures
+
+void testLambdaCompilesToClosureAndGetUpval() {
+  TEST_SCOPE();
+  // A lambda that captures an enclosing local reads it through GETUPVAL;
+  // the closure value survives in a global slot.
+  Bytecode bytecode = compileSource(
+      "fn makeAdder(n) { return x => x + n; }\n"
+      "let add5 = makeAdder(5);\n"
+      "let r = add5(40);\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 45);
+  const Value& adder = requireGlobal(vm, "add5");
+  assert(adder.isFunc() && adder.func().isVm());
+  assert(!adder.func().upvalues.empty());  // `n` captured as one cell
+}
+
+void testCounterClosuresShareMutableCell() {
+  TEST_SCOPE();
+  // Two closures created by the same call share the counter's cells: writes
+  // from one (SETUPVAL) are visible through the other (GETUPVAL), and two
+  // separate calls own independent state. Collections arrive in 6c, so the
+  // pair is passed back through an out-parameter style call instead.
+  Bytecode bytecode = compileSource(
+      "fn makeCounter(start, setBump, setPeek) {\n"
+      "  var count = start;\n"
+      "  setBump(() => { count += 1; return count; });\n"
+      "  setPeek(() => count);\n"
+      "}\n"
+      "var bump1 = nil;\n"
+      "var peek1 = nil;\n"
+      "var bump2 = nil;\n"
+      "makeCounter(0, f => { bump1 = f; }, f => { peek1 = f; });\n"
+      "makeCounter(100, f => { bump2 = f; }, f => {});\n"
+      "let a = bump1();\n"
+      "let b = bump1();\n"
+      "let p = peek1();\n"
+      "let d = bump2();\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "a").asInt() == 1);
+  assert(requireGlobal(vm, "b").asInt() == 2);
+  // `peek` sees the write `bump` made through SETUPVAL: shared cell.
+  assert(requireGlobal(vm, "p").asInt() == 2);
+  // The second counter has its own cell chain.
+  assert(requireGlobal(vm, "d").asInt() == 101);
+}
+
+void testCapturedLocalsSurviveFrameExit() {
+  TEST_SCOPE();
+  // After the defining frame returns, its captured cells are retired but
+  // stay alive and keep their values (closeCapturedUpvalues).
+  Bytecode bytecode = compileSource(
+      "fn scopeTest() {\n"
+      "  let y = 5;\n"
+      "  if (true) {\n"
+      "    let z = 1;\n"
+      "    return () => y + z;\n"
+      "  }\n"
+      "}\n"
+      "let f = scopeTest();\n"
+      "let r = f();\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 6);
+  assert(vm.retiredCellCount() >= 2);  // both `y` and `z` were adopted
+}
+
+void testNestedClosureThroughTwoLevels() {
+  TEST_SCOPE();
+  // An inner lambda resolves an outer-local via the parent's upvalue list
+  // (UpvalDesc with inParentLocal = false), not via the frame's locals.
+  Bytecode bc = compileSource(
+      "let outer = a => (b => () => a + b);\n"
+      "let g = outer(10)(3);\n"
+      "let r = g();\n");
+  VM vm;
+  runOrFail(vm, bc);
+
+  assert(requireGlobal(vm, "r").asInt() == 13);
+}
+
+void testUpvalueIndexOutOfRangeFailsCleanly() {
+  TEST_SCOPE();
+  // Hand-built chunk: GETUPVAL with no upvalues bound must raise a runtime
+  // error instead of touching memory out of bounds.
+  Bytecode chunk;
+  chunk.numRegisters = 2;
+  chunk.code.push_back(Instruction{OpCode::GETUPVAL, 0, 0, 0, 0, 1, 1});
+  chunk.code.push_back(Instruction{OpCode::HALT, 0, 0, 0, 0, 1, 1});
+  VM vm;
+  bool threw = false;
+  try {
+    vm.run(chunk);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message.find("upvalue index out of range") != std::string::npos);
+  }
+  assert(threw);
+}
+
+void testClosureWriteBackIntoEnclosingLocal() {
+  TEST_SCOPE();
+  // The enclosing function keeps running after creating the closure and
+  // observes writes made through the shared cell while it is still open.
+  Bytecode bytecode = compileSource(
+      "fn writer() {\n"
+      "  var v = 1;\n"
+      "  let set = x => { v = x; };\n"
+      "  set(42);\n"
+      "  return v;\n"
+      "}\n"
+      "let r = writer();\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 42);
+}
+
 void testVmRejectsAstFunctions() {
+  TEST_SCOPE();
   // A function with neither a native body nor a proto cannot be executed by
   // the VM; it must refuse instead of silently running the AST.
   VM vm;
@@ -947,6 +1153,12 @@ int main() {
   testFunctionDepthLimit();
   testFunctionStackTrace();
   testMultiArgumentPrintThroughNative();
+  testLambdaCompilesToClosureAndGetUpval();
+  testCounterClosuresShareMutableCell();
+  testCapturedLocalsSurviveFrameExit();
+  testNestedClosureThroughTwoLevels();
+  testUpvalueIndexOutOfRangeFailsCleanly();
+  testClosureWriteBackIntoEnclosingLocal();
   testVmRejectsAstFunctions();
 
   std::puts("vm tests passed");
