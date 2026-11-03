@@ -296,6 +296,13 @@ int Compiler::resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
   return static_cast<int>(proto.upvalues.size()) - 1;
 }
 
+// Returns true when `proto` is the frame currently being compiled (its state
+// lives in `bc_`, `maxLocal_` and friends instead of a saved FuncState).
+bool Compiler::isCurrentFrame(const Bytecode& proto) const {
+  if (funcStack_.empty()) return &proto == &bc_;
+  return &proto == &funcStack_.back().bc;
+}
+
 int Compiler::captureVariable(std::vector<Scope>& scopes, Bytecode& proto,
                               std::unordered_map<std::string, int>& names,
                               const std::string& name) {
@@ -305,6 +312,21 @@ int Compiler::captureVariable(std::vector<Scope>& scopes, Bytecode& proto,
   if (!resolveLocalIn(scopes, name, local)) return -1;
   proto.upvalues.push_back(UpvalDesc{true, local.slot});
   names[name] = static_cast<int>(proto.upvalues.size()) - 1;
+  // Block-scoped variables can leave their scope (and lower the frame's
+  // high-water mark) before an inner closure captures them. The VM sizes a
+  // frame's local window from `numLocals`, so raise it to cover every
+  // captured slot even after the variable goes out of scope (PHASE 6b fix).
+  const int needed = local.slot + 1;
+  if (isCurrentFrame(proto)) {
+    if (needed > maxLocal_) maxLocal_ = needed;
+  } else {
+    for (FuncState& state : funcStack_) {
+      if (&state.bc == &proto) {
+        if (needed > state.maxLocal) state.maxLocal = needed;
+        break;
+      }
+    }
+  }
   return names[name];
 }
 

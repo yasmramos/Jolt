@@ -73,6 +73,11 @@ class Compiler {
     // Capture list of this frame, keyed by variable name and parallel to
     // `bc.upvalues`, so re-exports can find an existing entry by name.
     std::unordered_map<std::string, int> upvalueNames;
+    // Slot high-water mark reached by this frame at any point, including
+    // variables that already left their block scope. Captured descriptors
+    // must stay valid for the VM local window even after `maxLocal` drops
+    // again, so this is never decreased (PHASE 6b).
+    int capturedLocalHigh = 0;
     // The frame one level out, or null when this is the outermost function.
     // Valid pointers into `funcStack_` (deque nodes are stable); rebuilt on
     // every push/pop of the proto stack.
