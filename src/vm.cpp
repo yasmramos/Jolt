@@ -123,7 +123,9 @@ void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t re
 
   // The closure's captured cells become the frame's upvalue window, so
   // GETUPVAL/SETUPVAL and nested CLOSUREs resolve through it (PHASE 6b).
-  CallFrame frame{function->proto, 0, resultReg, regBase, localBase, function->upvalues};
+  // `resultScratch` defaults to kNoResult; `call` overwrites it with the
+  // dedicated scratch slot right after pushing the frame.
+  CallFrame frame{function->proto, 0, kNoResult, resultReg, regBase, localBase, function->upvalues};
   frames_.push_back(std::move(frame));
   ++depth;
   stack.push_back(Frame{function->name, line, col});
@@ -241,7 +243,7 @@ void VM::run(const Bytecode& bytecode) {
   // handle. Child protos are owned by the Function values that instantiate
   // them and outlive both the frame and this call to `run`.
   std::shared_ptr<const Bytecode> root(&bytecode, [](const Bytecode*) {});
-  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, 0, 0, {}});
+  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, kNoResult, 0, 0, {}});
   runFrames(0);
 }
 
