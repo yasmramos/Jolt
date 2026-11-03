@@ -457,9 +457,12 @@ Value VM::runFrames(std::size_t stopDepth) {
             if (absolute >= locals_.size()) locals_.resize(absolute + 1);
             cell = locals_[absolute];
             if (!cell) {
-              // The compiler only captures declared locals; reaching an empty
-              // slot means a local was never initialized (compiler bug).
-              fail("internal error: captured local has no cell", line, col);
+              // Lazily allocate the cell when the captured local was written
+              // through SETUPVAL/assignment before this frame returned. This
+              // mirrors the eager allocation done by DECLLOCAL and keeps the
+              // shared `Cell` valid across closures (PHASE 6b).
+              cell = makeRef<Cell>();
+              locals_[absolute] = cell;
             }
           } else {
             if (desc.index < 0 || static_cast<std::size_t>(desc.index) >= frame.upvalues.size()) {
