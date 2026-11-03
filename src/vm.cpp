@@ -168,23 +168,42 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
   frames_.back().resultScratch = stopDepth;
   Value result;
   try {
-    runFrames(stopDepth + 1);
-    // The return value travels through the dedicated scratch cell, which is
-    // indexed by frame depth and therefore survives every shared-window
-    // shrink performed by `leaveFrame` (PHASE 6b).
-    result = scratchCells_[stopDepth]->value;
+    // `runFrames` returns the callee's value directly when its frame pops
+    // past `stopDepth`; reading only the scratch cell would miss that path
+    // (the cell is written exclusively by `leaveFrame`). Use whichever of
+    // the two channels carries the value: the returned Value is authoritative
+    // when non-empty, otherwise fall back to the scratch cell (root-chunk
+    // implicit-return edge cases).
+    Value returned = runFrames(stopDepth + 1);
+    // `runFrames` returns a default-constructed (Nil) Value when it exits
+    // without crossing `stopDepth` (e.g. the frame stack emptied through an
+    // unrelated path). In that case fall back to the dedicated scratch cell,
+    // which `leaveFrame` wrote before shrinking any shared windows. A real
+    // Nil return from the callee is indistinguishable here, and both channels
+    // agree on Nil, so the fallback is safe either way.
+    if (returned.isNil()) {
+      if (scratchCells_.size() > stopDepth && scratchCells_[stopDepth]) {
+        result = scratchCells_[stopDepth]->value;
+      }
+      // Otherwise keep the Nil `returned` value as the result.
+    } else {
+      result = std::move(returned);
+    }
   } catch (...) {
     // Unwind: drop every frame this call pushed (and any deeper ones) so the
     // VM stays consistent for a subsequent run(). `leaveFrame` normally does
     // this bookkeeping; on an exception we replicate it, retiring captured
-    // cells before shrinking the shared windows.
-    while (frames_.size() > stopDepth - 1) {
+    // cells before shrinking the shared windows. `stopDepth` is the index of
+    // the callee frame, so we unwind while frames remain at or above it.
+    while (frames_.size() > stopDepth) {
       CallFrame finished = std::move(frames_.back());
       frames_.pop_back();
       closeCapturedUpvalues(finished);
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
-      scratchCells_.resize(frames_.size());
+      // Keep every scratch slot alive: outer nested-call loops still read
+      // their own cell after this frame is popped (PHASE 6b fix).
+      // Slots are reclaimed lazily by the owning `call` scope, never here.
       if (!stack.empty()) stack.pop_back();
       if (depth > 0) --depth;
     }
@@ -274,7 +293,9 @@ Value VM::runFrames(std::size_t stopDepth) {
       closeCapturedUpvalues(finished);
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
-      scratchCells_.resize(frames_.size());
+      // Keep every scratch slot alive: outer nested-call loops still read
+      // their own cell after this frame is popped (PHASE 6b fix).
+      // Slots are reclaimed lazily by the owning `call` scope, never here.
       if (!stack.empty()) stack.pop_back();
       if (depth > 0) --depth;
       return frames_.size() < stopDepth;
