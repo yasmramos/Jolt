@@ -135,23 +135,43 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
 
   const int savedLine = currentLine;
   const int savedCol = currentCol;
-  // The nested loop must stop when the frame it pushed is popped: that pop
-  // publishes the call's result into `resultReg`, which lives in *this*
-  // (the caller's) window. Comparing against the caller's frame count would
-  // only stop after the caller itself returns, running the outer chunk past
-  // its epilogue with a dangling frame reference (PHASE 6b fix).
-  const std::size_t stopDepth = frames_.size();
+  // The nested loop must stop when the frame it pushed is popped. Comparing
+  // against the caller's frame count would only stop after the caller itself
+  // returns, running the outer chunk past its epilogue with a dangling frame
+  // reference (PHASE 6b fix). The result always travels back through
+  // `runFrames`' return value, so the new frame gets `kNoResult`: writing
+  // into `registers_` would be unsafe anyway, because `leaveFrame` truncates
+  // the shared register stack to the callee's regBase before any outer code
+  // could observe the slot.
+  const std::size_t stopDepth = frames_.size() + 1;
   pushJoltFrame(std::move(function), std::move(args), kNoResult, line, col);
+  Value result;
   try {
-    Value result = runFrames(stopDepth);
-    currentLine = savedLine;
-    currentCol = savedCol;
-    return result;
+    result = runFrames(stopDepth);
   } catch (...) {
+    // Unwind: drop every frame this call pushed (and any deeper ones) so the
+    // VM stays consistent for a subsequent run(). `leaveFrame` normally does
+    // this bookkeeping; on an exception we replicate it, retiring captured
+    // cells before shrinking the shared windows.
+    while (frames_.size() > stopDepth - 1) {
+      CallFrame finished = std::move(frames_.back());
+      frames_.pop_back();
+      closeCapturedUpvalues(finished);
+      registers_.resize(finished.regBase);
+      locals_.resize(finished.localBase);
+      if (!stack.empty()) stack.pop_back();
+      if (depth > 0) --depth;
+    }
     currentLine = savedLine;
     currentCol = savedCol;
     throw;
   }
+  // Note: if the root chunk happened to finish within this nested loop its
+  // frame was popped by `leaveFrame`; the next `run()` rebuilds all windows
+  // from scratch, so no restoration is needed here.
+  currentLine = savedLine;
+  currentCol = savedCol;
+  return result;
 }
 
 Value VM::indexGet(const Value& object, const Value& index, int line, int col) {
