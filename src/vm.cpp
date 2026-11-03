@@ -1,6 +1,7 @@
 #include "vm.h"
 
 #include <algorithm>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -65,10 +66,16 @@ void VM::defineGlobal(const std::string& name, Value value, bool /*isImmutable*/
 Value VM::callNative(Function& fn, std::vector<Value> args, int line, int col) {
   int savedLine = currentLine;
   int savedCol = currentCol;
+  // A native that receives Jolt closures (map/filter/forEach/...) may invoke
+  // them through this very `callNative` entry point. Capturing the raw vector
+  // slot in a `std::function` and re-entering here would invalidate it on
+  // reallocation (PHASE 6b: nested callback support). Copy the arguments so
+  // every level owns its own storage.
+  std::vector<Value> ownedArgs(std::move(args));
   currentLine = line;
   currentCol = col;
   try {
-    Value result = fn.native(*this, args);
+    Value result = fn.native(*this, ownedArgs);
     currentLine = savedLine;
     currentCol = savedCol;
     return result;

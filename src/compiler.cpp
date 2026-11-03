@@ -496,7 +496,14 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
     reg = allocReg();
     emit(OpCode::LOADK, reg, addConstant(Value()));
   }
-  emit(OpCode::RETURN, reg);
+  // A `return` at the top level of a function body is followed by the
+  // implicit epilogue emitted in `compileFunctionProto`. Skipping the second
+  // RETURN when the last instruction already returns keeps the frame stack
+  // consistent: a duplicate RETURN would pop the caller's frame too (PHASE 6b).
+  const bool alreadyReturns = !bc_.code.empty() &&
+                              bc_.code.back().op == OpCode::RETURN &&
+                              bc_.code.back().a == reg;
+  if (!alreadyReturns) emit(OpCode::RETURN, reg);
   freeReg();
 }
 
