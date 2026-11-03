@@ -44,6 +44,10 @@ class VM : public Runtime {
   Value call(const Value& callee, std::vector<Value> args, int line, int col) override;
   void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
 
+  // Number of heap cells currently adopted by `closeCapturedUpvalues`
+  // (PHASE 6b). Test hook: proves retired locals survive their defining frame.
+  std::size_t retiredCellCount() const { return retiredCells_.size(); }
+
   [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const override;
 
   Value indexGet(const Value& object, const Value& index, int line, int col) override;
@@ -93,6 +97,10 @@ class VM : public Runtime {
   // Moves the still-open captured locals of the frame being popped onto the
   // heap so closures that survive it keep sharing the same cells (PHASE 6b).
   void closeCapturedUpvalues(const CallFrame& frame);
+
+  // Drops retired cells nobody references anymore; keeps the ones still held
+  // by live closures across `run()` invocations (REPL entries, PHASE 6b).
+  void pruneRetiredCells();
 
   // Pushes the frame for a bytecode function, copying its arguments into the
   // new window. Throws on arity, depth or a function without a proto.

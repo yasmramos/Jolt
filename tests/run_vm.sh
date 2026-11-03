@@ -32,6 +32,7 @@ fi
     src/compiler.cpp \
     src/vm.cpp \
     src/ops.cpp \
-    src/builtins.cpp
+    src/builtins.cpp \
+    src/platform_posix.cpp
 
 ./build/vm_test

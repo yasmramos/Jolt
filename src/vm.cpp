@@ -1,5 +1,6 @@
 #include "vm.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -113,8 +114,10 @@ void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t re
   const int localCount = proto.numLocals > 0 ? proto.numLocals : 0;
   locals_.resize(localBase + static_cast<std::size_t>(localCount));
 
-  frames_.push_back(
-      CallFrame{function->proto, 0, resultReg, regBase, localBase});
+  // The closure's captured cells become the frame's upvalue window, so
+  // GETUPVAL/SETUPVAL and nested CLOSUREs resolve through it (PHASE 6b).
+  CallFrame frame{function->proto, 0, resultReg, regBase, localBase, function->upvalues};
+  frames_.push_back(std::move(frame));
   ++depth;
   stack.push_back(Frame{function->name, line, col});
 }
@@ -177,6 +180,9 @@ void VM::run(const Bytecode& bytecode) {
   const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
   locals_.assign(static_cast<size_t>(localCount), CellPtr{});
+  // Closures created by a previous entry may still hold cells that this run
+  // adopts through `retiredCells_`; keep them alive, drop the stale ones.
+  pruneRetiredCells();
   frames_.clear();
   depth = 0;
   stack.clear();
@@ -185,7 +191,7 @@ void VM::run(const Bytecode& bytecode) {
   // handle. Child protos are owned by the Function values that instantiate
   // them and outlive both the frame and this call to `run`.
   std::shared_ptr<const Bytecode> root(&bytecode, [](const Bytecode*) {});
-  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, 0, 0});
+  frames_.push_back(CallFrame{std::move(root), 0, kNoResult, 0, 0, {}});
   runFrames(0);
 }
 
@@ -204,6 +210,9 @@ Value VM::runFrames(std::size_t stopDepth) {
       if (finished.resultReg != kNoResult) {
         registers_[finished.resultReg] = result;
       }
+      // Retire the locals this frame still shares with escaping closures
+      // before shrinking the shared cell stack (PHASE 6b).
+      closeCapturedUpvalues(finished);
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
       if (!stack.empty()) stack.pop_back();
@@ -428,16 +437,58 @@ Value VM::runFrames(std::size_t stopDepth) {
         std::shared_ptr<const Bytecode> proto = chunk.children[static_cast<std::size_t>(child)];
         FuncPtr function = makeRef<Function>();
         function->name = proto->name;
-        function->proto = std::move(proto);
+        function->proto = proto;
+        // Bind the capture list (PHASE 6b). Each descriptor points either at
+        // an open local cell of this frame or at one of its upvalues; both
+        // share the same `Cell`, so mutations stay visible across closures.
+        const CallFrame& frame = frames_.back();
+        function->upvalues.reserve(proto->upvalues.size());
+        for (const UpvalDesc& desc : proto->upvalues) {
+          CellPtr cell;
+          if (desc.inParentLocal) {
+            const std::size_t absolute = frame.localBase + static_cast<std::size_t>(desc.index);
+            if (desc.index < 0 || absolute >= locals_.size()) {
+              fail("upvalue local index out of range: " + std::to_string(desc.index), line, col);
+            }
+            cell = locals_[absolute];
+            if (!cell) {
+              // The compiler only captures declared locals; reaching an empty
+              // slot means a local was never initialized (compiler bug).
+              fail("internal error: captured local has no cell", line, col);
+            }
+          } else {
+            if (desc.index < 0 || static_cast<std::size_t>(desc.index) >= frame.upvalues.size()) {
+              fail("upvalue index out of range: " + std::to_string(desc.index), line, col);
+            }
+            cell = frame.upvalues[static_cast<std::size_t>(desc.index)];
+          }
+          function->upvalues.push_back(std::move(cell));
+        }
         setReg(instruction.a, Value(std::move(function)));
         break;
       }
 
-      // PHASE 6b-6d opcodes are declared now so the instruction budget stays
+      case OpCode::GETUPVAL: {
+        const std::vector<CellPtr>& upvalues = frames_.back().upvalues;
+        if (instruction.b < 0 || static_cast<std::size_t>(instruction.b) >= upvalues.size()) {
+          fail("upvalue index out of range: " + std::to_string(instruction.b), line, col);
+        }
+        setReg(instruction.a, upvalues[static_cast<std::size_t>(instruction.b)]->value);
+        break;
+      }
+
+      case OpCode::SETUPVAL: {
+        std::vector<CellPtr>& upvalues = frames_.back().upvalues;
+        if (instruction.b < 0 || static_cast<std::size_t>(instruction.b) >= upvalues.size()) {
+          fail("upvalue index out of range: " + std::to_string(instruction.b), line, col);
+        }
+        upvalues[static_cast<std::size_t>(instruction.b)]->value = getReg(instruction.a);
+        break;
+      }
+
+      // PHASE 6c-6d opcodes are declared now so the instruction budget stays
       // at 40. The compiler does not emit them until their slice lands, so
       // reaching one of these cases would be a compiler bug.
-      case OpCode::GETUPVAL:
-      case OpCode::SETUPVAL:
       case OpCode::NEWTABLE:
       case OpCode::GETTABLE:
       case OpCode::SETTABLE:
@@ -458,6 +509,32 @@ Value VM::runFrames(std::size_t stopDepth) {
     }
   }
   return Value();
+}
+
+// ------------------------------------------------------- upvalue cell retiring
+
+void VM::closeCapturedUpvalues(const CallFrame& frame) {
+  // A local slot is "captured" when some live closure's upvalue list points at
+  // the same Cell this frame owns. When the frame dies its window in the
+  // shared `locals_` stack disappears, so any captured cell must be adopted by
+  // `retiredCells_` to keep the sharing intact (PHASE 6b). The reference count
+  // tells us exactly that: a cell with more than one owner outlives this
+  // window shrink, and the extra owners are closures somewhere in the heap.
+  const std::size_t base = frame.localBase;
+  const std::size_t end = locals_.size();  // window before `leaveFrame` shrank it
+  for (std::size_t i = base; i < end; ++i) {
+    const CellPtr& cell = locals_[i];
+    if (cell && cell->refs > 1) retiredCells_.push_back(cell);
+  }
+}
+
+void VM::pruneRetiredCells() {
+  // Keep only cells that somebody still references. A retired cell with a
+  // single owner (this vector) is dead: no live frame window or closure holds
+  // it anymore, so releasing it here mirrors what shrinking `locals_` did.
+  retiredCells_.erase(std::remove_if(retiredCells_.begin(), retiredCells_.end(),
+                                     [](const CellPtr& cell) { return cell->refs <= 1; }),
+                      retiredCells_.end());
 }
 
 const Value* VM::findGlobal(const std::string& name) const {
