@@ -869,6 +869,123 @@ void testMultiArgumentPrintThroughNative() {
   assert(capture.stream.str() == "1 2 3\n");
 }
 
+// ------------------------------------------- PHASE 6b: lambdas, upvalues, closures
+
+void testLambdaCompilesToClosureAndGetUpval() {
+  // A lambda that captures an enclosing local reads it through GETUPVAL;
+  // the closure value survives in a global slot.
+  Bytecode bytecode = compileSource(
+      "fn makeAdder(n) { return x => x + n; }\n"
+      "let add5 = makeAdder(5);\n"
+      "let r = add5(40);\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 45);
+  const Value& adder = requireGlobal(vm, "add5");
+  assert(adder.isFunc() && adder.func().isVm());
+  assert(!adder.func().upvalues.empty());  // `n` captured as one cell
+}
+
+void testCounterClosuresShareMutableCell() {
+  // Two closures created by the same call share the counter's cells: writes
+  // from one (SETUPVAL) are visible through the other (GETUPVAL), and two
+  // separate calls own independent state. Collections arrive in 6c, so the
+  // pair is passed back through an out-parameter style call instead.
+  Bytecode bytecode = compileSource(
+      "fn makeCounter(start, setBump, setPeek) {\n"
+      "  var count = start;\n"
+      "  setBump(() => { count += 1; return count; });\n"
+      "  setPeek(() => count);\n"
+      "}\n"
+      "var bump1 = nil;\n"
+      "var peek1 = nil;\n"
+      "var bump2 = nil;\n"
+      "makeCounter(0, f => { bump1 = f; }, f => { peek1 = f; });\n"
+      "makeCounter(100, f => { bump2 = f; }, f => {});\n"
+      "let a = bump1();\n"
+      "let b = bump1();\n"
+      "let p = peek1();\n"
+      "let d = bump2();\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "a").asInt() == 1);
+  assert(requireGlobal(vm, "b").asInt() == 2);
+  // `peek` sees the write `bump` made through SETUPVAL: shared cell.
+  assert(requireGlobal(vm, "p").asInt() == 2);
+  // The second counter has its own cell chain.
+  assert(requireGlobal(vm, "d").asInt() == 101);
+}
+
+void testCapturedLocalsSurviveFrameExit() {
+  // After the defining frame returns, its captured cells are retired but
+  // stay alive and keep their values (closeCapturedUpvalues).
+  Bytecode bytecode = compileSource(
+      "fn scopeTest() {\n"
+      "  let y = 5;\n"
+      "  if (true) {\n"
+      "    let z = 1;\n"
+      "    return () => y + z;\n"
+      "  }\n"
+      "}\n"
+      "let f = scopeTest();\n"
+      "let r = f();\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 6);
+  assert(vm.retiredCellCount() >= 2);  // both `y` and `z` were adopted
+}
+
+void testNestedClosureThroughTwoLevels() {
+  // An inner lambda resolves an outer-local via the parent's upvalue list
+  // (UpvalDesc with inParentLocal = false), not via the frame's locals.
+  Bytecode bc = compileSource(
+      "let outer = a => (b => () => a + b);\n"
+      "let g = outer(10)(3);\n"
+      "let r = g();\n");
+  VM vm;
+  vm.run(bc);
+
+  assert(requireGlobal(vm, "r").asInt() == 13);
+}
+
+void testUpvalueIndexOutOfRangeFailsCleanly() {
+  // Hand-built chunk: GETUPVAL with no upvalues bound must raise a runtime
+  // error instead of touching memory out of bounds.
+  Bytecode chunk;
+  chunk.numRegisters = 2;
+  chunk.code.push_back(Instruction{OpCode::GETUPVAL, 0, 0, 0, 0, 1, 1});
+  chunk.code.push_back(Instruction{OpCode::HALT, 0, 0, 0, 0, 1, 1});
+  VM vm;
+  bool threw = false;
+  try {
+    vm.run(chunk);
+  } catch (const RuntimeError& error) {
+    threw = true;
+    assert(error.message.find("upvalue index out of range") != std::string::npos);
+  }
+  assert(threw);
+}
+
+void testClosureWriteBackIntoEnclosingLocal() {
+  // The enclosing function keeps running after creating the closure and
+  // observes writes made through the shared cell while it is still open.
+  Bytecode bytecode = compileSource(
+      "fn writer() {\n"
+      "  var v = 1;\n"
+      "  let set = x => { v = x; };\n"
+      "  set(42);\n"
+      "  return v;\n"
+      "}\n"
+      "let r = writer();\n");
+  VM vm;
+  vm.run(bytecode);
+
+  assert(requireGlobal(vm, "r").asInt() == 42);
+}
+
 void testVmRejectsAstFunctions() {
   // A function with neither a native body nor a proto cannot be executed by
   // the VM; it must refuse instead of silently running the AST.
@@ -947,6 +1064,12 @@ int main() {
   testFunctionDepthLimit();
   testFunctionStackTrace();
   testMultiArgumentPrintThroughNative();
+  testLambdaCompilesToClosureAndGetUpval();
+  testCounterClosuresShareMutableCell();
+  testCapturedLocalsSurviveFrameExit();
+  testNestedClosureThroughTwoLevels();
+  testUpvalueIndexOutOfRangeFailsCleanly();
+  testClosureWriteBackIntoEnclosingLocal();
   testVmRejectsAstFunctions();
 
   std::puts("vm tests passed");
