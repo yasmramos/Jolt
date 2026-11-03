@@ -129,10 +129,9 @@ struct Bytecode {
   std::vector<Value> constants;
   std::vector<std::shared_ptr<Bytecode>> children;
   std::vector<UpvalDesc> upvalues;
-  // Captured cells instantiated by `CLOSURE` (PHASE 6b), parallel to
-  // `upvalues`. Mutable because the opcode fills it in while executing from a
-  // const chunk; every VM instance owns its own copy of the tree.
-  mutable std::vector<ClosureUpvalue> captures;
+  // No per-proto capture storage: upvalue cells live in the `Function` value
+  // produced by `CLOSURE` (`Function::upvalues`), so closures created from the
+  // same proto in different frames never overwrite each other's captures.
   int numRegisters = 0;
   // Number of local cells the frame needs.
   int numLocals = 0;

@@ -266,7 +266,6 @@ bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
 
 // ------------------------------------------------------------------- upvalues
 
-
 // Adds a capture for `name` to `proto`, whose scopes live in `scopes` and
 // whose transitive captures are tracked in `names`. Returns the index of the
 // new (or already present) entry in `proto.upvalues`, and keeps `names`
@@ -588,6 +587,18 @@ int Compiler::compileFunctionProto(const std::string& name,
   return index;
 }
 
+int Compiler::compileLambda(const LambdaExpr& lambda, int line, int col) {
+  // A lambda is an anonymous function value: compile its body as a child proto
+  // and instantiate it with CLOSURE, exactly like a named declaration but
+  // without binding a name anywhere.
+  currentLine_ = line;
+  currentCol_ = col;
+  int child = compileFunctionProto("<anonymous>", lambda.params, lambda.body, line, col);
+  int reg = allocReg();
+  emit(OpCode::CLOSURE, reg, child);
+  return reg;
+}
+
 void Compiler::compileIf(const IfStmt& s) {
   int condition = compileExpr(*s.condition);
   int elseJump = emitJump(OpCode::JMP_IF_FALSE, condition);
@@ -727,7 +738,12 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   if (isLocal && local.isImmutable) {
     fail("cannot assign to immutable variable '" + name + "'", line, col);
   }
-  if (!isLocal && globalConsts_.find(name) != globalConsts_.end()) {
+  // A captured local of an enclosing function becomes an upvalue read/write on
+  // the shared cell (PHASE 6b). The lookup must happen after the compile of
+  // the value below only insofar as register allocation is concerned; doing it
+  // first keeps the resolution stable and mirrors `compileVariable`.
+  int upvalueSlot = isLocal ? -1 : resolveUpvalue(name);
+  if (!isLocal && upvalueSlot < 0 && globalConsts_.find(name) != globalConsts_.end()) {
     fail("cannot assign to immutable variable '" + name + "'", line, col);
   }
 
@@ -735,6 +751,8 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     int value = compileExpr(*assign.value);
     if (isLocal) {
       emit(OpCode::SETLOCAL, value, local.slot);
+    } else if (upvalueSlot >= 0) {
+      emit(OpCode::SETUPVAL, value, upvalueSlot);
     } else {
       emit(OpCode::SETGLOBAL, value, addString(name));
     }
@@ -749,6 +767,8 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   int current = allocReg();
   if (isLocal) {
     emit(OpCode::GETLOCAL, current, local.slot);
+  } else if (upvalueSlot >= 0) {
+    emit(OpCode::GETUPVAL, current, upvalueSlot);
   } else {
     emit(OpCode::GETGLOBAL, current, addString(name));
   }
@@ -758,6 +778,8 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
 
   if (isLocal) {
     emit(OpCode::SETLOCAL, current, local.slot);
+  } else if (upvalueSlot >= 0) {
+    emit(OpCode::SETUPVAL, current, upvalueSlot);
   } else {
     emit(OpCode::SETGLOBAL, current, addString(name));
   }
@@ -849,6 +871,7 @@ int Compiler::compileExpr(const Expr& expr) {
             return compileAssign(assign, expr.line, expr.col);
           },
           [&](const CallExpr& call) -> int { return compileCall(call, expr.line, expr.col); },
+          [&](const LambdaExpr& lambda) -> int { return compileLambda(lambda, expr.line, expr.col); },
           [&](const TernaryExpr& ternary) -> int { return compileTernary(ternary); },
           [&](const auto&) -> int {
             fail("this expression is not supported by the bytecode compiler yet (Phase 6)",
