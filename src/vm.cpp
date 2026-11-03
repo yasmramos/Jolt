@@ -135,7 +135,12 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
 
   const int savedLine = currentLine;
   const int savedCol = currentCol;
-  const std::size_t stopDepth = frames_.size() + 1;
+  // The nested loop must stop when the frame it pushed is popped: that pop
+  // publishes the call's result into `resultReg`, which lives in *this*
+  // (the caller's) window. Comparing against the caller's frame count would
+  // only stop after the caller itself returns, running the outer chunk past
+  // its epilogue with a dangling frame reference (PHASE 6b fix).
+  const std::size_t stopDepth = frames_.size();
   pushJoltFrame(std::move(function), std::move(args), kNoResult, line, col);
   try {
     Value result = runFrames(stopDepth);
