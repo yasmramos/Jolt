@@ -446,10 +446,15 @@ Value VM::runFrames(std::size_t stopDepth) {
         for (const UpvalDesc& desc : proto->upvalues) {
           CellPtr cell;
           if (desc.inParentLocal) {
+            // The captured slot may sit past the frame's declared `numLocals`
+            // window when a block-scoped variable left its scope before this
+            // closure was instantiated. Grow the shared cell stack so the
+            // descriptor stays valid (PHASE 6b).
             const std::size_t absolute = frame.localBase + static_cast<std::size_t>(desc.index);
-            if (desc.index < 0 || absolute >= locals_.size()) {
+            if (desc.index < 0) {
               fail("upvalue local index out of range: " + std::to_string(desc.index), line, col);
             }
+            if (absolute >= locals_.size()) locals_.resize(absolute + 1);
             cell = locals_[absolute];
             if (!cell) {
               // The compiler only captures declared locals; reaching an empty
