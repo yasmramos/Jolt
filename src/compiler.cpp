@@ -1,5 +1,6 @@
 #include "compiler.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -243,7 +244,7 @@ int Compiler::declareLocal(const std::string& name, bool isImmutable) {
   int slot = nextLocal_++;
   if (nextLocal_ > maxLocal_) maxLocal_ = nextLocal_;
   Scope& scope = scopes_.back();
-  scope.vars[name] = LocalVar{slot, isImmutable};
+  scope.vars[name] = LocalVar{name, slot, isImmutable};
   return slot;
 }
 
@@ -281,7 +282,7 @@ int Compiler::resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
                                FuncState* parent, const std::string& name) {
   LocalVar local;
   if (resolveLocalIn(scopes, name, local)) {
-    return captureVariable(scopes, proto, names, name);
+    return captureVariable(proto, names, local);
   }
   if (!parent) return -1;
   int parentIndex = resolveFromFrame(parent->scopes, parent->bc, parent->upvalueNames,
@@ -296,38 +297,24 @@ int Compiler::resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
   return static_cast<int>(proto.upvalues.size()) - 1;
 }
 
-// Returns true when `proto` is the frame currently being compiled (its state
-// lives in `bc_`, `maxLocal_` and friends instead of a saved FuncState).
-bool Compiler::isCurrentFrame(const Bytecode& proto) const {
-  if (funcStack_.empty()) return &proto == &bc_;
-  return &proto == &funcStack_.back().bc;
-}
-
-int Compiler::captureVariable(std::vector<Scope>& scopes, Bytecode& proto,
+int Compiler::captureVariable(Bytecode& proto,
                               std::unordered_map<std::string, int>& names,
-                              const std::string& name) {
-  auto existing = names.find(name);
+                              const LocalVar& local) {
+  auto existing = names.find(local.name);
   if (existing != names.end()) return existing->second;
-  LocalVar local;
-  if (!resolveLocalIn(scopes, name, local)) return -1;
   proto.upvalues.push_back(UpvalDesc{true, local.slot});
-  names[name] = static_cast<int>(proto.upvalues.size()) - 1;
-  // Block-scoped variables can leave their scope (and lower the frame's
-  // high-water mark) before an inner closure captures them. The VM sizes a
-  // frame's local window from `numLocals`, so raise it to cover every
-  // captured slot even after the variable goes out of scope (PHASE 6b fix).
+  // A block-scoped variable can leave its scope (and lower the frame's
+  // high-water mark) before an inner closure captures it. The VM sizes a
+  // frame's local window from `numLocals`, so raise the proto's value to
+  // cover every captured slot even after the variable goes out of scope
+  // (PHASE 6b fix). `proto` is either the frame under construction (`bc_`)
+  // or a completed parent saved in `funcStack_`; both are updated through
+  // this single point because `numLocals` is written whenever a proto is
+  // finished and again when a frame is popped back into `bc_`.
   const int needed = local.slot + 1;
-  if (isCurrentFrame(proto)) {
-    if (needed > maxLocal_) maxLocal_ = needed;
-  } else {
-    for (FuncState& state : funcStack_) {
-      if (&state.bc == &proto) {
-        if (needed > state.maxLocal) state.maxLocal = needed;
-        break;
-      }
-    }
-  }
-  return names[name];
+  if (needed > proto.numLocals) proto.numLocals = needed;
+  names[local.name] = static_cast<int>(proto.upvalues.size()) - 1;
+  return names[local.name];
 }
 
 int Compiler::resolveUpvalue(const std::string& name) {
@@ -382,7 +369,9 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   emit(OpCode::HALT);
 
   bc_.numRegisters = maxReg_;
-  bc_.numLocals = maxLocal_;
+  // Never lower `numLocals`: a captured slot may have raised it past the
+  // current high-water mark (PHASE 6b, see `captureVariable`).
+  if (maxLocal_ > bc_.numLocals) bc_.numLocals = maxLocal_;
   return std::move(bc_);
 }
 
@@ -585,7 +574,9 @@ int Compiler::compileFunctionProto(const std::string& name,
   emit(OpCode::RETURN, nilReg);
 
   bc_.numRegisters = maxReg_;
-  bc_.numLocals = maxLocal_;
+  // Same rule as the top level: captured slots may have raised `numLocals`
+  // above the frame's current high-water mark (PHASE 6b).
+  if (maxLocal_ > bc_.numLocals) bc_.numLocals = maxLocal_;
 
   Bytecode proto = std::move(bc_);
   // The frame pushed for this child is finished; its `enclosing` pointer was
@@ -597,7 +588,10 @@ int Compiler::compileFunctionProto(const std::string& name,
   nextReg_ = savedParent.nextReg;
   maxReg_ = savedParent.maxReg;
   nextLocal_ = savedParent.nextLocal;
-  maxLocal_ = savedParent.maxLocal;
+  // A capture into this frame while it was on the stack may have raised its
+  // proto's `numLocals` past the recorded mark; keep the higher value so a
+  // later capture or the final write-out never lowers it again (PHASE 6b).
+  maxLocal_ = std::max(savedParent.maxLocal, bc_.numLocals);
   scopes_ = std::move(savedParent.scopes);
   loops_ = std::move(savedParent.loops);
   currentLine_ = savedParent.line;

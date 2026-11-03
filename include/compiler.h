@@ -39,6 +39,7 @@ class Compiler {
 
  private:
   struct LocalVar {
+    std::string name;
     int slot = 0;
     bool isImmutable = false;
   };
@@ -90,9 +91,9 @@ class Compiler {
   // it, which is why these statics take the pieces explicitly.
   static bool resolveLocalIn(const std::vector<Scope>& scopes, const std::string& name,
                              LocalVar& out);
-  static int captureVariable(std::vector<Scope>& scopes, Bytecode& proto,
+  static int captureVariable(Bytecode& proto,
                              std::unordered_map<std::string, int>& names,
-                             const std::string& name);
+                             const LocalVar& local);
   static int resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
                               std::unordered_map<std::string, int>& names, FuncState* parent,
                               const std::string& name);
