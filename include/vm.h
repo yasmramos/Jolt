@@ -67,6 +67,10 @@ class VM : public Runtime {
   struct CallFrame {
     std::shared_ptr<const Bytecode> proto;
     std::size_t pc = 0;
+    // Absolute slot in `scratchCells_` receiving the return value when
+    // `resultReg` is kNoResult, or kNoResult for frames without a scratch
+    // destination (the root chunk).
+    std::size_t resultScratch = kNoResult;
     std::size_t resultReg = kNoResult;
     std::size_t regBase = 0;
     std::size_t localBase = 0;
@@ -79,6 +83,13 @@ class VM : public Runtime {
   std::vector<Value> registers_;
   std::vector<CallFrame> frames_;
   std::vector<CellPtr> locals_;
+  // Dedicated per-call return cells for the kNoResult protocol (PHASE 6b fix).
+  // The scratch used to live one slot below the callee's local window inside
+  // `locals_`, where a nested call could overwrite it while its own frame was
+  // still running. A separate vector indexed by frame removes that structural
+  // collision entirely: the cell cannot be clobbered and survives the shrinking
+  // of the shared local windows.
+  std::vector<CellPtr> scratchCells_;
   std::unordered_map<std::string, Value> globals_;
   // Heap cells adopted by `CLOSEUPVALS` when a frame with captured locals
   // returns (PHASE 6b). Shared across nested `run()` invocations so closures
