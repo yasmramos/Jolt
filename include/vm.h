@@ -44,10 +44,6 @@ class VM : public Runtime {
   Value call(const Value& callee, std::vector<Value> args, int line, int col) override;
   void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
 
-  // Number of heap cells currently adopted by `closeCapturedUpvalues`
-  // (PHASE 6b). Test hook: proves retired locals survive their defining frame.
-  std::size_t retiredCellCount() const { return retiredCells_.size(); }
-
   [[noreturn]] void raise(const std::string& message, int line, int col) const override;
 
   Value indexGet(const Value& object, const Value& index, int line, int col) override;
@@ -91,15 +87,6 @@ class VM : public Runtime {
   // of the shared local windows.
   std::vector<CellPtr> scratchCells_;
   std::unordered_map<std::string, Value> globals_;
-  // Heap cells adopted by `CLOSEUPVALS` when a frame with captured locals
-  // returns (PHASE 6b). Shared across nested `run()` invocations so closures
-  // created in one entry keep working in the next; cleared at every top-level
-  // run. Keeps each cell alive exactly once, like the old stack window did.
-  std::vector<CellPtr> retiredCells_;
-  // Absolute indices into `locals_` of slots opened as upvalues by the
-  // currently executing frames (PHASE 6b). The VM closes them when their
-  // frame exits so closures observe the final value, and `run()` resets it.
-  std::vector<std::size_t> openUpvalueSlots_;
 
   Value& getReg(int index);
   void setReg(int index, Value value);
@@ -108,14 +95,6 @@ class VM : public Runtime {
   // Runs until HALT or until a RETURN drops below `stopDepth`; the latter
   // returns the value produced by the frame that crossed the boundary.
   Value runFrames(std::size_t stopDepth);
-
-  // Moves the still-open captured locals of the frame being popped onto the
-  // heap so closures that survive it keep sharing the same cells (PHASE 6b).
-  void closeCapturedUpvalues(const CallFrame& frame);
-
-  // Drops retired cells nobody references anymore; keeps the ones still held
-  // by live closures across `run()` invocations (REPL entries, PHASE 6b).
-  void pruneRetiredCells();
 
   // Pushes the frame for a bytecode function, copying its arguments into the
   // new window. Throws on arity, depth or a function without a proto.

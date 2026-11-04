@@ -1036,8 +1036,8 @@ void testCounterClosuresShareMutableCell() {
 
 void testCapturedLocalsSurviveFrameExit() {
   TEST_SCOPE();
-  // After the defining frame returns, its captured cells are retired but
-  // stay alive and keep their values (closeCapturedUpvalues).
+  // After the defining frame returns, its captured cells stay alive through the
+  // closure that captured them and keep their values.
   Bytecode bytecode = compileSource(
       "fn scopeTest() {\n"
       "  let y = 5;\n"
@@ -1052,7 +1052,60 @@ void testCapturedLocalsSurviveFrameExit() {
   runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "r").asInt() == 6);
-  assert(vm.retiredCellCount() >= 2);  // both `y` and `z` were adopted
+}
+
+void testCapturedCellsAreNotRetainedByTheVM() {
+  TEST_SCOPE();
+  // Nothing but the closures themselves may keep a captured cell alive. `outer`
+  // captures the cell that holds `inner`, so a cell kept around after its frame
+  // returned would also keep a function alive. With plain reference counting
+  // every one of them must be gone as soon as `make` returns, with no
+  // collection involved.
+  gcCollect();  // start with a fresh collection counter
+  const std::size_t before = gcTrackedCount();
+  Bytecode bytecode = compileSource(
+      "fn make(i) {\n"
+      "  let inner = () => i;\n"
+      "  let outer = () => inner();\n"
+      "  return outer();\n"
+      "}\n"
+      "var total = 0;\n"
+      "var n = 0;\n"
+      "while (n < 1000) { total += make(n); n += 1; }\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "total").asInt() == 499500);
+  // Only the global `make` is left.
+  assert(gcTrackedCount() <= before + 2);
+}
+
+void testClosureCyclesAreCollected() {
+  TEST_SCOPE();
+  // Two closures that capture each other's variable form a cycle through the
+  // captured cells: plain reference counting never frees it. The VM must let
+  // the collector reclaim these while the program is still running.
+  gcCollect();
+  const std::size_t before = gcTrackedCount();
+  Bytecode bytecode = compileSource(
+      "fn make(i) {\n"
+      "  var a = () => b();\n"
+      "  var b = () => a();\n"
+      "  return i;\n"
+      "}\n"
+      "var total = 0;\n"
+      "var n = 0;\n"
+      "while (n < 40000) { total += make(n); n += 1; }\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "total").asInt() == 799980000);
+  // Each iteration leaves a cycle behind; without the collector the VM would
+  // still hold every one of the 40000 of them here.
+  assert(gcTrackedCount() < before + 20000);
+  // An explicit collection reclaims whatever the automatic ones left.
+  gcCollect();
+  assert(gcTrackedCount() <= before + 2);
 }
 
 void testNestedClosureThroughTwoLevels() {
@@ -1191,6 +1244,8 @@ int main() {
   testClosureOverTheParameterSeesLaterWrites();
   testCounterClosuresShareMutableCell();
   testCapturedLocalsSurviveFrameExit();
+  testCapturedCellsAreNotRetainedByTheVM();
+  testClosureCyclesAreCollected();
   testNestedClosureThroughTwoLevels();
   testUpvalueIndexOutOfRangeFailsCleanly();
   testClosureWriteBackIntoEnclosingLocal();
