@@ -589,12 +589,19 @@ void testNothingIsCapturedFromTheOutermostFunction() {
 }
 
 void testUnsupportedConstructs() {
-  // Constructs the compiler still rejects after PHASE 6b-6d. Everything that
-  // landed in those phases (nested fns, arrays, maps, lambdas, for-in, ranges,
-  // indexing, member access) is covered by positive tests instead.
+  // Collections, iteration and interpolation arrive in PHASE 6c-6d; until each
+  // one lands the compiler must reject it with a CompileError. Functions,
+  // lambdas and local function declarations compile since 6b (see below).
+  expectCompileError("let x = [1, 2];\n", "array literal");
+  expectCompileError("let m = {a: 1};\n", "map literal");
   expectCompileError("let s = \"a${b}\";\n", "string interpolation");
+  expectCompileError("let r = 1..2;\n", "range");
+  // No parentheses: `for (x in ...)` would be rejected by the parser instead.
+  expectCompileError("for x in 1..2 { print(x); }\n", "for-in loop");
   expectCompileError("let x = 1 in 2;\n", "in operator");
   expectCompileError("return 1;\n", "return statement");
+  expectCompileError("let a = 1;\nlet x = a[0];\n", "index expression");
+  expectCompileError("let m = 1;\nlet x = m.a;\n", "member expression");
 }
 
 void testNestedFunctionDeclarationsAreSupported() {
@@ -602,13 +609,7 @@ void testNestedFunctionDeclarationsAreSupported() {
   // PHASE 6b; they must not be reported as unsupported constructs anymore.
   expectCompiles("fn outer() { fn inner() {} }\n");
   expectCompiles("{ fn f() {} }\n");
-  expectCompiles("let x = [1, 2];\n");
-  expectCompiles("let m = {a: 1};\n");
-  expectCompiles("let r = 1..2;\n");
   expectCompiles("let f = x => x;\n");
-  expectCompiles("for (x in 1..2) { print(x); }\n");
-  expectCompiles("let a = [1]; let x = a[0];\n");
-  expectCompiles("let m = {a: 1}; let x = m.a;\n");
 }
 
 }  // namespace
