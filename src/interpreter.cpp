@@ -60,7 +60,8 @@ Interpreter::~Interpreter() {
   // Release everything the interpreter owns, then reclaim the cycles left among
   // objects that nothing else references.
   env.reset();
-  globals->clear();
+  // A moved-from interpreter has no scope left to release.
+  if (globals) globals->clear();
   globals.reset();
   gcCollect();
 }
@@ -524,7 +525,7 @@ Value Interpreter::call(const Value& callee, std::vector<Value> args, int line, 
 
 // --------------------------------------------------------------------- errors
 
-void Interpreter::fail(const std::string& message, int line, int col) const {
+void Interpreter::raise(const std::string& message, int line, int col) const {
   RuntimeError error;
   error.message = message;
   error.line = line > 0 ? line : currentLine;

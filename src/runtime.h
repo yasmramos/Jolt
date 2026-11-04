@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,7 +39,16 @@ class Runtime {
 
   // Throws a RuntimeError, defaulting the position to the current expression
   // when `line`/`col` are 0.
-  [[noreturn]] virtual void fail(const std::string& message, int line = 0, int col = 0) const = 0;
+  // Non-virtual on purpose: compilers only honour `[[noreturn]]` on direct
+  // calls, so every `fail()` call site is known not to return. The actual
+  // throwing is delegated to the virtual `raise()`.
+  [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const {
+    raise(message, line, col);
+    std::abort();  // unreachable: `raise()` must throw
+  }
+
+  // Engine-specific error reporting. Must throw and never return.
+  virtual void raise(const std::string& message, int line, int col) const = 0;
 
   virtual Value indexGet(const Value& object, const Value& index, int line, int col) = 0;
   virtual void indexSet(const Value& object, const Value& index, Value value, int line, int col) = 0;

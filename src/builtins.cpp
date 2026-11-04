@@ -1102,6 +1102,7 @@ void registerBuiltins(Runtime& in) {
     needBetween(in, "exit", args, 0, 1);
     int code = args.empty() ? 0 : static_cast<int>(wantInt(in, "exit", args[0]));
     in.platform().exit(code);
+    std::abort();  // unreachable: Platform::exit never returns (virtual calls lose [[noreturn]])
   });
 
   in.addNative("args", [](Runtime& in, Args args) -> Value {

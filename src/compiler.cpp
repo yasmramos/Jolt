@@ -267,58 +267,32 @@ bool Compiler::resolveLocal(const std::string& name, LocalVar& out) const {
 
 // ------------------------------------------------------------------- upvalues
 
-// Adds a capture for `name` to `proto`, whose scopes live in `scopes` and
-// whose transitive captures are tracked in `names`. Returns the index of the
-// new (or already present) entry in `proto.upvalues`, and keeps `names`
-// parallel to that vector so later lookups by name work.
-
-// Walks out from the frame described by (`scopes`, `proto`, `names`) looking
-// for `name`. If it is a local of this frame, captures it directly; otherwise
-// recurses into the enclosing function (when provided) and re-exports that
-// frame's upvalue index. Returns -1 when nothing captures the name, i.e. it
-// resolves to a global.
-int Compiler::resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
-                               std::unordered_map<std::string, int>& names,
+int Compiler::resolveFromFrame(Bytecode& proto, std::unordered_map<std::string, int>& names,
                                FuncState* parent, const std::string& name) {
-  LocalVar local;
-  if (resolveLocalIn(scopes, name, local)) {
-    return captureVariable(proto, names, local);
-  }
+  // The outermost function has nothing around it to capture from.
   if (!parent) return -1;
-  int parentIndex = resolveFromFrame(parent->scopes, parent->bc, parent->upvalueNames,
-                                     parent->enclosing, name);
-  if (parentIndex < 0) return -1;
-  // Re-export: the same variable is reached through the parent's slot in its
-  // own capture list, so nested closures share one cell per variable.
+
   auto existing = names.find(name);
   if (existing != names.end()) return existing->second;
-  proto.upvalues.push_back(UpvalDesc{false, parentIndex});
-  names[name] = static_cast<int>(proto.upvalues.size()) - 1;
-  return static_cast<int>(proto.upvalues.size()) - 1;
-}
 
-int Compiler::captureVariable(Bytecode& proto,
-                              std::unordered_map<std::string, int>& names,
-                              const LocalVar& local) {
-  auto existing = names.find(local.name);
-  if (existing != names.end()) return existing->second;
-  proto.upvalues.push_back(UpvalDesc{true, local.slot});
-  // A block-scoped variable can leave its scope (and lower the frame's
-  // high-water mark) before an inner closure captures it. The VM sizes a
-  // frame's local window from `numLocals`, so raise the proto's value to
-  // cover every captured slot even after the variable goes out of scope
-  // (PHASE 6b fix). `proto` is either the frame under construction (`bc_`)
-  // or a completed parent saved in `funcStack_`; both are updated through
-  // this single point because `numLocals` is written whenever a proto is
-  // finished and again when a frame is popped back into `bc_`.
-  const int needed = local.slot + 1;
-  if (needed > proto.numLocals) proto.numLocals = needed;
-  names[local.name] = static_cast<int>(proto.upvalues.size()) - 1;
-  return names[local.name];
+  UpvalDesc descriptor;
+  LocalVar local;
+  if (resolveLocalIn(parent->scopes, name, local)) {
+    descriptor = UpvalDesc{true, local.slot};
+  } else {
+    int outer = resolveFromFrame(parent->bc, parent->upvalueNames, parent->enclosing, name);
+    if (outer < 0) return -1;
+    descriptor = UpvalDesc{false, outer};
+  }
+
+  proto.upvalues.push_back(descriptor);
+  const int index = static_cast<int>(proto.upvalues.size()) - 1;
+  names[name] = index;
+  return index;
 }
 
 int Compiler::resolveUpvalue(const std::string& name) {
-  return resolveFromFrame(scopes_, bc_, currentUpvalueNames_,
+  return resolveFromFrame(bc_, currentUpvalueNames_,
                           funcStack_.empty() ? nullptr : &funcStack_.back(), name);
 }
 
@@ -369,9 +343,7 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   emit(OpCode::HALT);
 
   bc_.numRegisters = maxReg_;
-  // Never lower `numLocals`: a captured slot may have raised it past the
-  // current high-water mark (PHASE 6b, see `captureVariable`).
-  if (maxLocal_ > bc_.numLocals) bc_.numLocals = maxLocal_;
+  bc_.numLocals = maxLocal_;
   return std::move(bc_);
 }
 
@@ -581,9 +553,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   emit(OpCode::RETURN, nilReg);
 
   bc_.numRegisters = maxReg_;
-  // Same rule as the top level: captured slots may have raised `numLocals`
-  // above the frame's current high-water mark (PHASE 6b).
-  if (maxLocal_ > bc_.numLocals) bc_.numLocals = maxLocal_;
+  bc_.numLocals = maxLocal_;
 
   Bytecode proto = std::move(bc_);
   // The frame pushed for this child is finished; its `enclosing` pointer was
@@ -595,10 +565,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   nextReg_ = savedParent.nextReg;
   maxReg_ = savedParent.maxReg;
   nextLocal_ = savedParent.nextLocal;
-  // A capture into this frame while it was on the stack may have raised its
-  // proto's `numLocals` past the recorded mark; keep the higher value so a
-  // later capture or the final write-out never lowers it again (PHASE 6b).
-  maxLocal_ = std::max(savedParent.maxLocal, bc_.numLocals);
+  maxLocal_ = savedParent.maxLocal;
   scopes_ = std::move(savedParent.scopes);
   loops_ = std::move(savedParent.loops);
   currentLine_ = savedParent.line;

@@ -23,7 +23,8 @@ try {
         src\compiler.cpp `
         src\vm.cpp `
         src\ops.cpp `
-        src\builtins.cpp
+        src\builtins.cpp `
+        src\platform_posix.cpp
     if ($LASTEXITCODE -ne 0) {
         Write-Host "vm test build failed" -ForegroundColor Red
         exit $LASTEXITCODE

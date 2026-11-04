@@ -1,0 +1,7 @@
+let x = 1
+:clear
+print(2)
+let y = 5
+y
+:vars
+:quit

@@ -72,31 +72,29 @@ class Compiler {
     int col = 1;
     bool inFunction = false;
     // Capture list of this frame, keyed by variable name and parallel to
-    // `bc.upvalues`, so re-exports can find an existing entry by name.
+    // `bc.upvalues`, so a name that is used twice is captured once.
     std::unordered_map<std::string, int> upvalueNames;
-    // Slot high-water mark reached by this frame at any point, including
-    // variables that already left their block scope. Captured descriptors
-    // must stay valid for the VM local window even after `maxLocal` drops
-    // again, so this is never decreased (PHASE 6b).
-    int capturedLocalHigh = 0;
     // The frame one level out, or null when this is the outermost function.
     // Valid pointers into `funcStack_` (deque nodes are stable); rebuilt on
     // every push/pop of the proto stack.
     FuncState* enclosing = nullptr;
   };
 
-  // Upvalue resolution helpers (PHASE 6b). A "frame" is the tuple of the
-  // scope list, the proto under construction and its name-keyed capture
-  // list; the current compilation state and every saved `FuncState` map onto
-  // it, which is why these statics take the pieces explicitly.
+  // Upvalue resolution helpers (PHASE 6b). A function captures a variable it
+  // uses but does not declare. The capture is recorded in the capture list of
+  // the function that uses the variable (`proto`, with the name-keyed index
+  // `names`), and its descriptor says where `CLOSURE` finds the cell when it
+  // instantiates that function:
+  //   - the variable is a local of the enclosing function (`parent`): the
+  //     cell is that function's local slot (`inParentLocal`);
+  //   - otherwise the enclosing function captures it too, and the cell is one
+  //     of its upvalues, so nested closures share one cell per variable.
+  // Returns -1 when no enclosing function declares the name, i.e. it is a
+  // global.
   static bool resolveLocalIn(const std::vector<Scope>& scopes, const std::string& name,
                              LocalVar& out);
-  static int captureVariable(Bytecode& proto,
-                             std::unordered_map<std::string, int>& names,
-                             const LocalVar& local);
-  static int resolveFromFrame(std::vector<Scope>& scopes, Bytecode& proto,
-                              std::unordered_map<std::string, int>& names, FuncState* parent,
-                              const std::string& name);
+  static int resolveFromFrame(Bytecode& proto, std::unordered_map<std::string, int>& names,
+                              FuncState* parent, const std::string& name);
 
   Bytecode bc_;
   int nextReg_ = 0;  // next free temporary register

@@ -500,13 +500,108 @@ void testMultiArgumentPrint() {
   assert(bc.code[4].op == OpCode::HALT);
 }
 
+bool hasOp(const Bytecode& bc, OpCode op, int b) {
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == op && instruction.b == b) return true;
+  }
+  return false;
+}
+
+// ------------------------------------------------- PHASE 6b: where captures live
+
+void testCaptureLivesInTheFunctionThatUsesTheVariable() {
+  // `n` is a parameter of makeAdder, and the lambda is the function that uses
+  // it. The capture belongs to the lambda and points at makeAdder's local
+  // slot; makeAdder itself captures nothing.
+  Bytecode bc = compileSource("fn makeAdder(n) { return x => x + n; }\n");
+  assert(bc.upvalues.empty());
+  assert(bc.children.size() == 1);
+
+  const Bytecode& makeAdder = *bc.children[0];
+  assert(makeAdder.upvalues.empty());
+  assert(makeAdder.children.size() == 1);
+
+  const Bytecode& lambda = *makeAdder.children[0];
+  assert(lambda.upvalues.size() == 1);
+  assert(lambda.upvalues[0].inParentLocal);
+  assert(lambda.upvalues[0].index == 0);
+  assert(hasOp(lambda, OpCode::GETUPVAL, 0));
+  // The captured variable is read through the upvalue, not as a local or global.
+  assert(!hasOp(makeAdder, OpCode::GETUPVAL, 0));
+}
+
+void testNestedCaptureIsReexportedByTheMiddleFunction() {
+  // The lambda uses `n` from two levels up. The middle function captures it
+  // from its parent's local slot, and the lambda reaches it through the middle
+  // function's upvalue, so both share one cell.
+  Bytecode bc = compileSource(
+      "fn outer(n) {\n"
+      "  fn middle() { return () => n; }\n"
+      "  return middle;\n"
+      "}\n");
+  const Bytecode& outer = *bc.children[0];
+  assert(outer.upvalues.empty());
+
+  const Bytecode& middle = *outer.children[0];
+  assert(middle.upvalues.size() == 1);
+  assert(middle.upvalues[0].inParentLocal && middle.upvalues[0].index == 0);
+
+  const Bytecode& lambda = *middle.children[0];
+  assert(lambda.upvalues.size() == 1);
+  assert(!lambda.upvalues[0].inParentLocal);
+  assert(lambda.upvalues[0].index == 0);
+}
+
+void testCapturesFollowOrderOfFirstUse() {
+  // A parameter and a local of the enclosing function are captured separately,
+  // each from its own slot, in the order the lambda first uses them.
+  Bytecode bc = compileSource("fn f(a) { let y = 2; return () => y + a; }\n");
+  const Bytecode& lambda = *bc.children[0]->children[0];
+  assert(lambda.upvalues.size() == 2);
+  assert(lambda.upvalues[0].inParentLocal && lambda.upvalues[0].index == 1);  // y
+  assert(lambda.upvalues[1].inParentLocal && lambda.upvalues[1].index == 0);  // a
+}
+
+void testVariableUsedTwiceIsCapturedOnce() {
+  Bytecode bc = compileSource("fn f(n) { return () => n + n; }\n");
+  const Bytecode& lambda = *bc.children[0]->children[0];
+  assert(lambda.upvalues.size() == 1);
+}
+
+void testFunctionCapturesLocalOfTheMainChunk() {
+  // A block-local variable of the main chunk is capturable. Top-level `let`s
+  // are globals and are never captured.
+  Bytecode bc = compileSource("{ let k = 1; fn g() { return k; } }\n");
+  assert(bc.upvalues.empty());
+  const Bytecode& g = *bc.children[0];
+  assert(g.upvalues.size() == 1);
+  assert(g.upvalues[0].inParentLocal && g.upvalues[0].index == 0);
+
+  Bytecode globals = compileSource("let k = 1;\nfn g() { return k; }\n");
+  assert(globals.children[0]->upvalues.empty());
+}
+
+void testNothingIsCapturedFromTheOutermostFunction() {
+  // A function directly under the main chunk with no enclosing local captures
+  // nothing: free names are globals.
+  Bytecode bc = compileSource("fn f() { return missing; }\n");
+  assert(bc.children[0]->upvalues.empty());
+}
+
 void testUnsupportedConstructs() {
-  // Constructs the compiler still rejects after PHASE 6b-6d. Everything that
-  // landed in those phases (nested fns, arrays, maps, lambdas, for-in, ranges,
-  // indexing, member access) is covered by positive tests instead.
+  // Collections, iteration and interpolation arrive in PHASE 6c-6d; until each
+  // one lands the compiler must reject it with a CompileError. Functions,
+  // lambdas and local function declarations compile since 6b (see below).
+  expectCompileError("let x = [1, 2];\n", "array literal");
+  expectCompileError("let m = {a: 1};\n", "map literal");
   expectCompileError("let s = \"a${b}\";\n", "string interpolation");
+  expectCompileError("let r = 1..2;\n", "range");
+  // No parentheses: `for (x in ...)` would be rejected by the parser instead.
+  expectCompileError("for x in 1..2 { print(x); }\n", "for-in loop");
   expectCompileError("let x = 1 in 2;\n", "in operator");
   expectCompileError("return 1;\n", "return statement");
+  expectCompileError("let a = 1;\nlet x = a[0];\n", "index expression");
+  expectCompileError("let m = 1;\nlet x = m.a;\n", "member expression");
 }
 
 void testNestedFunctionDeclarationsAreSupported() {
@@ -514,18 +609,18 @@ void testNestedFunctionDeclarationsAreSupported() {
   // PHASE 6b; they must not be reported as unsupported constructs anymore.
   expectCompiles("fn outer() { fn inner() {} }\n");
   expectCompiles("{ fn f() {} }\n");
-  expectCompiles("let x = [1, 2];\n");
-  expectCompiles("let m = {a: 1};\n");
-  expectCompiles("let r = 1..2;\n");
   expectCompiles("let f = x => x;\n");
-  expectCompiles("for (x in 1..2) { print(x); }\n");
-  expectCompiles("let a = [1]; let x = a[0];\n");
-  expectCompiles("let m = {a: 1}; let x = m.a;\n");
 }
 
 }  // namespace
 
 int main() {
+  testCaptureLivesInTheFunctionThatUsesTheVariable();
+  testNestedCaptureIsReexportedByTheMiddleFunction();
+  testCapturesFollowOrderOfFirstUse();
+  testVariableUsedTwiceIsCapturedOnce();
+  testFunctionCapturesLocalOfTheMainChunk();
+  testNothingIsCapturedFromTheOutermostFunction();
   testArithmeticAndPrint();
   testNumericConstantTypes();
   testLeftAssociativePrecedence();

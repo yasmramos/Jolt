@@ -970,6 +970,38 @@ void testLambdaCompilesToClosureAndGetUpval() {
   assert(!adder.func().upvalues.empty());  // `n` captured as one cell
 }
 
+void testClosureCapturesParameterAndLocalTogether() {
+  // A parameter and a local of the same enclosing function are captured from
+  // different slots; both must read their own value, not nil.
+  Bytecode bytecode = compileSource(
+      "fn f(a) { let y = 2; return () => a + y; }\n"
+      "let r = f(40)();\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+  assert(requireGlobal(vm, "r").asInt() == 42);
+}
+
+void testNestedClosuresShareTheOuterParameter() {
+  // Three levels: the innermost lambda reaches `x` and `y` through the
+  // upvalues of the lambdas around it.
+  Bytecode bytecode = compileSource(
+      "fn outer(x) { return y => z => x + y + z; }\n"
+      "let r = outer(1)(2)(3);\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+  assert(requireGlobal(vm, "r").asInt() == 6);
+}
+
+void testClosureOverTheParameterSeesLaterWrites() {
+  // The closure captures the variable, not its value at creation time.
+  Bytecode bytecode = compileSource(
+      "fn f(v) { let read = () => v; v = 9; return read(); }\n"
+      "let r = f(1);\n");
+  VM vm;
+  runOrFail(vm, bytecode);
+  assert(requireGlobal(vm, "r").asInt() == 9);
+}
+
 void testCounterClosuresShareMutableCell() {
   TEST_SCOPE();
   // Two closures created by the same call share the counter's cells: writes
@@ -1154,6 +1186,9 @@ int main() {
   testFunctionStackTrace();
   testMultiArgumentPrintThroughNative();
   testLambdaCompilesToClosureAndGetUpval();
+  testClosureCapturesParameterAndLocalTogether();
+  testNestedClosuresShareTheOuterParameter();
+  testClosureOverTheParameterSeesLaterWrites();
   testCounterClosuresShareMutableCell();
   testCapturedLocalsSurviveFrameExit();
   testNestedClosureThroughTwoLevels();

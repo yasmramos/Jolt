@@ -91,6 +91,12 @@ if(BUILD_TESTING)
   target_compile_options(vm_test PRIVATE ${JOLT_WARNINGS})
   add_test(NAME vm_test COMMAND vm_test)
 
+  add_test(NAME repl.clear
+    COMMAND ${CMAKE_COMMAND}
+      "-DJOLT_EXE=$<TARGET_FILE:jolt>"
+      "-DREPL_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/tests/repl/clear.in"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_repl_case.cmake")
+
   add_executable(gc_test
     src/gc.cpp
     src/env.cpp
