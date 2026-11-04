@@ -42,11 +42,23 @@ struct GcNode {
     std::shared_ptr<void> (*pin)(GcNode& node);
   };
 
-  explicit GcNode(const Ops& ops);
+  // Pass `tracked = false` for objects that exist in huge numbers but only
+  // rarely end up in a cycle; register them later with `track()`.
+  explicit GcNode(const Ops& ops, bool tracked = true);
   // A copy is a new object: it registers itself instead of sharing the links.
   GcNode(const GcNode& other);
   GcNode& operator=(const GcNode&) noexcept { return *this; }
   ~GcNode();
+
+  // Adds the object to the registry unless it is already there.
+  //
+  // An untracked object is invisible to the collector, so every reference it
+  // holds looks like a reference from outside and keeps its target alive. That
+  // is always safe, but it hides cycles: an object must be tracked before it
+  // can become part of one, and every tracked object that owns it must report
+  // it from its `visit` operation.
+  void track();
+  bool isTracked() const { return linked; }
 
   const Ops* ops;
 
@@ -59,6 +71,8 @@ struct GcNode {
  private:
   void link();
   void unlink();
+
+  bool linked = false;
 };
 
 // Frees every unreachable cycle among the tracked objects.

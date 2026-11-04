@@ -27,11 +27,21 @@ void markReachable(GcNode& child, void* context) {
 
 }  // namespace
 
-GcNode::GcNode(const Ops& opsTable) : ops(&opsTable) { link(); }
+GcNode::GcNode(const Ops& opsTable, bool tracked) : ops(&opsTable) {
+  if (tracked) link();
+}
 
-GcNode::GcNode(const GcNode& other) : ops(other.ops) { link(); }
+GcNode::GcNode(const GcNode& other) : ops(other.ops) {
+  if (other.linked) link();
+}
 
-GcNode::~GcNode() { unlink(); }
+GcNode::~GcNode() {
+  if (linked) unlink();
+}
+
+void GcNode::track() {
+  if (!linked) link();
+}
 
 void GcNode::link() {
   next = registryHead;
@@ -39,6 +49,7 @@ void GcNode::link() {
   registryHead = this;
   ++trackedCount;
   ++createdSinceCollect;
+  linked = true;
 }
 
 void GcNode::unlink() {
@@ -48,7 +59,10 @@ void GcNode::unlink() {
     registryHead = next;
   }
   if (next) next->prev = prev;
+  prev = nullptr;
+  next = nullptr;
   --trackedCount;
+  linked = false;
 }
 
 void gcCollect() {

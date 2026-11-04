@@ -366,13 +366,27 @@ std::size_t functionRefCount(const GcNode& node) { return static_cast<const Func
 void functionVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
   const Function& function = static_cast<const Function&>(node);
   if (function.closure) visitor(*function.closure, context);
+  // Captured cells are shared between closures, so each one is a node of its own.
+  // The VM tracks a cell as soon as a closure captures it.
+  for (const CellPtr& cell : function.upvalues) {
+    if (cell && cell->isTracked()) visitor(*cell, context);
+  }
 }
 
 void functionClear(GcNode& node) {
   Function& function = static_cast<Function&>(node);
   function.closure.reset();
   function.native = nullptr;
+  function.upvalues.clear();
 }
+
+std::size_t cellRefCount(const GcNode& node) { return static_cast<const Cell&>(node).refs; }
+
+void cellVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
+  gcVisit(static_cast<const Cell&>(node).value, visitor, context);
+}
+
+void cellClear(GcNode& node) { static_cast<Cell&>(node).value = Value(); }
 
 // Environments are owned through std::shared_ptr, so their reference count is
 // the shared count. `parent` and every bound value are strong references.
@@ -401,3 +415,4 @@ const GcNode::Ops mapGcOps = {mapRefCount, mapVisit, mapClear, pinObject<Map>};
 const GcNode::Ops functionGcOps = {functionRefCount, functionVisit, functionClear,
                                    pinObject<Function>};
 const GcNode::Ops envGcOps = {envRefCount, envVisit, envClear, envPin};
+const GcNode::Ops cellGcOps = {cellRefCount, cellVisit, cellClear, pinObject<Cell>};

@@ -192,13 +192,12 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
   } catch (...) {
     // Unwind: drop every frame this call pushed (and any deeper ones) so the
     // VM stays consistent for a subsequent run(). `leaveFrame` normally does
-    // this bookkeeping; on an exception we replicate it, retiring captured
-    // cells before shrinking the shared windows. `stopDepth` is the index of
+    // this bookkeeping; on an exception we replicate it, shrinking the shared
+    // windows. `stopDepth` is the index of
     // the callee frame, so we unwind while frames remain at or above it.
     while (frames_.size() > stopDepth) {
       CallFrame finished = std::move(frames_.back());
       frames_.pop_back();
-      closeCapturedUpvalues(finished);
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
       // Keep every scratch slot alive: outer nested-call loops still read
@@ -250,10 +249,6 @@ void VM::run(const Bytecode& bytecode) {
   const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
   locals_.assign(static_cast<size_t>(localCount), CellPtr{});
-  // Closures created by a previous entry may still hold cells that this run
-  // adopts through `retiredCells_`; keep them alive, drop the stale ones.
-  pruneRetiredCells();
-  openUpvalueSlots_.clear();
   frames_.clear();
   depth = 0;
   stack.clear();
@@ -287,10 +282,9 @@ Value VM::runFrames(std::size_t stopDepth) {
         // frames and survives the shrink below (PHASE 6b fix).
         scratchCells_[finished.resultScratch]->value = result;
       }
-      // Close the upvalues this frame owns before shrinking the shared cell
-      // stack: any slot opened by a CLOSURE must be retired so escaping
-      // closures keep observing the final value (PHASE 6b).
-      closeCapturedUpvalues(finished);
+      // Captured cells need no special handling here: every closure owns a
+      // reference to each cell it captured, so shrinking the shared cell stack
+      // only drops this frame's own reference.
       registers_.resize(finished.regBase);
       locals_.resize(finished.localBase);
       // Keep every scratch slot alive: outer nested-call loops still read
@@ -511,6 +505,11 @@ Value VM::runFrames(std::size_t stopDepth) {
       }
 
       case OpCode::CLOSURE: {
+        // A safe point: everything the running program can still reach is held by
+        // a register, a local cell, a frame or a global, so only unreachable
+        // cycles are freed. Closures are where such cycles are born.
+        gcCollectIfNeeded();
+
         const int child = instruction.b;
         if (child < 0 || static_cast<std::size_t>(child) >= chunk.children.size()) {
           fail("invalid function prototype index: " + std::to_string(child), line, col);
@@ -543,20 +542,15 @@ Value VM::runFrames(std::size_t stopDepth) {
               cell = makeRef<Cell>();
               locals_[absolute] = cell;
             }
-            // Register the slot as an open upvalue: the owning frame's exit
-            // must retire (not destroy) it so closures see the final value
-            // (PHASE 6b). Keep the registry sorted and duplicate-free.
-            auto pos = std::lower_bound(openUpvalueSlots_.begin(),
-                                        openUpvalueSlots_.end(), absolute);
-            if (pos == openUpvalueSlots_.end() || *pos != absolute) {
-              openUpvalueSlots_.insert(pos, absolute);
-            }
           } else {
             if (desc.index < 0 || static_cast<std::size_t>(desc.index) >= frame.upvalues.size()) {
               fail("upvalue index out of range: " + std::to_string(desc.index), line, col);
             }
             cell = frame.upvalues[static_cast<std::size_t>(desc.index)];
           }
+          // The closure now shares the cell, so the cell can end up in a cycle
+          // (a closure stored in a variable it captures). Let the collector see it.
+          cell->track();
           function->upvalues.push_back(std::move(cell));
         }
         setReg(instruction.a, Value(std::move(function)));
@@ -604,49 +598,6 @@ Value VM::runFrames(std::size_t stopDepth) {
     }
   }
   return Value();
-}
-
-// ------------------------------------------------------- upvalue cell retiring
-
-void VM::closeCapturedUpvalues(const CallFrame& frame) {
-  // A local slot is "captured" when some live closure's upvalue list points at
-  // the same Cell this frame owns. When the frame dies its window in the
-  // shared `locals_` stack disappears, so any captured cell must be adopted by
-  // `retiredCells_` to keep the sharing intact (PHASE 6b). The reference count
-  // tells us exactly that: a cell with more than one owner outlives this
-  // window shrink, and the extra owners are closures somewhere in the heap.
-  const std::size_t base = frame.localBase;
-  const std::size_t end = locals_.size();  // window before `leaveFrame` shrank it
-  for (std::size_t i = base; i < end; ++i) {
-    const CellPtr& cell = locals_[i];
-    if (!cell) continue;
-    // Either some closure already shares the cell (refcount > 1) or the
-    // current frame explicitly opened it as an upvalue via CLOSURE. Both
-    // cases must survive the window shrink (PHASE 6b). Slots may be reused
-    // by nested frames, so scan the whole registry instead of assuming a
-    // sorted layout.
-    const bool isOpen =
-        std::find(openUpvalueSlots_.begin(), openUpvalueSlots_.end(), i) !=
-        openUpvalueSlots_.end();
-    if (cell->refs > 1 || isOpen) retiredCells_.push_back(cell);
-  }
-  // Forget the slots this frame owned; re-declaring a slot later (a new
-  // frame at the same base) starts from a clean state.
-  openUpvalueSlots_.erase(std::remove_if(openUpvalueSlots_.begin(),
-                                         openUpvalueSlots_.end(),
-                                         [base, end](std::size_t s) {
-                                           return s >= base && s < end;
-                                         }),
-                          openUpvalueSlots_.end());
-}
-
-void VM::pruneRetiredCells() {
-  // Keep only cells that somebody still references. A retired cell with a
-  // single owner (this vector) is dead: no live frame window or closure holds
-  // it anymore, so releasing it here mirrors what shrinking `locals_` did.
-  retiredCells_.erase(std::remove_if(retiredCells_.begin(), retiredCells_.end(),
-                                     [](const CellPtr& cell) { return cell->refs <= 1; }),
-                      retiredCells_.end());
 }
 
 const Value* VM::findGlobal(const std::string& name) const {

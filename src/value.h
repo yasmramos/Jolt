@@ -378,7 +378,16 @@ struct Value {
 // Cell holding a local variable. Locals live in cells so a closure can capture
 // the variable itself (not just its value) and share its mutations. It will be
 // used in PHASE 6; in PHASE 5 it already fixes the model.
-struct Cell : RefCounted {
+//
+// A cell can be part of a cycle (a closure stored in a variable that it also
+// captures), so it is a GcNode. Every local variable gets a cell and almost none
+// are ever captured, so a cell only registers with the collector once a closure
+// captures it (see GcNode::track).
+extern const GcNode::Ops cellGcOps;
+
+struct Cell : RefCounted, GcNode {
+  Cell() : GcNode(cellGcOps, /*tracked=*/false) {}
+
   Value value;
 };
 
