@@ -41,7 +41,7 @@ runtime to install); end users never install Jolt or any runtime.
 | `main.cpp` | CLI | full pipeline | ⬜ PHASE 4 (VM as the engine) |
 | `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime: values and lexical `Env` | ✅ PHASE 6 groundwork |
-| `gc.cpp` | tracked `GcNode`s | reclamation of reference cycles | ✅ PHASE 6 groundwork |
+| `gc.cpp` | tracked `GcNode`s | reclamation of reference cycles (arrays, maps, functions, scopes, captured cells) for the interpreter and the VM | ✅ PHASE 6 |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a (emitter only) |
 
 ### Toolchain binaries and the compiler boundary
@@ -318,7 +318,9 @@ previous one.
 - Block scopes and local variables with slots (`DECLLOCAL`, `GETLOCAL`,
   `SETLOCAL`); `Bytecode::numLocals`
 - Locals live in reference-counted `Cell`s so the PHASE 6 closures capture the
-  variable, not just its value
+  variable, not just its value. A closure owns a reference to every cell it
+  captures (`Function::upvalues`), so a cell lives exactly as long as its frame
+  or a closure that captured it: the VM keeps no registry of captured cells
 - Top-level `var`/`let` remain globals (they persist in the REPL); `const`
   bindings are folded to literals by the parser and never reach the bytecode
 - `&&`, `||` with real short-circuiting (jumps), ternary with jumps
@@ -340,6 +342,7 @@ previous one.
 - Retire the temporary `PRINT` opcode: from 6c/6e every `print` arity compiles
   to `CALL`, and the opcode is deleted at the 6f gate (§3.6)
 - Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. Slice 6a is done: top-level `fn` declarations, parameters, `return`, recursion and general calls compile and run on the VM. Slice 6b is done: `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas and closures that escape their defining scope (verified by `examples/closures.jolt` and `tests/09_lambdas.jolt`). The compiler still rejects collections and `for-in` with a `(Phase 6)` message; those land in 6c.
+- Memory in the VM: closures that capture each other's variables form cycles through `Cell`s, which reference counting cannot free. A `Cell` registers with the cycle collector when a closure captures it, `Function`s report their upvalue cells to it, and the VM runs `gcCollectIfNeeded()` at `CLOSURE` (the place where such cycles are created). Regression tests: `testCapturedCellsAreNotRetainedByTheVM` and `testClosureCyclesAreCollected` in `tests/vm_test.cpp`; build it with `-DJOLT_GC_STRESS` to collect at every safe point.
 
 ### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
@@ -394,7 +397,7 @@ Phase 2: ✅ completed
 Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
-Phase 6: 🔶 in progress ← NEXT (6a.0 and 6a done: shared `Runtime`, per-function protos, `CALL`/`RETURN`/`CLOSURE`, top-level functions, recursion; upvalues, lambdas, collections and `for-in` are still missing)
+Phase 6: 🔶 in progress ← NEXT (6a.0, 6a and 6b done: shared `Runtime`, per-function protos, `CALL`/`RETURN`/`CLOSURE`, top-level functions, recursion, upvalues, lambdas and closures, with closure cycles reclaimed by the collector; collections and `for-in` are still missing)
 Phase 7: 🔶 in progress (7a: target descriptor + x86-64 instruction emitter with tests; no ELF emitter, freestanding runtime or `jolt build` yet)
 Distribution model: freestanding AOT native binary (PHASE 7, Linux x86-64).
 VM = dev engine only. The AST interpreter leaves the product path at the 6f
@@ -419,6 +422,14 @@ parity gate (D9 in `docs/phase6-design.md`) and is deleted in PHASE 4.
 7. **Every new `.cpp`** has its `.h` in `include/`.
 8. **No mutable global variables** except the VM's globals table.
 9. **Build with**: `g++ -std=c++17 -Wall -Wextra -O2`
+10. **Reference cycles**: values are reference counted and `gc.cpp` reclaims the
+    cycles counting cannot. Anything that can own a `Value` and be reachable from
+    itself is a `GcNode`, and its `visit` operation must report every strong
+    reference it holds to another tracked object (a missing edge keeps garbage
+    alive, it never frees live data). Do not add side owners such as registries
+    or caches of objects that can sit in a cycle: the collector sees them as
+    references from outside, which makes the cycle immortal. Cells are tracked
+    lazily (`GcNode::track`) because every local variable has one.
 
 ---
 
