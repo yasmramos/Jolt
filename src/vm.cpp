@@ -9,7 +9,7 @@
 
 // ---------------------------------------------------------------- diagnostics
 
-void VM::fail(const std::string& message, int line, int col) const {
+void VM::raise(const std::string& message, int line, int col) const {
   RuntimeError error;
   error.message = message;
   error.line = line > 0 ? line : currentLine;

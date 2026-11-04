@@ -45,7 +45,7 @@ class Interpreter : public Runtime {
 
   void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
 
-  [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const override;
+  [[noreturn]] void raise(const std::string& message, int line, int col) const override;
   [[noreturn]] void failHere(const std::string& message) const;
 
   // Helpers shared with the builtin library.

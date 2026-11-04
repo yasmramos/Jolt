@@ -525,7 +525,7 @@ Value Interpreter::call(const Value& callee, std::vector<Value> args, int line, 
 
 // --------------------------------------------------------------------- errors
 
-void Interpreter::fail(const std::string& message, int line, int col) const {
+void Interpreter::raise(const std::string& message, int line, int col) const {
   RuntimeError error;
   error.message = message;
   error.line = line > 0 ? line : currentLine;

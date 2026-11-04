@@ -48,7 +48,7 @@ class VM : public Runtime {
   // (PHASE 6b). Test hook: proves retired locals survive their defining frame.
   std::size_t retiredCellCount() const { return retiredCells_.size(); }
 
-  [[noreturn]] void fail(const std::string& message, int line = 0, int col = 0) const override;
+  [[noreturn]] void raise(const std::string& message, int line, int col) const override;
 
   Value indexGet(const Value& object, const Value& index, int line, int col) override;
   void indexSet(const Value& object, const Value& index, Value value, int line, int col) override;
