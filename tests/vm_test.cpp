@@ -1081,11 +1081,9 @@ void testCapturedCellsAreNotRetainedByTheVM() {
 
 void testClosureCyclesAreCollected() {
   TEST_SCOPE();
-  // Two closures that capture each other's variable form a cycle through the
-  // captured cells: plain reference counting never frees it. The VM must let
-  // the collector reclaim these while the program is still running.
-  gcCollect();
-  const std::size_t before = gcTrackedCount();
+  VM vm;                                          // <-- VM PRIMERO
+  gcCollect();                                    // <-- colectar después
+  const std::size_t before = gcTrackedCount();    // <-- before incluye builtins
   Bytecode bytecode = compileSource(
       "fn make(i) {\n"
       "  var a = () => b();\n"
@@ -1095,14 +1093,10 @@ void testClosureCyclesAreCollected() {
       "var total = 0;\n"
       "var n = 0;\n"
       "while (n < 40000) { total += make(n); n += 1; }\n");
-  VM vm;
   runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "total").asInt() == 799980000);
-  // Each iteration leaves a cycle behind; without the collector the VM would
-  // still hold every one of the 40000 of them here.
   assert(gcTrackedCount() < before + 20000);
-  // An explicit collection reclaims whatever the automatic ones left.
   gcCollect();
   assert(gcTrackedCount() <= before + 2);
 }
