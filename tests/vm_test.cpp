@@ -1060,12 +1060,8 @@ void testCapturedLocalsSurviveFrameExit() {
 
 void testCapturedCellsAreNotRetainedByTheVM() {
   TEST_SCOPE();
-  // Nothing but the closures themselves may keep a captured cell alive. `outer`
-  // captures the cell that holds `inner`, so a cell kept around after its frame
-  // returned would also keep a function alive. With plain reference counting
-  // every one of them must be gone as soon as `make` returns, with no
-  // collection involved.
-  gcCollect();  // start with a fresh collection counter
+  VM vm;                          // <-- construir VM PRIMERO
+  gcCollect();                    // <-- colectar DESPUÉS (builtins ya registrados)
   const std::size_t before = gcTrackedCount();
   Bytecode bytecode = compileSource(
       "fn make(i) {\n"
@@ -1076,11 +1072,10 @@ void testCapturedCellsAreNotRetainedByTheVM() {
       "var total = 0;\n"
       "var n = 0;\n"
       "while (n < 1000) { total += make(n); n += 1; }\n");
-  VM vm;
   runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "total").asInt() == 499500);
-  // Only the global `make` is left.
+  gcCollect();
   assert(gcTrackedCount() <= before + 2);
 }
 

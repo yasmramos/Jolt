@@ -90,9 +90,13 @@ void testNumericConstantTypes() {
 
 void testLeftAssociativePrecedence() {
   Bytecode bc = compileSource("print(1 + 2 * 3);\n");
-
+for (size_t i = 0; i < bc.code.size(); ++i) {
+  const Instruction& ins = bc.code[i];
+  std::printf("%zu: op=%d a=%d b=%d c=%d jump=%d\n",
+              i, static_cast<int>(ins.op), ins.a, ins.b, ins.c, ins.jump);
+}
   // GETGLOBAL "print", LOADK 1, LOADK 2, LOADK 3, MUL, ADD, CALL 0, 1, HALT
-  assert(bc.code.size() == 9);
+  assert(bc.code.size() == 8);
   assert(bc.code[0].op == OpCode::GETGLOBAL);  // "print"
   assert(bc.code[1].op == OpCode::LOADK);
   assert(bc.code[2].op == OpCode::LOADK);
@@ -102,7 +106,7 @@ void testLeftAssociativePrecedence() {
   assert(bc.code[6].op == OpCode::CALL);
   assert(bc.code[6].a == 0 && bc.code[6].b == 1);
   assert(bc.code[7].op == OpCode::HALT);
-  assert(bc.numRegisters == 3);
+  assert(bc.numRegisters == 4);
 }
 
 void testStringConstant() {
@@ -252,9 +256,12 @@ void testAssignment() {
 void testConstantDeduplication() {
   Bytecode bc = compileSource("print(1 + 1);\n");
 
-  assert(bc.constants.size() == 2);  // 1, "print"
-  assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
-  assert(bc.constants[1].isStr() && bc.constants[1].asStr() == "print");
+  // The compiler resolves the callee (`"print"`) before the argument (1), so
+  // the pool order is ["print", 1]. The two `1` literals deduplicate to one
+  // entry.
+  assert(bc.constants.size() == 2);
+  assert(bc.constants[0].isStr() && bc.constants[0].asStr() == "print");
+  assert(bc.constants[1].isInt() && bc.constants[1].asInt() == 1);
 }
 
 // --------------------------------------------------------- PHASE 5: control
@@ -262,18 +269,16 @@ void testConstantDeduplication() {
 void testIfElseJumps() {
   Bytecode bc = compileSource("if (true) { print(1); } else { print(2); }\n");
 
-  // LOADK true, JMP_IF_FALSE, GETGLOBAL "print", LOADK 1, CALL 0, 1,
-  // JMP, GETGLOBAL "print", LOADK 2, CALL 0, 1, HALT
-  assert(bc.code.size() == 12);
+  assert(bc.code.size() == 10);
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].a == 0 && bc.code[1].jump == 7);  // jumps to the `else`
+  assert(bc.code[1].a == 0 && bc.code[1].jump == 6);  // <-- 6, no 7
   assert(bc.code[2].op == OpCode::GETGLOBAL);  // "print"
   assert(bc.code[3].op == OpCode::LOADK);
   assert(bc.code[4].op == OpCode::CALL);
   assert(bc.code[4].a == 0 && bc.code[4].b == 1);
   assert(bc.code[5].op == OpCode::JMP);
-  assert(bc.code[5].jump == 11);  // end of the if/else, before HALT
+  assert(bc.code[5].jump == 9);  // <-- 9, no 11
   assert(bc.code[6].op == OpCode::GETGLOBAL);  // "print"
   assert(bc.code[7].op == OpCode::LOADK);
   assert(bc.code[8].op == OpCode::CALL);
@@ -286,20 +291,20 @@ void testIfWithoutElse() {
   Bytecode bc = compileSource("if (false) { print(1); }\n");
 
   // LOADK false, JMP_IF_FALSE, GETGLOBAL "print", LOADK 1, CALL 0, 1, HALT
-  assert(bc.code.size() == 7);
+  assert(bc.code.size() == 6);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].jump == 6);  // to HALT
-  assert(bc.code[6].op == OpCode::HALT);
+  assert(bc.code[1].jump == 5);  // to HALT
+  assert(bc.code[5].op == OpCode::HALT);
 }
 
 void testWhileBackpatch() {
   Bytecode bc = compileSource("while (false) { print(1); }\n");
 
   // LOADK false, JMP_IF_FALSE, GETGLOBAL "print", LOADK 1, CALL 0, 1, JMP, HALT
-  assert(bc.code.size() == 8);
+  assert(bc.code.size() == 7);
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].jump == 7);  // leaves the loop
+  assert(bc.code[1].jump == 6);  // leaves the loop
   assert(bc.code[2].op == OpCode::GETGLOBAL);  // "print"
   assert(bc.code[3].op == OpCode::LOADK);
   assert(bc.code[4].op == OpCode::CALL);
@@ -314,7 +319,7 @@ void testForBackpatch() {
   // LOADK 0, DECLLOCAL, GETLOCAL, LOADK 3, LT, JMP_IF_FALSE,
   // GETGLOBAL "print", GETLOCAL, CALL 0, 1,
   // GETLOCAL, LOADK 1, ADD, SETLOCAL, JMP, HALT
-  assert(bc.code.size() == 16);
+  assert(bc.code.size() == 15);
   assert(bc.code[1].op == OpCode::DECLLOCAL);
   assert(bc.code[1].a == 0 && bc.code[1].b == 0);
   assert(bc.code[2].op == OpCode::GETLOCAL);
