@@ -26,13 +26,14 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 
 ---
 
-## 1. Execution model
-
-A Jolt program is a UTF-8 text file (extension `.jolt`). The interpreter processes it in three stages:
+A Jolt program is a UTF-8 text file (extension `.jolt`). The pipeline is:
 
 1. **Lexer**: turns the text into tokens.
 2. **Parser**: builds an AST with a recursive-descent parser and operator precedence.
-3. **Interpreter**: walks the AST and evaluates the statements in a lexical environment.
+3. **Compiler**: translates the AST to bytecode (40 opcodes, register-based).
+4. **VM**: executes the bytecode.
+
+The AST interpreter is kept only as a **test oracle** (differential testing). It is not part of the product. The `jolt` executable currently runs programs by walking the AST (PHASE 4 pending: VM as the dev engine). The bytecode compiler and the VM cover functions, closures, control flow, and collections (PHASE 6a, 6b done; 6c, 6d pending).
 
 The program runs from top to bottom in the global scope. Simple statements end with `;`. Statements with a block (`if`, `while`, `for`, `fn`) close with `}` and optionally accept a `;` after it.
 
@@ -1147,23 +1148,38 @@ for argument in args() {
   print(argument);
 }
 ```
+**Planned (PHASE 7)**:
+
+```sh
+joltc <file.jolt> -o app    compiles to a native binary (AOT, musl static)
+joltc <file.jolt> -c        compiles to bytecode (.jolc)
+joltc -pkg ... -o app.jpkg  packages a .jpkg
+```
+
+`joltc` is the host compiler. It reads sources and writes the ELF, so it links libc; the freestanding part is what it emits, not the compiler itself. 
+`jolt` (the development engine) may use AsmJIT JIT; joltc uses AsmJIT Assembler (no JIT).
 
 ---
 
 ## 16. Known limitations
 
-- Dynamic typing. The `jolt` executable currently runs programs by walking the AST; the bytecode compiler and the VM do not cover the whole language yet (PHASE 6). There is no JIT.
-- No classes, structs, interfaces or inheritance.
-- No `try`/`catch` or exceptions that can be caught from the language.
-- No modules or `import`. In the REPL you can use `:load`.
-- No `switch`, `do`/`while`, `++`, `--`, default parameters or variadic arguments in user functions.
+- Dynamic typing. The `jolt` executable currently runs programs by walking the AST (PHASE 4 pending: VM as the dev engine). The bytecode compiler and the VM cover functions, closures, control flow, and collections (PHASE 6a, 6b done; 6c, 6d pending).
+- No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
+- No classes, structs, interfaces or inheritance yet. `struct` (data only, no methods) is planned for PHASE 6.5 (1.0). There are no classes or inheritance (and there never will be — maps + closures replace them).
+- No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
+- No modules or `import` yet. `require` (Lua-style) is planned for PHASE 6.5 (1.0). In the REPL you can use `:load`.
+- No `switch` yet. `switch` (literals and ranges) is planned for PHASE 6.5 (1.0). No `do`/`while`, `++`, `--`, default parameters or variadic arguments.
+- No optional types or nullability yet. `let x: int = 5`, `string?`, `?.`, `??`, `!!` are planned for PHASE 6.5 (1.0).
+- No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
+- No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
+- No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
 - `for ... in` does not accept parentheses around the variable and the iterable.
 - No slicing syntax for strings or arrays; methods such as `substr` and `slice` are used.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
-- Memory is managed with reference counting plus a cycle collector, so unreachable cycles (a function stored in the scope it closes over, an array that contains itself) are reclaimed. A cycle that runs through state captured by a native method, such as `a.f = a.push`, is never collected.
+- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.
 - Sorting with custom comparators relies on the comparator defining a strict order.
 
 ---
@@ -1199,4 +1215,26 @@ four: 4
 three: 3
 two: 2
 one: 1
+```
+
+## 18. File extensions
+| Extension | What it is | Java analog |
+|-----------|------------|-------------|
+| `.jolt` | Source code | `.java` |
+| `.jolc` | Bytecode | `.class` |
+| `.jpkg` | Package (ZIP) | `.jar` |
+| `.jlib` | Native library | `.dll` / `.so` / `.dylib` |
+| `.jdoc` | Documentation | `.javadoc` |
+| `myapp` | Native binary (Linux/macOS) | (GraalVM) `.exe` |
+| `myapp.exe` | Native binary (Windows) | (GraalVM) `.exe` |
+
+**`.jpkg` format** (ZIP):
+
+```text
+myapp.jpkg
+├── META-INF/MANIFEST.MF
+├── bin/main.jolc
+├── lib/mylib.jlib
+├── resources/icon.png
+└── README.md
 ```
