@@ -147,11 +147,12 @@ static void test_memory_operands() {
   checkBytes("movsd [rbp+0x18], xmm1", gStore, "F20F114D18");
 
   // movsd [rbp], xmm9: extended source sets REX.R (not REX.B), reg field
-  // keeps the low bits (001), and the rbp base forces mod=01 disp8 =>
-  // 44 F2 0F 11 4D 00.
+  // keeps the low bits (001), and the rbp base forces mod=01 disp8. The
+  // mandatory SSE prefix comes before REX, so the bytes are
+  // F2 44 0F 11 4D 00.
   CodeGen gStore9;
   gStore9.movsdFromXmm(X64Reg::Rbp, 0, kXmmBase + 9);
-  checkBytes("movsd [rbp], xmm9 (REX.R)", gStore9, "44F20F114D00");
+  checkBytes("movsd [rbp], xmm9 (REX.R)", gStore9, "F2440F114D00");
 
   // RIP-relative lea: 48 8D 35 <disp32>, mod=00 rm=101 without SIB.
   CodeGen g4;

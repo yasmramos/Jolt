@@ -589,19 +589,24 @@ void testNothingIsCapturedFromTheOutermostFunction() {
 }
 
 void testUnsupportedConstructs() {
-  // Collections, iteration and interpolation arrive in PHASE 6c-6d; until each
-  // one lands the compiler must reject it with a CompileError. Functions,
-  // lambdas and local function declarations compile since 6b (see below).
-  expectCompileError("let x = [1, 2];\n", "array literal");
-  expectCompileError("let m = {a: 1};\n", "map literal");
-  expectCompileError("let s = \"a${b}\";\n", "string interpolation");
-  expectCompileError("let r = 1..2;\n", "range");
-  // No parentheses: `for (x in ...)` would be rejected by the parser instead.
-  expectCompileError("for x in 1..2 { print(x); }\n", "for-in loop");
-  expectCompileError("let x = 1 in 2;\n", "in operator");
+  // Every expression and statement form of the language now has a bytecode
+  // encoding; the only remaining compile-time rejection is `return` outside a
+  // function body.
   expectCompileError("return 1;\n", "return statement");
-  expectCompileError("let a = 1;\nlet x = a[0];\n", "index expression");
-  expectCompileError("let m = 1;\nlet x = m.a;\n", "member expression");
+}
+
+void testPhase6ConstructsCompile() {
+  // Collections, iteration, interpolation, ranges, `in`, indexing and members
+  // are all part of the bytecode pipeline since PHASE 6.
+  expectCompiles("let x = [1, 2];\n");
+  expectCompiles("let m = {a: 1};\n");
+  expectCompiles("let s = \"a${b}\";\n");
+  expectCompiles("let r = 1..2;\n");
+  // No parentheses: `for (x in ...)` would be rejected by the parser instead.
+  expectCompiles("for x in 1..2 { print(x); }\n");
+  expectCompiles("let x = 1 in 2;\n");
+  expectCompiles("let a = 1;\nlet x = a[0];\n");
+  expectCompiles("let m = 1;\nlet x = m.a;\n");
 }
 
 void testNestedFunctionDeclarationsAreSupported() {
@@ -650,6 +655,7 @@ int main() {
   testFunctionHoisting();
   testMultiArgumentPrint();
   testUnsupportedConstructs();
+  testPhase6ConstructsCompile();
   testNestedFunctionDeclarationsAreSupported();
 
   std::puts("compiler tests passed");
