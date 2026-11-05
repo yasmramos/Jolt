@@ -135,15 +135,15 @@ interpreter.h or vm.h. Enforced by tests/check_compiler_boundary.cmake.
    - I/O: `PRINT` (**temporary**, see §3.6)
    - End: `HALT`
 
-### 3.6 `PRINT` is temporary
+### 3.6 `PRINT` is retired
 
-`PRINT` is the only opcode that touches the outside world. It is
-**scheduled for deletion**:
+`PRINT` was the only opcode that touched the outside world. It was retired in
+PHASE 6f: every `print` arity (including the single-argument form) compiles to
+`CALL` to the `print` builtin. The opcode is gone from the enum, the VM and the
+compiler.
 
-- **6c/6e**: the compiler emits `CALL` to the `print` builtin for every arity.
-- **6f**: `OpCode::PRINT` and its VM implementation are removed.
-
-Removing `PRINT` frees one slot (39/40).
+Removing `PRINT` freed one slot (39/40). The next opcode request (if any) starts
+at rung 1 of the §3.3 ladder.
 
 ### Explicit anti-goal
 
@@ -326,6 +326,8 @@ previous one.
   to `CALL`, and the opcode is deleted at the 6f gate (§3.6)
 - Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. Slice 6a is done: top-level `fn` declarations, parameters, `return`, recursion and general calls compile and run on the VM. Slice 6b is done: `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas and closures that escape their defining scope (verified by `examples/closures.jolt` and `tests/09_lambdas.jolt`). The compiler still rejects collections and `for-in` with a `(Phase 6)` message; those land in 6c.
 - Memory in the VM: closures that capture each other's variables form cycles through `Cell`s, which reference counting cannot free. A `Cell` registers with the cycle collector when a closure captures it, `Function`s report their upvalue cells to it, and the VM runs `gcCollectIfNeeded()` at `CLOSURE` (the place where such cycles are created). Regression tests: `testCapturedCellsAreNotRetainedByTheVM` and `testClosureCyclesAreCollected` in `tests/vm_test.cpp`; build it with `-DJOLT_GC_STRESS` to collect at every safe point.
+- **6f done**: `PRINT` retired. Every `print` arity compiles to `CALL`. The
+  opcode count is now 39/40.
 
 ### PHASE 6.5 — Types and nullability (1.0)
 
@@ -423,7 +425,7 @@ Phase 2: ✅ completed
 Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
-Phase 6: 🔶 in progress ← NEXT (6a, 6b done; 6c, 6d, 6f pending)
+Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ⬜ pending (types, nullability, `require`, `struct`, `switch`, `native fn`)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)

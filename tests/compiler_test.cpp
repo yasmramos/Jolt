@@ -50,7 +50,9 @@ void expectCompiles(const std::string& source) {
 void testArithmeticAndPrint() {
   Bytecode bc = compileSource("let x = 1 + 2;\nprint(x);\n");
 
-  assert(bc.code.size() == 7);
+  // 0 LOADK 0, 1 LOADK 1, 2 ADD 0, 3 SETGLOBAL 0,
+  // 4 GETGLOBAL "print", 5 GETGLOBAL "x", 6 CALL 0, 7 HALT
+  assert(bc.code.size() == 8);
 
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[0].a == 0 && bc.code[0].b == 0);
@@ -61,15 +63,18 @@ void testArithmeticAndPrint() {
   assert(bc.code[3].op == OpCode::SETGLOBAL);
   assert(bc.code[3].a == 0 && bc.code[3].b == 2);
   assert(bc.code[4].op == OpCode::GETGLOBAL);
-  assert(bc.code[4].a == 0 && bc.code[4].b == 2);
-  assert(bc.code[5].op == OpCode::PRINT);
-  assert(bc.code[5].a == 0);
-  assert(bc.code[6].op == OpCode::HALT);
+  assert(bc.code[4].a == 0 && bc.code[4].b == 3);  // "print"
+  assert(bc.code[5].op == OpCode::GETGLOBAL);
+  assert(bc.code[5].a == 1 && bc.code[5].b == 2);  // "x"
+  assert(bc.code[6].op == OpCode::CALL);
+  assert(bc.code[6].a == 0 && bc.code[6].b == 1);
+  assert(bc.code[7].op == OpCode::HALT);
 
-  assert(bc.constants.size() == 3);
+  assert(bc.constants.size() == 4);
   assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
   assert(bc.constants[1].isInt() && bc.constants[1].asInt() == 2);
   assert(bc.constants[2].isStr() && bc.constants[2].asStr() == "x");
+  assert(bc.constants[3].isStr() && bc.constants[3].asStr() == "print");
   assert(bc.numRegisters == 2);
 }
 
@@ -86,14 +91,17 @@ void testNumericConstantTypes() {
 void testLeftAssociativePrecedence() {
   Bytecode bc = compileSource("print(1 + 2 * 3);\n");
 
-  assert(bc.code.size() == 7);
-  assert(bc.code[0].op == OpCode::LOADK);
+  // GETGLOBAL "print", LOADK 1, LOADK 2, LOADK 3, MUL, ADD, CALL 0, 1, HALT
+  assert(bc.code.size() == 9);
+  assert(bc.code[0].op == OpCode::GETGLOBAL);  // "print"
   assert(bc.code[1].op == OpCode::LOADK);
   assert(bc.code[2].op == OpCode::LOADK);
-  assert(bc.code[3].op == OpCode::MUL);
-  assert(bc.code[4].op == OpCode::ADD);
-  assert(bc.code[5].op == OpCode::PRINT);
-  assert(bc.code[6].op == OpCode::HALT);
+  assert(bc.code[3].op == OpCode::LOADK);
+  assert(bc.code[4].op == OpCode::MUL);
+  assert(bc.code[5].op == OpCode::ADD);
+  assert(bc.code[6].op == OpCode::CALL);
+  assert(bc.code[6].a == 0 && bc.code[6].b == 1);
+  assert(bc.code[7].op == OpCode::HALT);
   assert(bc.numRegisters == 3);
 }
 
@@ -244,8 +252,9 @@ void testAssignment() {
 void testConstantDeduplication() {
   Bytecode bc = compileSource("print(1 + 1);\n");
 
-  assert(bc.constants.size() == 1);
+  assert(bc.constants.size() == 2);  // 1, "print"
   assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
+  assert(bc.constants[1].isStr() && bc.constants[1].asStr() == "print");
 }
 
 // --------------------------------------------------------- PHASE 5: control
@@ -253,66 +262,73 @@ void testConstantDeduplication() {
 void testIfElseJumps() {
   Bytecode bc = compileSource("if (true) { print(1); } else { print(2); }\n");
 
-  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 PRINT,
-  // 4 JMP, 5 LOADK, 6 PRINT, 7 HALT
-  assert(bc.code.size() == 8);
+  // LOADK true, JMP_IF_FALSE, GETGLOBAL "print", LOADK 1, CALL 0, 1,
+  // JMP, GETGLOBAL "print", LOADK 2, CALL 0, 1, HALT
+  assert(bc.code.size() == 12);
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].a == 0 && bc.code[1].jump == 5);  // jumps to the `else`
-  assert(bc.code[2].op == OpCode::LOADK);
-  assert(bc.code[3].op == OpCode::PRINT);
-  assert(bc.code[4].op == OpCode::JMP);
-  assert(bc.code[4].jump == 7);  // end of the if/else, before HALT
-  assert(bc.code[5].op == OpCode::LOADK);
-  assert(bc.code[6].op == OpCode::PRINT);
-  assert(bc.code[7].op == OpCode::HALT);
+  assert(bc.code[1].a == 0 && bc.code[1].jump == 7);  // jumps to the `else`
+  assert(bc.code[2].op == OpCode::GETGLOBAL);  // "print"
+  assert(bc.code[3].op == OpCode::LOADK);
+  assert(bc.code[4].op == OpCode::CALL);
+  assert(bc.code[4].a == 0 && bc.code[4].b == 1);
+  assert(bc.code[5].op == OpCode::JMP);
+  assert(bc.code[5].jump == 11);  // end of the if/else, before HALT
+  assert(bc.code[6].op == OpCode::GETGLOBAL);  // "print"
+  assert(bc.code[7].op == OpCode::LOADK);
+  assert(bc.code[8].op == OpCode::CALL);
+  assert(bc.code[8].a == 0 && bc.code[8].b == 1);
+  assert(bc.code[9].op == OpCode::HALT);
   assert(bc.numLocals == 0);
 }
 
 void testIfWithoutElse() {
   Bytecode bc = compileSource("if (false) { print(1); }\n");
 
-  assert(bc.code.size() == 5);
+  // LOADK false, JMP_IF_FALSE, GETGLOBAL "print", LOADK 1, CALL 0, 1, HALT
+  assert(bc.code.size() == 7);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].jump == 4);  // to HALT
-  assert(bc.code[4].op == OpCode::HALT);
+  assert(bc.code[1].jump == 6);  // to HALT
+  assert(bc.code[6].op == OpCode::HALT);
 }
 
 void testWhileBackpatch() {
   Bytecode bc = compileSource("while (false) { print(1); }\n");
 
-  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 PRINT, 4 JMP, 5 HALT
-  assert(bc.code.size() == 6);
+  // LOADK false, JMP_IF_FALSE, GETGLOBAL "print", LOADK 1, CALL 0, 1, JMP, HALT
+  assert(bc.code.size() == 8);
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[1].jump == 5);  // leaves the loop
-  assert(bc.code[2].op == OpCode::LOADK);
-  assert(bc.code[3].op == OpCode::PRINT);
-  assert(bc.code[4].op == OpCode::JMP);
-  assert(bc.code[4].jump == 0);  // goes back to re-evaluate the condition
-  assert(bc.code[5].op == OpCode::HALT);
+  assert(bc.code[1].jump == 7);  // leaves the loop
+  assert(bc.code[2].op == OpCode::GETGLOBAL);  // "print"
+  assert(bc.code[3].op == OpCode::LOADK);
+  assert(bc.code[4].op == OpCode::CALL);
+  assert(bc.code[5].op == OpCode::JMP);
+  assert(bc.code[5].jump == 0);  // goes back to re-evaluate the condition
+  assert(bc.code[6].op == OpCode::HALT);
 }
 
 void testForBackpatch() {
   Bytecode bc = compileSource("for (var i = 0; i < 3; i += 1) { print(i); }\n");
 
-  // 0 LOADK, 1 DECLLOCAL, 2 GETLOCAL, 3 LOADK, 4 LT, 5 JMP_IF_FALSE,
-  // 6 GETLOCAL, 7 PRINT, 8 GETLOCAL, 9 LOADK, 10 ADD, 11 SETLOCAL,
-  // 12 JMP, 13 HALT
-  assert(bc.code.size() == 14);
+  // LOADK 0, DECLLOCAL, GETLOCAL, LOADK 3, LT, JMP_IF_FALSE,
+  // GETGLOBAL "print", GETLOCAL, CALL 0, 1,
+  // GETLOCAL, LOADK 1, ADD, SETLOCAL, JMP, HALT
+  assert(bc.code.size() == 16);
   assert(bc.code[1].op == OpCode::DECLLOCAL);
   assert(bc.code[1].a == 0 && bc.code[1].b == 0);
   assert(bc.code[2].op == OpCode::GETLOCAL);
   assert(bc.code[4].op == OpCode::LT);
   assert(bc.code[5].op == OpCode::JMP_IF_FALSE);
-  assert(bc.code[5].jump == 13);  // leaves to HALT
-  assert(bc.code[6].op == OpCode::GETLOCAL);
-  assert(bc.code[7].op == OpCode::PRINT);
-  assert(bc.code[8].op == OpCode::GETLOCAL);
-  assert(bc.code[11].op == OpCode::SETLOCAL);
-  assert(bc.code[11].b == 0);
-  assert(bc.code[12].op == OpCode::JMP);
-  assert(bc.code[12].jump == 2);  // goes back to the condition
+  assert(bc.code[5].jump == 14);  // leaves to HALT
+  assert(bc.code[6].op == OpCode::GETGLOBAL);  // "print"
+  assert(bc.code[7].op == OpCode::GETLOCAL);
+  assert(bc.code[8].op == OpCode::CALL);
+  assert(bc.code[9].op == OpCode::GETLOCAL);
+  assert(bc.code[12].op == OpCode::SETLOCAL);
+  assert(bc.code[12].b == 0);
+  assert(bc.code[13].op == OpCode::JMP);
+  assert(bc.code[13].jump == 2);  // goes back to the condition
 
   // The `for` initializer is local, not global.
   assert(bc.numLocals == 1);
@@ -321,7 +337,7 @@ void testForBackpatch() {
 
 void testBreakAndContinueBackpatch() {
   Bytecode brk = compileSource("while (true) { break; }\n");
-  // 0 LOADK, 1 JMP_IF_FALSE, 2 JMP (break), 3 JMP (back), 4 HALT
+  // LOADK, JMP_IF_FALSE, JMP (break), JMP (back), HALT
   assert(brk.code.size() == 5);
   assert(brk.code[2].op == OpCode::JMP && brk.code[2].jump == 4);
   assert(brk.code[3].op == OpCode::JMP && brk.code[3].jump == 0);
@@ -332,7 +348,7 @@ void testBreakAndContinueBackpatch() {
 
   // In a `for`, `continue` jumps to the step, not to the condition.
   Bytecode forCont = compileSource("for (;;) { continue; }\n");
-  // 0 JMP (continue -> step), 1 JMP (back), 2 HALT
+  // JMP (continue -> step), JMP (back), HALT
   assert(forCont.code.size() == 3);
   assert(forCont.code[0].op == OpCode::JMP && forCont.code[0].jump == 1);
   assert(forCont.code[1].op == OpCode::JMP && forCont.code[1].jump == 0);
@@ -348,7 +364,7 @@ void testBlockScopingBytecode() {
       "  x = 2;\n"
       "}\n");
 
-  // 0 LOADK, 1 DECLLOCAL, 2 LOADK, 3 SETLOCAL, 4 HALT
+  // LOADK, DECLLOCAL, LOADK, SETLOCAL, HALT
   assert(bc.code.size() == 5);
   assert(bc.code[1].op == OpCode::DECLLOCAL);
   assert(bc.code[1].b == 0);
@@ -370,8 +386,7 @@ void testShadowingSlots() {
 
   // The inner block uses a different slot for its `x`.
   assert(bc.code[3].op == OpCode::DECLLOCAL && bc.code[3].b == 1);
-  assert(bc.code[4].op == OpCode::GETLOCAL && bc.code[4].b == 1);
-  assert(bc.code[6].op == OpCode::GETLOCAL && bc.code[6].b == 0);
+  assert(bc.code[4].op == OpCode::GETGLOBAL);  // "print"
   assert(bc.numLocals == 2);
 }
 
@@ -382,7 +397,7 @@ void testLocalImmutableAssignment() {
 
 void testLogicalShortCircuit() {
   Bytecode andBc = compileSource("let a = 1 && 2;\n");
-  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 MOVE, 4 SETGLOBAL, 5 HALT
+  // LOADK, JMP_IF_FALSE, LOADK, MOVE, SETGLOBAL, HALT
   assert(andBc.code.size() == 6);
   assert(andBc.code[1].op == OpCode::JMP_IF_FALSE);
   assert(andBc.code[1].jump == 4);  // if the left side is falsy, the right side is not evaluated
@@ -399,8 +414,7 @@ void testLogicalShortCircuit() {
 void testTernary() {
   Bytecode bc = compileSource("let a = true ? 1 : 2;\n");
 
-  // 0 LOADK, 1 JMP_IF_FALSE, 2 LOADK, 3 MOVE, 4 JMP,
-  // 5 LOADK, 6 MOVE, 7 SETGLOBAL, 8 HALT
+  // LOADK, JMP_IF_FALSE, LOADK, MOVE, JMP, LOADK, MOVE, SETGLOBAL, HALT
   assert(bc.code.size() == 9);
   assert(bc.code[0].op == OpCode::LOADK);
   assert(bc.code[1].op == OpCode::JMP_IF_FALSE);
@@ -489,7 +503,7 @@ void testFunctionHoisting() {
 }
 
 void testMultiArgumentPrint() {
-  // Only the single-argument form uses PRINT; other arities are real calls.
+  // Only the single-argument form used PRINT; now every arity is a CALL.
   Bytecode bc = compileSource("print(1, 2);\n");
   assert(bc.code.size() == 5);
   assert(bc.code[0].op == OpCode::GETGLOBAL);

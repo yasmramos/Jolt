@@ -70,6 +70,7 @@ struct StringPlatform final : Platform {
 std::string runAndCapture(const std::string& source) {
   Bytecode bytecode = compileSource(source);
   VM vm;
+  registerBuiltins(vm);
   CoutCapture capture;
   vm.run(bytecode);
   return capture.stream.str();
@@ -324,6 +325,7 @@ void testPrintUsesInjectedPlatform() {
   Bytecode bytecode = compileSource("print(1 + 2);\n");
   StringPlatform platform;
   VM vm(platform);
+  registerBuiltins(vm);
   vm.run(bytecode);
 
   assert(platform.out == "3\n");

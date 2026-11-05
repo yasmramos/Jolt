@@ -194,8 +194,6 @@ void lowerInstruction(const Instruction& instr,
       unsupported("IN");
     case OpCode::ITER:
       unsupported("ITER");
-    case OpCode::PRINT:
-      unsupported("PRINT");
   }
 }
 

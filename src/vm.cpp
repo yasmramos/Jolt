@@ -713,14 +713,6 @@ Value VM::runFrames(std::size_t stopDepth) {
         break;
       }
 
-      case OpCode::PRINT: {
-        const std::string text = getReg(instruction.a).toString();
-        platform().write(Platform::kStdout, text.data(), text.size());
-        platform().write(Platform::kStdout, "\n", 1);
-        platform().flush(Platform::kStdout);
-        break;
-      }
-
       case OpCode::HALT:
         leaveFrame(Value());
         return Value();

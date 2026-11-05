@@ -198,8 +198,6 @@ class Compiler {
   void compileForIn(const ForInStmt& stmt);
   void compileBreak(const Stmt& stmt);
   void compileContinue(const Stmt& stmt);
-  void compilePrint(const Expr& expr);
-  bool isPrintCall(const Expr& expr) const;
 
   void resetChunk(const std::string& name = "<main>");
 

@@ -25,9 +25,10 @@
 // whose `c` field selects the operation, and collections share the GET/SET
 // table pair.
 //
-// PHASE 6 adds functions, collections and iteration, so the set is exactly 40
-// opcodes: the ones below. 40 is a hard ceiling; the retirement ladder for a
-// new opcode is in AGENT.md §3.3.
+// PHASE 6 adds functions, collections and iteration. PHASE 6f retires the
+// temporary `PRINT` opcode (every `print` arity compiles to `CALL` to the
+// builtin), leaving 39 opcodes. 40 is a hard ceiling; the retirement ladder
+// for a new opcode is in AGENT.md §3.3.
 
 enum class OpCode : std::uint8_t {
   LOADK,   // R[a] = constants[b]  (nil, bool, int, float or string)
@@ -98,8 +99,6 @@ enum class OpCode : std::uint8_t {
   ITER,       // R[a] = next item of R[b]; R[jump] = done flag
   IN,         // R[a] = R[b] in R[c]
 
-  PRINT,      // print R[a] (temporary: CALL to the print builtin from 6c/6e,
-              // deleted at the 6f parity gate; AGENT.md §3.6)
   HALT,       // stop execution
 };
 

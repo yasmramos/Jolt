@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "bytecode.h"
+#include "builtins.h"
 #include "runtime.h"
 #include "value.h"
 
@@ -25,7 +26,7 @@
 // AST interpreter (the bytecode test suites need only the compiler and VM).
 class VM : public Runtime {
  public:
-  VM() = default;
+  VM() { registerBuiltins(*this); }
   explicit VM(Platform& platform) : Runtime(platform) {}
 
   // Runs the bytecode from the first instruction until HALT or the end.

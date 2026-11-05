@@ -541,12 +541,8 @@ void Compiler::compileStmt(const Stmt& stmt) {
   std::visit(
       Overloaded{
           [&](const ExprStmt& s) {
-            if (isPrintCall(*s.expr)) {
-              compilePrint(*s.expr);
-            } else {
               compileExpr(*s.expr);
               freeReg();
-            }
           },
           [&](const LetStmt& s) { compileLet(s); },
           [&](const FnDeclStmt& s) { compileFnDecl(s, stmt.line, stmt.col); },
@@ -871,7 +867,7 @@ void Compiler::compileForIn(const ForInStmt& s) {
   // and the VM reads it from there. That is a private convention, not a real
   // jump target: ITER is not a jump instruction.
   bc_.code[static_cast<size_t>(iterIndex)].jump = done;
-  
+
   int exitJump = emitJump(OpCode::JMP_IF_TRUE, done);
   // Each turn gets a fresh cell for the loop variable, so closures created in
   // the body capture the value of their own iteration (interpreter parity).
@@ -1254,28 +1250,4 @@ int Compiler::compileExpr(const Expr& expr) {
           },
       },
       expr.node);
-}
-
-// ---------------------------------------------------------------------- print
-
-bool Compiler::isPrintCall(const Expr& expr) const {
-  const auto* call = std::get_if<CallExpr>(&expr.node);
-  // Only the single-argument form uses the PRINT opcode, which needs no
-  // registered builtin. Other arities become normal calls to `print`.
-  if (!call || !call->callee || call->args.size() != 1) return false;
-  const auto* callee = std::get_if<VariableExpr>(&call->callee->node);
-  if (callee == nullptr || callee->name != "print") return false;
-  // A local named `print` shadows the builtin and must be called normally.
-  LocalVar local;
-  return !resolveLocal("print", local);
-}
-
-void Compiler::compilePrint(const Expr& expr) {
-  const auto& call = std::get<CallExpr>(expr.node);
-  if (call.args.size() != 1) {
-    fail("print(...) expects exactly one argument in the bytecode compiler", expr.line, expr.col);
-  }
-  int reg = compileExpr(*call.args[0]);
-  emit(OpCode::PRINT, reg);
-  freeReg();
 }
