@@ -1,4 +1,4 @@
-// expect-exit: 70
+// expect-exit: 65
 fn salir() {
   break;
 }

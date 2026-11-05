@@ -1,3 +1,3 @@
-// expect-exit: 70
+// expect-exit: 65
 const LIMIT = 10;
 LIMIT = 20;

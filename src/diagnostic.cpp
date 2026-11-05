@@ -48,8 +48,8 @@ void printSnippet(const std::string& sourceName, const std::string& source, int 
   out += std::string(gutter + 2, ' ') + "|\n";
   out += std::to_string(line) + ' ' + '|' + ' ' + text + '\n';
   out += std::string(gutter + 2, ' ') + '|' + ' ' + std::string(caret, ' ') + "^\n";
-  platform.write(Platform::kStdout, out.data(), out.size());
-  platform.flush(Platform::kStdout);
+  platform.writeErr(out.data(), out.size());
+  platform.flush(Platform::kStderr);
 }
 
 }  // namespace
@@ -69,7 +69,7 @@ void printRuntimeError(const std::string& sourceName, const std::string& source,
       out += "  at " + it->function + " (" + sourceName + ':' + std::to_string(it->line) + ':'
              + std::to_string(it->col) + ")\n";
     }
-    platform.write(Platform::kStdout, out.data(), out.size());
-    platform.flush(Platform::kStdout);
+    platform.writeErr(out.data(), out.size());
+    platform.flush(Platform::kStderr);
   }
 }

@@ -37,6 +37,7 @@ void Parser::resolveTopLevelConsts(StmtPtr& program) {
     const auto* decl = std::get_if<LetStmt>(&stmt->node);
     if (decl && decl->kind == Tok::Const) {
       consts.push_back(stmt);
+      reordered.push_back(stmt);   // <-- mantener en su posición
     } else {
       reordered.push_back(stmt);
     }
@@ -85,7 +86,6 @@ void Parser::resolveTopLevelConsts(StmtPtr& program) {
                            first.lastReason,
                        first.stmt->line, first.stmt->col};
   }
-  reordered.insert(reordered.begin(), consts.begin(), consts.end());
   BlockStmt rebuilt{std::move(reordered)};
   program->node = std::move(rebuilt);
 }
@@ -754,6 +754,9 @@ ExprPtr Parser::parseRange() {
   if (check(Tok::DotDot) || check(Tok::DotDotEq)) {
     const Token& op = advance();
     auto rhs = parseAdditive();
+    if (check(Tok::DotDot) || check(Tok::DotDotEq)) {
+      error(peek(), "range bounds cannot be ranges (use a variable for a chained range)");
+    }
     return makeExpr(RangeExpr{std::move(lhs), std::move(rhs), op.type == Tok::DotDotEq}, start.line,
                     start.col);
   }

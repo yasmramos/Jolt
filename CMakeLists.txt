@@ -23,28 +23,27 @@ if(JOLT_GC_STRESS)
   add_compile_definitions(JOLT_GC_STRESS)
 endif()
 
-set(JOLT_CORE_SOURCES
-  src/gc.cpp
-  src/env.cpp
-  src/value.cpp
-  src/lexer.cpp
-  src/parser.cpp
-  src/bytecode.cpp
-  src/platform_posix.cpp
-  src/diagnostic.cpp
+# --------------------------------------------------------------------------- sources
+# Auto-detect every .cpp under src/ and src/native/. No file is listed by hand,
+# so adding a new source never requires touching this file.
+file(GLOB_RECURSE JOLT_ALL_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 
-add_executable(jolt
-  ${JOLT_CORE_SOURCES}
-  src/compiler.cpp
-  src/vm.cpp
-  src/ops.cpp
-  src/interpreter.cpp
-  src/builtins.cpp
-  src/main.cpp
-)
+# The main entry point is not part of the runtime library.
+set(JOLT_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+list(REMOVE_ITEM JOLT_ALL_SOURCES "${JOLT_MAIN}")
 
-target_include_directories(jolt PRIVATE src include)
+# --------------------------------------------------------------------------- library
+# One static library with the whole runtime. Every executable links against it,
+# so no test repeats the source list.
+add_library(jolt_lib STATIC ${JOLT_ALL_SOURCES})
+target_include_directories(jolt_lib PUBLIC src include)
+target_compile_options(jolt_lib PRIVATE ${JOLT_WARNINGS})
+
+# --------------------------------------------------------------------------- main binary
+add_executable(jolt "${JOLT_MAIN}")
+target_link_libraries(jolt PRIVATE jolt_lib)
 target_compile_options(jolt PRIVATE ${JOLT_WARNINGS})
 
 install(TARGETS jolt RUNTIME DESTINATION bin)
@@ -53,6 +52,7 @@ install(TARGETS jolt RUNTIME DESTINATION bin)
 include(CTest)
 
 if(BUILD_TESTING)
+
   # Registers one script in CTest; the expected exit code comes from the
   # first-line `// expect-exit: N` comment, defaulting to 0.
   function(jolt_add_script_test name script)
@@ -70,60 +70,39 @@ if(BUILD_TESTING)
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_jolt_case.cmake")
   endfunction()
 
-  add_executable(compiler_test
-    ${JOLT_CORE_SOURCES}
-    src/compiler.cpp
-    tests/compiler_test.cpp
-  )
-  target_include_directories(compiler_test PRIVATE src include)
-  target_compile_options(compiler_test PRIVATE ${JOLT_WARNINGS})
-  add_test(NAME compiler_test COMMAND compiler_test)
+  # Registers one C++ test. The test file is `tests/<name>.cpp`; it links
+  # against `jolt_lib` so it does not repeat the source list.
+  function(jolt_add_cpp_test name)
+    add_executable(${name} "${CMAKE_CURRENT_SOURCE_DIR}/tests/${name}.cpp")
+    target_link_libraries(${name} PRIVATE jolt_lib)
+    target_compile_options(${name} PRIVATE ${JOLT_WARNINGS})
+    add_test(NAME ${name} COMMAND ${name})
+  endfunction()
 
-  add_executable(vm_test
-    ${JOLT_CORE_SOURCES}
-    src/compiler.cpp
-    src/vm.cpp
-    src/ops.cpp
-    src/builtins.cpp
-    tests/vm_test.cpp
-  )
-  target_include_directories(vm_test PRIVATE src include)
-  target_compile_options(vm_test PRIVATE ${JOLT_WARNINGS})
-  add_test(NAME vm_test COMMAND vm_test)
+  # --- C++ tests (one line each) ---
+  jolt_add_cpp_test(compiler_test)
+  jolt_add_cpp_test(vm_test)
+  jolt_add_cpp_test(repl_test)
+  jolt_add_cpp_test(gc_test)
+  jolt_add_cpp_test(codegen_test)
+  jolt_add_cpp_test(elf_test)
+  jolt_add_cpp_test(pe_test)
+  jolt_add_cpp_test(lower_test)
 
+  # --- REPL scripted test (clear) ---
   add_test(NAME repl.clear
     COMMAND ${CMAKE_COMMAND}
       "-DJOLT_EXE=$<TARGET_FILE:jolt>"
       "-DREPL_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/tests/repl/clear.in"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_repl_case.cmake")
 
-  add_executable(gc_test
-    src/gc.cpp
-    src/env.cpp
-    src/value.cpp
-    tests/gc_test.cpp
-  )
-  target_include_directories(gc_test PRIVATE src include)
-  target_compile_options(gc_test PRIVATE ${JOLT_WARNINGS})
-  add_test(NAME gc_test COMMAND gc_test)
-
-  # x86-64 machine-code emitter unit tests (PHASE 7a). The byte-exact checks
-  # run everywhere; the behavioral mmap/exec checks only on Linux x86-64.
-  add_executable(codegen_test
-    src/native/codegen.cpp
-    tests/codegen_test.cpp
-  )
-  target_include_directories(codegen_test PRIVATE src include)
-  target_compile_options(codegen_test PRIVATE ${JOLT_WARNINGS})
-  add_test(NAME codegen_test COMMAND codegen_test)
-
-  # Guards the AGENT.md toolchain boundary: the compiler and the native backend
-  # must stay linkable without the interpreter or the VM.
+  # --- Compiler boundary check (AGENT.md toolchain boundary) ---
   add_test(NAME compiler_boundary
     COMMAND ${CMAKE_COMMAND}
       -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_compiler_boundary.cmake")
 
+  # --- .jolt script tests (auto-detected) ---
   file(GLOB jolt_tests CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.jolt"
   )
@@ -132,6 +111,7 @@ if(BUILD_TESTING)
     jolt_add_script_test("jolt.${name}" "${script}")
   endforeach()
 
+  # --- examples/*.jolt (auto-detected) ---
   file(GLOB jolt_examples CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.jolt"
   )
@@ -140,6 +120,7 @@ if(BUILD_TESTING)
     jolt_add_script_test("examples.${name}" "${script}")
   endforeach()
 
+  # --- tests/errors/*.jolt (auto-detected) ---
   file(GLOB jolt_error_tests CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/errors/*.jolt"
   )
@@ -147,4 +128,5 @@ if(BUILD_TESTING)
     get_filename_component(name "${script}" NAME_WE)
     jolt_add_script_test("jolt.errors.${name}" "${script}")
   endforeach()
+
 endif()

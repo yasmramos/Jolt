@@ -47,7 +47,7 @@ struct GcNode {
   explicit GcNode(const Ops& ops, bool tracked = true);
   // A copy is a new object: it registers itself instead of sharing the links.
   GcNode(const GcNode& other);
-  GcNode& operator=(const GcNode&) noexcept { return *this; }
+  GcNode& operator=(const GcNode&) = delete;
   ~GcNode();
 
   // Adds the object to the registry unless it is already there.

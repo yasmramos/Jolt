@@ -18,6 +18,11 @@
 using Args = std::vector<Value>&;
 namespace {
 
+template <typename T>
+void trackNativeCapture(const Value& fn, const Ref<T>& capture) {
+  fn.func().capturedGcNodes.push_back(pinGcNode(capture));
+}
+
 // ------------------------------------------------------------ arg checking
 
 [[noreturn]] void arityError(Runtime& in, const std::string& fn, size_t expected, Args args) {
@@ -131,6 +136,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       for (auto& arg : args) self->items.push_back(arg);
       return Value(self);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "pop") {
@@ -142,6 +148,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       self->items.pop_back();
       return value;
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "shift") {
@@ -153,6 +160,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       self->items.erase(self->items.begin());
       return value;
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "unshift") {
@@ -162,6 +170,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       self->items.insert(self->items.begin(), args[0]);
       return Value(self);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "insert") {
@@ -177,6 +186,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       self->items.insert(self->items.begin() + index, args[1]);
       return Value(self);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "removeAt") {
@@ -193,6 +203,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       self->items.erase(self->items.begin() + index);
       return value;
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "slice") {
@@ -209,6 +220,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       for (int64_t i = start; i < end; ++i) items.push_back(self->items[static_cast<size_t>(i)]);
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "concat") {
@@ -220,6 +232,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       items.insert(items.end(), args[0].arr().items.begin(), args[0].arr().items.end());
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "join") {
@@ -234,6 +247,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value(std::move(result));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "sort") {
@@ -243,6 +257,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       sortItems(in, self->items, args.empty() ? nullptr : &args[0], "sort");
       return Value(self);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "sorted") {
@@ -253,6 +268,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       sortItems(in, items, args.empty() ? nullptr : &args[0], "sorted");
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "reversed") {
@@ -263,6 +279,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       std::reverse(items.begin(), items.end());
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "contains") {
@@ -274,6 +291,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value(false);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "indexOf") {
@@ -285,6 +303,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value(static_cast<int64_t>(-1));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "map") {
@@ -296,6 +315,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       for (const auto& item : self->items) result.push_back(invoke(in, args[0], {item}, "map()"));
       return Value(makeArray(std::move(result)));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "filter") {
@@ -308,6 +328,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value(makeArray(std::move(result)));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "reduce") {
@@ -328,6 +349,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return accumulator;
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "each") {
@@ -337,6 +359,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       for (const auto& item : self->items) invoke(in, args[0], {item}, "each()");
       return Value(self);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "find") {
@@ -348,6 +371,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value();
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "any") {
@@ -359,6 +383,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value(false);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "all") {
@@ -370,6 +395,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return Value(true);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "sum") {
@@ -392,6 +418,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       }
       return allInts ? Value(intTotal) : Value(floatTotal);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "clear") {
@@ -401,6 +428,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       self->items.clear();
       return Value(self);
     });
+    trackNativeCapture(out, array);
     return true;
   }
   if (name == "clone") {
@@ -409,6 +437,7 @@ bool bindArray(Runtime&, const ArrayPtr& strongArray, const std::string& name, V
       need(in, "clone", args, 0);
       return Value(makeArray(self->items));
     });
+    trackNativeCapture(out, array);
     return true;
   }
   return false;
@@ -681,6 +710,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       for (const auto& entry : self->entries) items.emplace_back(entry.first);
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "values") {
@@ -691,6 +721,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       for (const auto& entry : self->entries) items.push_back(entry.second);
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "entries") {
@@ -703,6 +734,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       }
       return Value(makeArray(std::move(items)));
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "has") {
@@ -712,6 +744,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       std::string key = wantString(in, "has", args[0], "key");
       return Value(self->has(key));
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "get") {
@@ -723,6 +756,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       if (found) return *found;
       return args.size() > 1 ? args[1] : Value();
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "set") {
@@ -733,6 +767,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       self->set(key, args[1]);
       return Value(self);
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "delete") {
@@ -742,6 +777,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       std::string key = wantString(in, "delete", args[0], "key");
       return Value(self->erase(key));
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "clear") {
@@ -751,6 +787,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       self->clear();
       return Value(self);
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "merge") {
@@ -762,6 +799,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       for (const auto& entry : other->entries) self->set(entry.first, entry.second);
       return Value(self);
     });
+    trackNativeCapture(out, map);
     return true;
   }
   if (name == "clone") {
@@ -772,6 +810,7 @@ bool bindMap(Runtime&, const MapPtr& strongMap, const std::string& name, Value& 
       for (const auto& entry : self->entries) copy->set(entry.first, entry.second);
       return Value(std::move(copy));
     });
+    trackNativeCapture(out, map);
     return true;
   }
   return false;
@@ -902,6 +941,14 @@ void registerBuiltins(Runtime& in) {
 
   in.addNative("str", [](Runtime& in, Args args) -> Value {
     need(in, "str", args, 1);
+    return Value(args[0].toString());
+  });
+
+  // Private helper used by compiler-generated code (interpolation and computed
+  // map keys). The `$` makes the name impossible to spell in Jolt source, so a
+  // user binding cannot shadow it.
+  in.addNative("$str", [](Runtime& in, Args args) -> Value {
+    need(in, "$str", args, 1);
     return Value(args[0].toString());
   });
 
@@ -1159,5 +1206,16 @@ void registerBuiltins(Runtime& in) {
       end = wantInt(in, "range", args[1], "end");
     }
     return Value(makeRange(start, end, false));
+  });
+
+  // Private helper for range literals (`a..b` / `a..=b`). Keeping the bounds
+  // check here gives the same "range bounds must be integers" diagnostic as
+  // the interpreter, at the call site's line/column.
+  in.addNative("$range", [](Runtime& in, Args args) -> Value {
+    need(in, "$range", args, 3);
+    if (!args[0].isInt() || !args[1].isInt()) {
+      in.fail("range bounds must be integers");
+    }
+    return Value(makeRange(args[0].asInt(), args[1].asInt(), args[2].truthy()));
   });
 }

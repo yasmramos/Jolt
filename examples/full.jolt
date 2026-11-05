@@ -1,0 +1,395 @@
+// ============================================================
+// Jolt — full example
+// ============================================================
+// Uses every feature that works today (PHASE 6f + PHASE 4 done).
+//
+// Run with: jolt examples/full.jolt [args...]
+// ============================================================
+
+// ------------------------------------------------------------
+// 1. Constants and variables
+// ------------------------------------------------------------
+const MAX_SCORE = 100 * 2;
+let greeting = "Hello, Jolt!";
+var counter = 0;
+
+assertEq(MAX_SCORE, 200);
+assertEq(greeting, "Hello, Jolt!");
+
+// ------------------------------------------------------------
+// 2. Arithmetic, comparisons, bitwise, ternary
+// ------------------------------------------------------------
+assertEq(2 + 3 * 4, 14);
+assertEq((2 + 3) * 4, 20);
+assertEq(2 ** 10, 1024);
+assertEq(7 / 2, 3);
+assertEq(7 % 3, 1);
+assertEq(6 & 3, 2);
+assertEq(6 | 3, 7);
+assertEq(6 ^ 3, 5);
+assertEq(1 << 4, 16);
+assertEq(256 >> 3, 32);
+assertEq(~0, -1);
+assertEq(2 <= 2, true);
+assertEq(3 >= 4, false);
+assertEq(1 != 2, true);
+assertEq(1 == 1.0, true);
+assertEq("apple" < "banana", true);
+assertEq(false < true, true);
+assertEq(nil == nil, true);
+assertEq(0 == false, false);
+
+let ternary = counter > 0 ? "positive" : "non-positive";
+assertEq(ternary, "non-positive");
+
+// ------------------------------------------------------------
+// 3. Strings and interpolation
+// ------------------------------------------------------------
+let name = "Ada";
+let age = 36;
+assertEq("${name} is ${age} years old", "Ada is 36 years old");
+assertEq("2 + 3 = ${2 + 3}", "2 + 3 = 5");
+assertEq("nested: ${"inner ${name}"}", "nested: inner Ada");
+
+let s = "  Hello, World!  ";
+assertEq(s.trim(), "Hello, World!");
+assertEq(s.trim().upper(), "HELLO, WORLD!");
+assertEq("a,b,c".split(","), ["a", "b", "c"]);
+assertEq("a b  c".split(), ["a", "b", "c"]);
+assertEq("abc".chars(), ["a", "b", "c"]);
+assertEq("a-b".replace("-", "+"), "a+b");
+assertEq("abc".startsWith("ab"), true);
+assertEq("abc".endsWith("bc"), true);
+assertEq("abc".contains("b"), true);
+assertEq("abc".indexOf("c"), 2);
+assertEq("abcdef".substr(1, 3), "bcd");
+assertEq("ab".repeat(3), "ababab");
+assertEq("abc".reversed(), "cba");
+assertEq("5".padStart(3, "0"), "005");
+
+assertEq(len("áé"), 2);
+assertEq("áé"[1], "é");
+assertEq(chr(65), "A");
+assertEq(ord("A"), 65);
+
+// ------------------------------------------------------------
+// 4. Arrays (literals, methods, nested)
+// ------------------------------------------------------------
+let nums = [1, 2, 3, 4, 5];
+assertEq(nums.length, 5);
+assertEq(nums[0], 1);
+assertEq(nums[-1], 5);
+assertEq(nums.map(x => x * 2), [2, 4, 6, 8, 10]);
+assertEq(nums.filter(x => x % 2 == 0), [2, 4]);
+assertEq(nums.reduce((acc, x) => acc + x, 0), 15);
+assertEq(nums.sorted(), [1, 2, 3, 4, 5]);
+assertEq(nums.reversed(), [5, 4, 3, 2, 1]);
+assertEq(nums.sum(), 15);
+assertEq(nums.contains(3), true);
+assertEq(nums.indexOf(3), 2);
+assertEq(nums.find(x => x > 2), 3);
+assertEq(nums.any(x => x > 4), true);
+assertEq(nums.all(x => x > 0), true);
+
+let pushed = [];
+pushed.push(1);
+pushed.push(2, 3);
+assertEq(pushed, [1, 2, 3]);
+assertEq(pushed.pop(), 3);
+assertEq(pushed.shift(), 1);
+pushed.unshift(0);
+assertEq(pushed, [0, 2]);
+
+let nested = [1, [2, 3], {a: 4}];
+assertEq(nested[1][0], 2);
+assertEq(nested[2].a, 4);
+
+// ------------------------------------------------------------
+// 5. Maps (literals, methods, iteration)
+// ------------------------------------------------------------
+let person = {name: "Ada", age: 36};
+assertEq(person.name, "Ada");
+assertEq(person["age"], 36);
+assertEq(person.length, 2);
+person.age = 37;
+assertEq(person.age, 37);
+assertEq(person.missing, nil);
+assertEq(person.has("name"), true);
+assertEq(person.get("missing", 0), 0);
+assertEq(person.keys(), ["name", "age"]);
+assertEq(person.values(), ["Ada", 37]);
+assertEq(person.entries(), [["name", "Ada"], ["age", 37]]);
+
+let copy = person.clone();
+copy.age = 100;
+assertEq(person.age, 37);
+assertEq(copy.age, 100);
+
+let keys = [];
+for k in {b: 1, a: 2} {
+  keys.push(k);
+}
+assertEq(keys, ["b", "a"]);
+
+// ------------------------------------------------------------
+// 6. Ranges
+// ------------------------------------------------------------
+assertEq((1..4).toArray(), [1, 2, 3]);
+assertEq((1..=3).toArray(), [1, 2, 3]);
+assertEq((3..0).toArray(), [3, 2, 1]);
+assertEq((3..=0).toArray(), [3, 2, 1, 0]);
+assertEq(len(0..5), 5);
+assertEq(2 in 1..5, true);
+assertEq(5 in 1..5, false);
+assertEq(5 in 1..=5, true);
+assertEq(range(3).toArray(), [0, 1, 2]);
+assertEq(range(2, 5).toArray(), [2, 3, 4]);
+
+// ------------------------------------------------------------
+// 7. Control flow
+// ------------------------------------------------------------
+var sum = 0;
+var i = 1;
+while (i <= 10) {
+  sum += i;
+  i += 1;
+}
+assertEq(sum, 55);
+
+sum = 0;
+for (var j = 0; j < 10; j += 1) {
+  if (j % 2 == 0) { continue; }
+  if (j > 7) { break; }
+  sum += j;
+}
+assertEq(sum, 16);
+
+var collected = [];
+for n in [10, 20, 30] {
+  collected.push(n);
+}
+assertEq(collected, [10, 20, 30]);
+
+var word = "";
+for c in "abc" {
+  word += c.upper();
+}
+assertEq(word, "ABC");
+
+var total = 0;
+for v in 1..=5 {
+  total += v;
+}
+assertEq(total, 15);
+
+var down = [];
+for v in 5..0 {
+  down.push(v);
+}
+assertEq(down, [5, 4, 3, 2, 1]);
+
+// ------------------------------------------------------------
+// 8. Functions, closures, recursion
+// ------------------------------------------------------------
+fn add(a, b) {
+  return a + b;
+}
+assertEq(add(2, 3), 5);
+
+fn sign(n) {
+  if (n < 0) { return "neg"; }
+  if (n == 0) { return "zero"; }
+  return "pos";
+}
+assertEq(sign(-5), "neg");
+assertEq(sign(0), "zero");
+assertEq(sign(8), "pos");
+
+fn fact(n) {
+  if (n <= 1) { return 1; }
+  return n * fact(n - 1);
+}
+assertEq(fact(5), 120);
+
+fn fib(n) {
+  if (n < 2) { return n; }
+  return fib(n - 1) + fib(n - 2);
+}
+assertEq(fib(10), 55);
+
+fn isEven(n) {
+  if (n == 0) { return true; }
+  return isOdd(n - 1);
+}
+fn isOdd(n) {
+  if (n == 0) { return false; }
+  return isEven(n - 1);
+}
+assertEq(isEven(10), true);
+assertEq(isOdd(10), false);
+
+let double = x => x * 2;
+let triple = x => x * 3;
+let join = (a, b) => str(a) + "-" + str(b);
+assertEq(double(21), 42);
+assertEq(triple(4), 12);
+assertEq(join(1, 2), "1-2");
+
+fn makeCounter() {
+  var count = 0;
+  return () => {
+    count += 1;
+    return count;
+  };
+}
+let counter1 = makeCounter();
+assertEq(counter1(), 1);
+assertEq(counter1(), 2);
+let counter2 = makeCounter();
+assertEq(counter2(), 1);
+assertEq(counter1(), 3);
+
+fn makeAdder(n) {
+  return x => x + n;
+}
+let add5 = makeAdder(5);
+assertEq(add5(1), 6);
+
+let power = (base, exp) => exp == 0 ? 1 : base * power(base, exp - 1);
+assertEq(power(2, 10), 1024);
+
+// ------------------------------------------------------------
+// 9. Higher-order functions
+// ------------------------------------------------------------
+fn apply(f, x) {
+  return f(x);
+}
+assertEq(apply(x => x * x, 9), 81);
+
+let numbers = [1, 2, 3, 4];
+assertEq(numbers.map(x => x * 2), [2, 4, 6, 8]);
+assertEq(numbers.filter(x => x > 2), [3, 4]);
+assertEq(numbers.reduce((acc, x) => acc + x), 10);
+
+// ------------------------------------------------------------
+// 10. Scoping and shadowing
+// ------------------------------------------------------------
+let x = 1;
+{
+  let x = 2;
+  assertEq(x, 2);
+}
+assertEq(x, 1);
+
+fn readsGlobal() {
+  return greeting;
+}
+assertEq(readsGlobal(), "Hello, Jolt!");
+
+// ------------------------------------------------------------
+// 11. Cycle collector (closures that capture each other)
+// ------------------------------------------------------------
+fn makeCycle(i) {
+  var a = () => b();
+  var b = () => a();
+  return i;
+}
+var cycleTotal = 0;
+var n = 0;
+while (n < 1000) {
+  cycleTotal += makeCycle(n);
+  n += 1;
+}
+assertEq(cycleTotal, 499500);
+
+// ------------------------------------------------------------
+// 12. Standard library: math, conversions, utilities
+// ------------------------------------------------------------
+assertEq(abs(-7), 7);
+assertEq(abs(-2.5), 2.5);
+assertEq(floor(3.7), 3.0);
+assertEq(ceil(3.2), 4.0);
+assertEq(round(2.5), 3.0);
+assertEq(sqrt(81), 9.0);
+assertEq(pow(2, 5), 32.0);
+assertEq(min(3, 1, 2), 1);
+assertEq(max(3, 1, 2), 3);
+assertEq(clamp(15, 0, 10), 10);
+assertEq(clamp(-5, 0, 10), 0);
+
+assertEq(type(1), "int");
+assertEq(type(1.5), "float");
+assertEq(type("x"), "string");
+assertEq(type(nil), "nil");
+assertEq(type(true), "bool");
+assertEq(type([]), "array");
+assertEq(type({}), "map");
+assertEq(type(() => {}), "function");
+assertEq(type(0..1), "range");
+
+assertEq(int("42"), 42);
+assertEq(int(3.9), 3);
+assertEq(float("2.5"), 2.5);
+assertEq(str(42), "42");
+assertEq(repr("hi"), "\"hi\"");
+assertEq(bool(0), true);
+assertEq(bool(nil), false);
+
+// ------------------------------------------------------------
+// 13. Script arguments
+// ------------------------------------------------------------
+let argv = args();
+print("Script args: ${argv.length}");
+for a in argv {
+  print("  ${a}");
+}
+
+// ------------------------------------------------------------
+// 14. Time and randomness
+// ------------------------------------------------------------
+seed(42);
+let r = random();
+assertEq(r >= 0.0 && r < 1.0, true);
+let ri = random(100);
+assertEq(ri >= 0 && ri < 100, true);
+
+let elapsed = clock();
+assertEq(elapsed >= 0.0, true);
+
+// ------------------------------------------------------------
+// 15. Files (read/write/exists)
+// ------------------------------------------------------------
+let path = "full_example_output.txt";
+if (fileExists(path)) {
+  print("File exists: ${path}");
+  let content = readFile(path);
+  print("Content: ${content}");
+}
+writeFile(path, "Hello from Jolt at ${elapsed} seconds");
+assertEq(fileExists(path), true);
+assertEq(readFile(path).startsWith("Hello from Jolt"), true);
+
+// ------------------------------------------------------------
+// 16. Error handling (no exceptions; use nil + panic)
+// ------------------------------------------------------------
+fn safeDivide(a, b) {
+  if (b == 0) { return nil; }
+  return a / b;
+}
+assertEq(safeDivide(10, 2), 5);
+assertEq(safeDivide(10, 0), nil);
+
+// ------------------------------------------------------------
+// 17. Final output
+// ------------------------------------------------------------
+print("");
+print("==========================================");
+print("All sections passed.");
+print("==========================================");
+print("MAX_SCORE = ${MAX_SCORE}");
+print("counter = ${counter}");
+print("person = ${person}");
+print("numbers = ${numbers}");
+print("cycleTotal = ${cycleTotal}");
+print("elapsed = ${elapsed}");
+print("==========================================");

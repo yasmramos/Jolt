@@ -232,12 +232,13 @@ void CodeGen::storeToMem(X64Reg base, std::int64_t disp, std::uint8_t src, bool 
   std::uint8_t byte = 0x40 | (isSse ? 0x00 : 0x08);
   if (isSse ? (src >= kXmmBase + 8) : (src >= 8)) byte |= 0x04;
   if (b >= 8) byte |= 0x01;
-  if (byte != 0x40) emitByte(byte);
   if (isSse) {
-    emitByte(0xF2);
+    emitByte(0xF2);                            // F2 PRIMERO (canónico GNU as)
+    if (byte != 0x40) emitByte(byte);          // REX después
     emitByte(0x0F);
     emitByte(0x11);
   } else {
+    if (byte != 0x40) emitByte(byte);
     emitByte(0x89);
   }
   // The displacement encoding lives in `modRmDisp()` only: hand-rolling a
@@ -354,8 +355,8 @@ void CodeGen::sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int
   std::uint8_t byte = 0x40;
   if (d >= 8) byte |= 0x04;
   if (s >= 8) byte |= 0x01;
-  if (byte != 0x40) emitByte(byte);
   if (prefix != 0) emitByte(prefix);
+  if (byte != 0x40) emitByte(byte);
   emitByte(0x0F);
   emitByte(opcode);
   emitByte(static_cast<std::uint8_t>(0xC0 | (d << 3) | s));
@@ -376,8 +377,8 @@ void CodeGen::sseMemOp(std::uint8_t prefix, std::uint8_t opcode, int xmm, X64Reg
   std::uint8_t byte = 0x40;
   if (d >= 8) byte |= 0x04;
   if (b >= 8) byte |= 0x01;
-  if (byte != 0x40) emitByte(byte);
   if (prefix != 0) emitByte(prefix);
+  if (byte != 0x40) emitByte(byte);
   emitByte(0x0F);
   emitByte(opcode);
   modRmDisp(d, b, disp);

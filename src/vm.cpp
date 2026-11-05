@@ -244,7 +244,7 @@ bool VM::lessThan(const Value& left, const Value& right, int line, int col) {
 
 // ------------------------------------------------------------------ execution
 
-void VM::run(const Bytecode& bytecode) {
+Value VM::run(const Bytecode& bytecode) {
   const int registerCount = bytecode.numRegisters > 0 ? bytecode.numRegisters : 0;
   const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
@@ -252,13 +252,24 @@ void VM::run(const Bytecode& bytecode) {
   frames_.clear();
   depth = 0;
   stack.clear();
-
-  // The root chunk is owned by the caller, so the frame keeps a non-owning
-  // handle. Child protos are owned by the Function values that instantiate
-  // them and outlive both the frame and this call to `run`.
+  scratchCells_.clear();
   std::shared_ptr<const Bytecode> root(&bytecode, [](const Bytecode*) {});
   frames_.push_back(CallFrame{std::move(root), 0, kNoResult, kNoResult, 0, 0, {}});
-  runFrames(0);
+  Value result = runFrames(1);
+  // `HALT` pops the root frame and shrinks `registers_` / `locals_` to the
+  // root's bases (0), so `registerCount()` / `localCount()` would report 0
+  // after `run()`. Restore the proto's counts so the public accessors keep
+  // reporting what the last execution reserved.
+  registers_.resize(static_cast<size_t>(registerCount));
+  locals_.resize(static_cast<size_t>(localCount));
+  if (!frames_.empty()) {
+    frames_.clear();
+    registers_.clear();
+    locals_.clear();
+    scratchCells_.clear();
+    fail("VM::run: HALT left frames on the stack (malformed bytecode)");
+  }
+  return result;
 }
 
 Value VM::runFrames(std::size_t stopDepth) {
@@ -575,25 +586,129 @@ Value VM::runFrames(std::size_t stopDepth) {
         break;
       }
 
-      // PHASE 6c-6d opcodes are declared now so the instruction budget stays
-      // at 40. The compiler does not emit them until their slice lands, so
-      // reaching one of these cases would be a compiler bug.
-      case OpCode::NEWTABLE:
-      case OpCode::GETTABLE:
-      case OpCode::SETTABLE:
-      case OpCode::ITER:
-      case OpCode::IN:
-        fail("opcode not implemented yet", line, col);
+      case OpCode::NEWTABLE: {
+        if (instruction.c == 0) {
+          // `b` is a capacity hint, not the number of elements. The array
+          // starts empty; `SETTABLE` with an index equal to the current
+          // length grows it, and `push` grows it from the end. Creating `b`
+          // nils would make `len(arr)` report the hint instead of the real
+          // size (PHASE 6c fix).
+          setReg(instruction.a, Value(makeArray()));
+        } else if (instruction.c == 1) {
+          setReg(instruction.a, Value(makeMap()));
+        } else {
+          fail("invalid table kind: " + std::to_string(instruction.c), line, col);
+        }
+        break;
+      }
 
-      case OpCode::PRINT: {
-        const std::string text = getReg(instruction.a).toString();
-        platform().write(Platform::kStdout, text.data(), text.size());
-        platform().write(Platform::kStdout, "\n", 1);
-        platform().flush(Platform::kStdout);
+      case OpCode::GETTABLE: {
+        const Value& object = getReg(instruction.b);
+        if (instruction.c >= 0) {
+          const Value& index = getReg(instruction.c);
+          setReg(instruction.a, ops::indexGet(*this, object, index, line, col));
+        } else {
+          const std::string& name = nameAt(chunk, -instruction.c - 1);
+          setReg(instruction.a, ops::memberGet(*this, object, name, line, col));
+        }
+        break;
+      }
+
+      case OpCode::SETTABLE: {
+        Value value = getReg(instruction.a);
+        const Value& object = getReg(instruction.b);
+        if (instruction.c >= 0) {
+          const Value& index = getReg(instruction.c);
+          ops::indexSet(*this, object, index, std::move(value), line, col);
+        } else {
+          const std::string& name = nameAt(chunk, -instruction.c - 1);
+          ops::memberSet(*this, object, name, std::move(value), line, col);
+        }
+        break;
+      }
+
+      case OpCode::ITER: {
+        // The cursor starts as nil (the compiler loads it that way), so the
+        // first ITER can initialize it from the iterable's own shape.
+        const Value iterable = getReg(instruction.b);
+        Value cursor = getReg(instruction.c);
+        Value item;
+        bool done = false;
+
+        if (iterable.isArray()) {
+          if (!cursor.isNil() && !cursor.isInt()) {
+            fail("invalid array iteration state", line, col);
+          }
+          const int64_t index = cursor.isNil() ? 0 : cursor.asInt();
+          if (index < 0 || static_cast<std::size_t>(index) >= iterable.arr().items.size()) {
+            done = true;
+          } else {
+            item = iterable.arr().items[static_cast<std::size_t>(index)];
+            cursor = Value(static_cast<int64_t>(index + 1));
+          }
+        } else if (iterable.isStr()) {
+          if (!cursor.isNil() && !cursor.isInt()) {
+            fail("invalid string iteration state", line, col);
+          }
+          const std::vector<std::string> chars = utf8Chars(iterable.asStr());
+          const int64_t index = cursor.isNil() ? 0 : cursor.asInt();
+          if (index < 0 || static_cast<std::size_t>(index) >= chars.size()) {
+            done = true;
+          } else {
+            item = Value(chars[static_cast<std::size_t>(index)]);
+            cursor = Value(static_cast<int64_t>(index + 1));
+          }
+        } else if (iterable.isMap()) {
+          if (!cursor.isNil() && !cursor.isInt()) {
+            fail("invalid map iteration state", line, col);
+          }
+          const int64_t index = cursor.isNil() ? 0 : cursor.asInt();
+          if (index < 0 || static_cast<std::size_t>(index) >= iterable.map().entries.size()) {
+            done = true;
+          } else {
+            item = Value(iterable.map().entries[static_cast<std::size_t>(index)].first);
+            cursor = Value(static_cast<int64_t>(index + 1));
+          }
+        } else if (iterable.isRange()) {
+          const Range& range = iterable.range();
+          if (cursor.isNil()) cursor = Value(range.start);
+          if (!cursor.isInt()) fail("invalid range iteration state", line, col);
+
+          const bool ascending = range.start <= range.end;
+          const int64_t current = cursor.asInt();
+          const bool inBounds =
+              ascending ? (range.inclusive ? current <= range.end : current < range.end)
+                        : (range.inclusive ? current >= range.end : current > range.end);
+          if (!inBounds) {
+            done = true;
+          } else {
+            item = Value(current);
+            // Unsigned arithmetic keeps INT64_MIN/MAX bounds well-defined.
+            const int64_t next =
+                ascending ? static_cast<int64_t>(static_cast<uint64_t>(current) + 1ULL)
+                          : static_cast<int64_t>(static_cast<uint64_t>(current) - 1ULL);
+            cursor = Value(next);
+          }
+        } else {
+          fail(std::string("cannot iterate over a value of type '") + iterable.typeName() + "'",
+               line, col);
+        }
+        // Persist the advanced cursor; without this the loop would restart
+        setReg(instruction.c, std::move(cursor));
+        setReg(instruction.a, done ? Value() : std::move(item));
+        setReg(instruction.jump, Value(done));
+        break;
+      }
+
+      case OpCode::IN: {
+        const Value& needle = getReg(instruction.b);
+        const Value& haystack = getReg(instruction.c);
+        setReg(instruction.a, Value(ops::contains(*this, needle, haystack, line, col)));
         break;
       }
 
       case OpCode::HALT:
+        leaveFrame(Value());
         return Value();
     }
   }

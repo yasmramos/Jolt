@@ -87,8 +87,10 @@ assertEq(k, 11);
 
 var items = [];
 for x in [10, 20, 30] {
+  print("iter: " + str(x));
   items.push(x);
 }
+print("items: " + str(items));
 assertEq(items, [10, 20, 30]);
 
 var word = "";

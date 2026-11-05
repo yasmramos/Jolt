@@ -368,8 +368,8 @@ void functionVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
   if (function.closure) visitor(*function.closure, context);
   // Captured cells are shared between closures, so each one is a node of its own.
   // The VM tracks a cell as soon as a closure captures it.
-  for (const CellPtr& cell : function.upvalues) {
-    if (cell && cell->isTracked()) visitor(*cell, context);
+  for (const auto& captured : function.capturedGcNodes) {
+      if (captured) visitor(*static_cast<GcNode*>(captured.get()), context);
   }
 }
 
@@ -378,6 +378,7 @@ void functionClear(GcNode& node) {
   function.closure.reset();
   function.native = nullptr;
   function.upvalues.clear();
+  function.capturedGcNodes.clear();
 }
 
 std::size_t cellRefCount(const GcNode& node) { return static_cast<const Cell&>(node).refs; }

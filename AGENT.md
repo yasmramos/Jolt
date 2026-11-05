@@ -11,10 +11,15 @@ programming language with a Lua-style internal architecture.
 |-------|-------|
 | **Name** | Jolt |
 | **Extension** | `.jolt` |
-| **Philosophy** | Simple like Python, structured like Java, fast like Lua |
-| **Implementation** | C++17 (no external dependencies) |
-| **Initial platform** | Windows (g++/MinGW), then cross-platform |
-| **Architecture** | Register-based bytecode + VM (Lua 5.4 style) |
+| **Philosophy** | Simple like Python, structured like Java, fast like Lua, safe like Kotlin |
+| **Implementation** | C++17 (standard library only, optional AsmJIT for JIT) |
+| **Initial platform** | Linux x86-64 (musl static), then Windows/macOS |
+| **Architecture** | Register-based bytecode + VM (dev engine) + AOT backend (production) |
+| **Niche** | Desktop apps, CLI, UI (not systems, not backend, not data science) |
+
+**Jolt is a general-purpose language** with a clear focus: desktop apps, CLI,
+and UI. It **can** do backend, data science, games, or mobile (with FFI), but
+those are not priorities.
 
 ---
 
@@ -22,136 +27,104 @@ programming language with a Lua-style internal architecture.
 
 ```text
 .jolt → LEXER → PARSER → AST → COMPILER → BYTECODE ─┬─→ VM (dev engine)
-                                                     └─→ AOT BACKEND → freestanding static native binary
+                                                     └─→ AOT BACKEND → native binary
 ```
 
 The VM is a development tool (REPL, fast iteration, differential testing).
-`jolt build` produces a self-contained freestanding binary (no libc, no
-runtime to install); end users never install Jolt or any runtime.
+joltc produces a self-contained native binary (musl static by default,
+no runtime to install); end users never install Jolt or any runtime.
+
+The bytecode is designed from day one to be compiled to native. It is
+low-level (40 opcodes, 1:1 or 1:2 lowering to x86-64) so the AOT backend can
+generate efficient native code. Do NOT repeat Java's mistake (high-level
+bytecode that later turns out to be impossible to compile efficiently).
 
 ### Modules and responsibilities
 
 | Module | Input | Output | Status |
 |--------|-------|--------|--------|
-| `lexer.cpp` | source text | `Token[]` | ✅ existing |
-| `parser.cpp` | `Token[]` | `Node*` (AST) | ✅ existing |
-| `bytecode.cpp` | `Bytecode` | basic operations | ✅ PHASE 1 |
-| `compiler.cpp` | `Node*` | `Bytecode*` | ✅ PHASE 5 |
-| `vm.cpp` | `Bytecode*` | execution | ✅ PHASE 5 |
-| `main.cpp` | CLI | full pipeline | ⬜ PHASE 4 (VM as the engine) |
+| `lexer.cpp` | source text | `Token[]` | ✅ |
+| `parser.cpp` | `Token[]` | `Node*` (AST) | ✅ |
+| `bytecode.cpp` | `Bytecode` | basic operations | ✅ |
+| `compiler.cpp` | `Node*` | `Bytecode*` | ✅ |
+| `vm.cpp` | `Bytecode*` | execution | ✅ |
+| `main.cpp` | CLI | full pipeline | ⬜ (VM as dev engine, PHASE 4) |
 | `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
-| `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime: values and lexical `Env` | ✅ PHASE 6 groundwork |
-| `gc.cpp` | tracked `GcNode`s | reclamation of reference cycles (arrays, maps, functions, scopes, captured cells) for the interpreter and the VM | ✅ PHASE 6 |
-| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a (emitter only) |
+| `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
+| `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
+| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
+| `native/elf.cpp` | ELF structures | ELF bytes | ⬜ PHASE 7c |
+| `native/lower.cpp` | bytecode | x86-64 (via AsmJIT) | ⬜ PHASE 7b |
 
 ### Toolchain binaries and the compiler boundary
 
-`jolt` ships as a single binary until PHASE 7d. Split the toolchain only once
-`jolt build` exists and something actually consumes it (CI, third-party
-builds); end users never install Jolt (PHASE 7), so an early split adds
-packaging and build cost without removing any user-facing surface.
+`jolt` ships as a single binary until PHASE 7d. After the split:
 
-The split, when it happens:
+- `jolt` development engine (run, REPL, -c). Includes VM, interpreter
+(test oracle), and JIT (AsmJIT).
+- `joltc` host compiler (joltc file.jolt -o app). Reads sources and
+writes the ELF. Uses AsmJIT Assembler (no JIT). Links against musl static.
+- `jolt build` thin alias over `joltc`
 
-- `jolt` keeps run, REPL and `-c`: the development engine.
-- `joltc` becomes the host compiler (`joltc file.jolt -o app`). It reads
-  sources and writes the ELF, so it links libc; the freestanding part is what
-  it emits, not the compiler itself.
-- `jolt build` stays a thin alias over the same library, never a second
-  implementation of the pipeline.
-
-Boundary rule, in force before the split: `src/compiler.*` and `src/native/*`
-must not include `interpreter.h` or `vm.h`. Both are libraries that any entry
-point may link (the `compiler_test` target already builds the compiler without
-the interpreter), which is what makes the later split a second `main` instead
-of a refactor. The `compiler_boundary` CTest case
-(tests/check_compiler_boundary.cmake) enforces the rule on every run.
-
-Rationale: it keeps the PHASE 7 anti-goal (no compiler and no eval reachable
-from the AOT runtime) enforceable mechanically, and it keeps the compiler
-reusable by a leaner entry point.
+Boundary rule: src/compiler.* and src/native/* must not include
+interpreter.h or vm.h. Enforced by tests/check_compiler_boundary.cmake.
 
 ---
 
 ## 3. Bytecode rules (CRITICAL)
 
-These rules are **not negotiable**. If a proposal violates them, reject it
-and propose an alternative.
-
 ### 3.1 Representation
 
 1. **Register-based**, NOT stack-based. Registers are an array of dynamic
-   values in the VM (`Value regs[256]`). Do not use `double` alone: Jolt also
-   needs to represent strings, booleans, `nil`, arrays and maps. All
-   registers, global variables, frames and temporaries use the same `Value`
+   values. All registers, globals, frames and temporaries use the same `Value`
    type. `Bytecode::constants` is a single tagged constant pool shared by the
-   compiler and the VM (numbers, strings and global names); the VM does not
-   keep separate registers per type.
-   Arithmetic operations must include fast paths for `int` and `float`.
-   In C++17, `Value` is a 16-byte tagged union with non-atomic reference
-   counting (the interpreter/VM is single-threaded). Strings are immutable
-   and shared, so `MOVE` does not duplicate text.
+   compiler and the VM. Arithmetic operations include fast paths for `int` and
+   `float`. `Value` is a 16-byte tagged union with non-atomic reference
+   counting (single-threaded). Strings are immutable and shared.
 
-### 3.2 Lowering tiers (the native backend contract)
+### 3.2 Lowering tiers
 
 2. **Every opcode has exactly one direct lowering**, but not every lowering is
-   a single machine instruction. There are two tiers:
+   a single machine instruction. Two tiers:
 
    | Tier | Lowering | Opcodes |
    |------|----------|---------|
-   | **Inline** | 1–3 instructions that read/write registers and frame cells, no call | `LOADK`, `MOVE`, `ADD`–`POW` (int/float fast paths), `UNOP`, `BAND`–`SHR`, `EQ`–`GTE`, `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`, `GETLOCAL`, `SETLOCAL` |
-   | **Runtime primitive** | Load arguments into ABI registers and `call` one named helper in the embedded runtime | `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`, `NEWTABLE`, `GETTABLE`, `SETTABLE`, `IN`, `ITER`, `PRINT`, `DECLLOCAL`, `GETGLOBAL`, `SETGLOBAL` (until globals are resolved to fixed slots) |
+   | **Inline** | 1–3 instructions, no call | `LOADK`, `MOVE`, `ADD`–`POW` (int/float fast paths), `UNOP`, `BAND`–`SHR`, `EQ`–`GTE`, `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE`, `GETLOCAL`, `SETLOCAL` |
+   | **Runtime primitive** | 1 call to a named helper | `CALL`, `RETURN`, `CLOSURE`, `GETUPVAL`, `SETUPVAL`, `NEWTABLE`, `GETTABLE`, `SETTABLE`, `IN`, `ITER`, `PRINT`, `DECLLOCAL`, `GETGLOBAL`, `SETGLOBAL` |
 
-   A runtime primitive still satisfies the anti-goal: it is one small typed
-   operation (e.g. `jolt_table_get`), never the compiler, the AST or `eval`.
-   **Do not claim 1:1 ASM for the second tier.** An earlier version of this
-   document did, which contradicted the PHASE 7c plan; the table in
-   "Expected bytecode → native lowering" is now the normative one.
+   **Rule 1:1 / 1:2**: every opcode lowers to **1 instruction** (inline) or
+   **2 instructions** (inline + fallback) or **1 call** (runtime primitive).
+   **Never 3+ instructions.**
 
-   Some inline opcodes also fall back to a runtime primitive on the generic
-   path (`ADD` with strings, comparisons of non-numbers). That fallback is
-   part of the same opcode's lowering, not a second opcode.
+   A runtime primitive is **one small typed operation** (e.g.
+   `jolt_table_get`), never the compiler, the AST or `eval`.
 
-### 3.3 Opcode budget and retirement ladder
+### 3.3 Opcode budget
 
 3. **At most 40 opcodes** in total. **40 is a hard ceiling, not a target.**
-   PHASE 6 sits exactly at it (40/40), so there is no free slot. The policy for
-   the next opcode is fixed now:
+   Enforced at compile time: `static_assert(kOpcodeCount <= 40)`.
 
-   - A proposal that needs a new opcode must name the rung it consumes **and**
-     land that consolidation in the same slice, with all suites green.
-   - The ladder is ordered; do not skip a rung to protect a favorite opcode.
-     A rung may only be skipped if it has already been executed.
-   - Never emit a 41st opcode, not even temporarily.
-   - If the feature can be expressed with the current set (`switch` and
-     pattern matching lower to `JMP_IF_FALSE`/`JMP`), it gets no opcode.
+   **Retirement ladder** (if a new opcode is needed):
+   | Rung | Consolidation | Saves |
+   |------|---------------|-------|
+   | 1 | `EQ` `NEQ` `LT` `LTE` `GT` `GTE` → `CMP` | -5 |
+   | 2 | `JMP_IF_FALSE` + `JMP_IF_TRUE` → `JMP_IF` | -1 |
+   | 3 | `BAND` `BOR` `BXOR` `SHL` `SHR` → `BITOP` | -4 |
+   | 4 | `ADD` `SUB` `MUL` `DIV` `MOD` `POW` → `ARITH` | -5 |
 
-   The ceiling is enforced at compile time: `include/bytecode.h` has
-   `static_assert(kOpcodeCount <= 40)`, so a 41st enumerator fails the build
-   before it can land. `PRINT`'s deletion (39) is the only planned decrease.
-
-   | Rung | Consolidation | Saves | Notes |
-   |------|---------------|-------|-------|
-   | 1 | `EQ` `NEQ` `LT` `LTE` `GT` `GTE` → `CMP R[a], R[b], R[c]` with the operator in `c` | -5 | Same selector trick already used by `UNOP`; native code still lowers to `cmp` + `setcc`. **Pre-approved default answer** to "which opcode is dropped". |
-   | 2 | `JMP_IF_FALSE` + `JMP_IF_TRUE` → `JMP_IF` with polarity in `c` | -1 | One `test` + one `jcc` either way. |
-   | 3 | `BAND` `BOR` `BXOR` `SHL` `SHR` → `BITOP` with the operator in `c` | -4 | The ASM already selects the operation. |
-   | 4 | `ADD` `SUB` `MUL` `DIV` `MOD` `POW` → `ARITH` with the operator in `c` | -5 | Last resort: one dispatch in the hot path instead of six. |
-
-   At 40/40, **any** feature that wants a new opcode starts at rung 1. If a
-   future review prefers 20–25 opcodes, this ladder is the route there; it is
-   not a redesign.
+   **`PRINT` deletion (6f) frees one slot (39/40).** It does not postpone
+   rung 1.
 
 ### 3.4 Forbidden instructions
 
-4. **Forbidden instructions** (too high level):
-   - `OP_EVAL_EXPR`, `OP_EXECUTE_STATEMENT`, `OP_CALL_METHOD_DYNAMIC`
+4. **Forbidden**: `OP_EVAL_EXPR`, `OP_EXECUTE_STATEMENT`,
+   `OP_CALL_METHOD_DYNAMIC`, `OP_IF`, `OP_WHILE`.
 
 ### 3.5 Allowed instructions (the complete 40)
 
-5. **Allowed instructions** (low level):
-   - Load: `LOADK` (tagged constant: nil, bool, int, float, string), `MOVE`
-   - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `UNOP` (`c` selects
-     negate/not/bit-not)
+5. **Allowed**:
+   - Load: `LOADK`, `MOVE`
+   - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `POW`, `UNOP`
    - Bits: `BAND`, `BOR`, `BXOR`, `SHL`, `SHR`
    - Comparison: `EQ`, `NEQ`, `LT`, `GT`, `LTE`, `GTE`
    - Variables: `GETGLOBAL`, `SETGLOBAL`, `DECLLOCAL`, `GETLOCAL`, `SETLOCAL`
@@ -162,24 +135,34 @@ and propose an alternative.
    - I/O: `PRINT` (**temporary**, see §3.6)
    - End: `HALT`
 
-### 3.6 `PRINT` is temporary
+### 3.6 `PRINT` is retired
 
-`PRINT` is the only opcode that touches the outside world. It is a deliberate,
-time-boxed exception to the rule that the core knows no std, and it is
-**scheduled for deletion**, not kept:
+`PRINT` was the only opcode that touched the outside world. It was retired in
+PHASE 6f: every `print` arity (including the single-argument form) compiles to
+`CALL` to the `print` builtin. The opcode is gone from the enum, the VM and the
+compiler.
 
-- 6c/6e: the compiler emits `CALL` to the `print` builtin for every arity, so
-  no new code contains `PRINT`.
-- 6f: the `OpCode::PRINT` case and its VM implementation are removed. This is
-  part of the parity gate (D9 in `docs/phase6-design.md`), not an optional
-  cleanup.
-- 7c: the freestanding runtime provides the same `print` builtin on
-  `PlatformFreestanding`; I/O goes through `Platform::write`, never through an
-  opcode.
+Removing `PRINT` freed one slot (39/40). The next opcode request (if any) starts
+at rung 1 of the §3.3 ladder.
 
-Removing `PRINT` frees one slot (39/40). It does **not** postpone rung 1 of
-§3.3: the ladder applies to any opcode requested before 6f, and `PRINT` is
-already promised to the gate.
+### Explicit anti-goal
+
+> **Do NOT repeat Java's mistake**: high-level bytecode that later turns out
+> to be impossible to compile to native code efficiently. Jolt's bytecode
+> must be born with future native compilation in mind.
+
+### Design rules for the AOT backend
+
+1. **No VM-only features.** Every language feature must be compilable by the
+   AOT backend. Runtime `eval`/`load` of bytecode is forbidden unless the
+   produced binary embeds the compiler itself (GraalVM pitfall).
+2. **The bytecode must carry enough information for AOT.** Instructions stay
+   annotatable with provable types so the backend can emit typed fast paths.
+3. **The embeddable runtime cannot call libc.** The runtime that ships inside
+   AOT binaries may only reach the outside world through the `Platform`
+   interface. **Unless the user explicitly requests musl static** (the
+   default), in which case libc is statically linked and the binary is still
+   self-contained.
 
 ### Explicit anti-goal
 
@@ -343,6 +326,26 @@ previous one.
   to `CALL`, and the opcode is deleted at the 6f gate (§3.6)
 - Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. Slice 6a is done: top-level `fn` declarations, parameters, `return`, recursion and general calls compile and run on the VM. Slice 6b is done: `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas and closures that escape their defining scope (verified by `examples/closures.jolt` and `tests/09_lambdas.jolt`). The compiler still rejects collections and `for-in` with a `(Phase 6)` message; those land in 6c.
 - Memory in the VM: closures that capture each other's variables form cycles through `Cell`s, which reference counting cannot free. A `Cell` registers with the cycle collector when a closure captures it, `Function`s report their upvalue cells to it, and the VM runs `gcCollectIfNeeded()` at `CLOSURE` (the place where such cycles are created). Regression tests: `testCapturedCellsAreNotRetainedByTheVM` and `testClosureCyclesAreCollected` in `tests/vm_test.cpp`; build it with `-DJOLT_GC_STRESS` to collect at every safe point.
+- **6f done**: `PRINT` retired. Every `print` arity compiles to `CALL`. The
+  opcode count is now 39/40.
+
+### PHASE 6.5 — Types and nullability (1.0)
+
+- Optional types: `let x: int = 5`.
+- Local type inference: `let x = 5` (x: int).
+- Nullability: `string?`, `?.`, `??`, `!!`.
+- `defer`.
+- **`require`** (modules, Lua-style).
+- **`struct`** (data only, no methods).
+- `switch` simple (literals and ranges).
+- **`native fn`** for internal FFI (stdlib in Jolt).
+
+### PHASE 6.6 — FFI with C (1.0)
+
+- `extern "C" { ... }` blocks.
+- Compile-time stubs (like Zig/Rust).
+- **No `libffi`**.
+- Support for ints, floats, strings, structs, callbacks.
 
 ### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
@@ -391,45 +394,80 @@ previous one.
   only). Still missing: opcode→emitter lowering, the ELF/freestanding emitter,
   `_start`, the arena allocator, the `Platform` layer and `jolt build`.
 
+### Post-1.0 — UI library
+
+- **Skia** as rendering backend.
+- **SDL2** for windows and events.
+- **Declarative UI** (SwiftUI/Flutter style): `Window`, `Column`, `Row`,
+  `Text`, `Button`, `Input`, `Checkbox`, `Slider`, etc.
+
+### Post-1.0 — Other features
+
+- **Cosmopolitan (APE)** for CLI multi-platform (optional).
+- **Interfaces/traits** (for generic code without full generics).
+- **Dynamic FFI** (`dlopen`, `dlsym`, runtime stubs with AsmJIT JIT).
+- **Hot reload** (1.1+).
+- **Extended stdlib**: JSON, dates, bytes, regex, networking.
+- **Package manager** (`jolt install foo`) and registry.
+- **Windows and macOS** (1.2+).
+- **Embedded VM** (`--embed-vm`): AOT binary + VM for plugins, hot reload.
+
+### Future — Static with `@Dynamic` (2.0)
+
+- Static by default, `@Dynamic` for dynamic parts.
+- Type inference, monomorphization.
+- Requires: types (6.5), FFI (6.6), AOT (7).
+
 ### Current status
+
 Phase 1: ✅ completed and reviewed
 Phase 2: ✅ completed
 Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
-Phase 6: 🔶 in progress ← NEXT (6a.0, 6a and 6b done: shared `Runtime`, per-function protos, `CALL`/`RETURN`/`CLOSURE`, top-level functions, recursion, upvalues, lambdas and closures, with closure cycles reclaimed by the collector; collections and `for-in` are still missing)
-Phase 7: 🔶 in progress (7a: target descriptor + x86-64 instruction emitter with tests; no ELF emitter, freestanding runtime or `jolt build` yet)
-Distribution model: freestanding AOT native binary (PHASE 7, Linux x86-64).
+Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
+Phase 6.5: ⬜ pending (types, nullability, `require`, `struct`, `switch`, `native fn`)
+Phase 6.6: ⬜ pending (FFI with C)
+Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
+Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
+2.0: ⬜ future (static with `@Dynamic`)
+
+**12 bugs fixed** (see `docs/BUGS.md` for the full list).
+
+Distribution model: musl static by default (self-contained, no runtime).
+Optional: newlib (bare-metal), freestanding (no libc).
+
 VM = dev engine only. The AST interpreter leaves the product path at the 6f
-parity gate (D9 in `docs/phase6-design.md`) and is deleted in PHASE 4.
+parity gate and is deleted in PHASE 4.
 
 
 ---
 
 ## 5. Code rules
 
-1. **Pure C++17**, no external dependencies (standard library only).
+1. **Pure C++17**, no external dependencies **except optional AsmJIT** (for
+   JIT) and **optional ELFIO** (for ELF emitter). The AOT product (`joltc`)
+   uses AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight.
 2. **Names**: `camelCase` for functions, variables and members (private data
-   members end with `_`), `PascalCase` for types, and `UPPER_CASE` for opcodes
-   and constants. The Jolt standard library follows the same rule
-   (`startsWith`, `readFile`, `assertEq`).
-3. **Structures**: `struct` for data and `enum class` for opcodes.
-4. **Memory**: RAII and standard containers (`std::vector`, `std::string`); no `malloc`/`free`.
-5. **Errors**: diagnostic structs with line/column; the CLI prints them to `stderr`.
+   members end with `_`), `PascalCase` for types, `UPPER_CASE` for opcodes
+   and constants.
+3. **Structures**: `struct` for data, `enum class` for opcodes.
+4. **Memory**: RAII and standard containers (`std::vector`, `std::string`);
+   no `malloc`/`free`.
+5. **Errors**: diagnostic structs with line/column; the CLI prints them to
+   **`stderr`** (via `Platform::writeErr`).
 6. **Language**: all code, comments, documentation and commit messages are
-   written in English (see `CONVENTIONS.md`). Comments are concise and only
-   where they add value.
+   written in **English**.
 7. **Every new `.cpp`** has its `.h` in `include/`.
 8. **No mutable global variables** except the VM's globals table.
-9. **Build with**: `g++ -std=c++17 -Wall -Wextra -O2`
-10. **Reference cycles**: values are reference counted and `gc.cpp` reclaims the
-    cycles counting cannot. Anything that can own a `Value` and be reachable from
-    itself is a `GcNode`, and its `visit` operation must report every strong
-    reference it holds to another tracked object (a missing edge keeps garbage
-    alive, it never frees live data). Do not add side owners such as registries
-    or caches of objects that can sit in a cycle: the collector sees them as
-    references from outside, which makes the cycle immortal. Cells are tracked
-    lazily (`GcNode::track`) because every local variable has one.
+9. **Build with**: `g++ -std=c++17 -Wall -Wextra -O2`.
+10. **Reference cycles**: values are reference counted and `gc.cpp` reclaims
+    the cycles counting cannot. Anything that can own a `Value` and be
+    reachable from itself is a `GcNode`, and its `visit` operation must report
+    every strong reference it holds to another tracked object. **Do not add
+    side owners** such as registries or caches of objects that can sit in a
+    cycle: the collector sees them as references from outside, which makes the
+    cycle immortal. Cells are tracked lazily (`GcNode::track`).
 
 ---
 
@@ -438,19 +476,13 @@ parity gate (D9 in `docs/phase6-design.md`) and is deleted in PHASE 4.
 Before writing **a single line of code**, the agent must answer and show the
 user:
 
-Do I need a new token in the lexer? → which one
-
-Do I need a new node in the AST? → which one
-
-Do I need a new rule in the parser? → which one
-
-Do I need a new opcode in the bytecode? → which one
-
-Does the opcode map to 1 ASM instruction? → yes/no (if not, redesign)
-
-Do I need new logic in the VM? → which one
-
-Do I need new logic in the compiler? → which one
+- Do I need a new token in the lexer? → which one
+- Do I need a new node in the AST? → which one
+- Do I need a new rule in the parser? → which one
+- Do I need a new opcode in the bytecode? → which one
+- Does the opcode map to 1:1 or 1:2 ASM instructions? → yes/no (if 1:3+, redesign)
+- Do I need new logic in the VM? → which one
+- Do I need new logic in the compiler? → which one
 
 Without this checklist complete and approved, **do not proceed to code**.
 
@@ -470,17 +502,24 @@ Without this checklist complete and approved, **do not proceed to code**.
 
 ## 8. Explicit prohibitions
 
-The agent **must NOT** propose or implement:
-
 | Prohibited | Reason |
 |-----------|--------|
 | Stack-based VM | Jolt is register-based (Lua style) |
 | High-level bytecode (`OP_EVAL_EXPR`) | Breaks future native compilation |
-| JIT (hot compiler) | Level 6, years of work, not a current goal |
+| **JIT in the VM** (JIT is for `jolt` only, not `joltc`) | The product is AOT; JIT is a dev tool |
 | Migrating the core to pure C | The core stays in C++17 |
 | Adding features without testing the previous one | Breaks incremental development |
 | Skipping the 7-point checklist | Creates architectural debt |
-| External libraries | C++ standard library only |
+| **External libraries beyond AsmJIT/ELFIO** | AsmJIT and ELFIO are the only allowed dependencies |
+| Superinstructions | Violate the 40-opcode ceiling |
+| Inline caching | Changes the bytecode contract |
+| Runtime specialization | Changes the bytecode contract |
+| `async`/`await`, generics, full pattern matching, generators, transactions | Out of scope |
+
+**Note**: AsmJIT and ELFIO are **optional** dependencies. The AOT product
+(`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
+development VM (`jolt`) may use AsmJIT JIT. **The end-user binary (`hello.exe`)
+contains neither.**
 
 ---
 
@@ -511,21 +550,78 @@ The agent **must NOT** propose or implement:
   native backend).
 
 ---
+## 11. File extensions and packaging
 
-## 11. Reference resources (for the agent)
+| Extension | What it is | Java analog |
+|-----------|------------|-------------|
+| `.jolt` | Source code | `.java` |
+| `.jolc` | Bytecode | `.class` |
+| `.jpkg` | Package (ZIP) | `.jar` |
+| `.jlib` | Native library | `.dll`/`.so`/`.dylib` |
+| `.jdoc` | Documentation | `.javadoc` |
+| `myapp` | Native binary (Linux/macOS) | (GraalVM) `.exe` |
+| `myapp.exe` | Native binary (Windows) | (GraalVM) `.exe` |
+
+**`.jpkg` format** (ZIP):
+myapp.jpkg
+├── META-INF/MANIFEST.MF
+├── bin/main.jolc
+├── lib/mylib.jlib
+├── resources/icon.png
+└── README.md
+
+
+**`.jolc` format** (binary):
++--------+--------+--------+--------+
+| 'J' | 'O' | 'L' | 'C' | magic
++--------+--------+--------+--------+
+| version (u32) |
++--------+--------+--------+--------+
+| flags (u32) |
++--------+--------+--------+--------+
+| name_len (u32) + name |
++--------+--------+--------+--------+
+| numParams, numRegisters, numLocals|
++--------+--------+--------+--------+
+| code_size + code |
++--------+--------+--------+--------+
+| constants_size + constants |
++--------+--------+--------+--------+
+| children_size + children |
++--------+--------+--------+--------+
+| upvalues_size + upvalues |
++--------+--------+--------+--------+
+| checksum (u32) |
++--------+--------+--------+--------+
+
+
+**Bytecode verification** (on `.jolc` load):
+- **Level 1 (structural)**: mandatory. Magic, version, ranges, valid opcodes,
+  operands in range, checksum.
+- **Level 2 (semantic)**: optional. Jumps to valid instructions, registers
+  initialized.
+- **Digital signature**: post-1.0, if the threat model requires it.
+
+---
+
+## 12. Reference resources (for the agent)
 
 - *Crafting Interpreters* (Robert Nystrom) — fundamentals
 - *The Implementation of Lua 5.0* — register VM design
 - LuaJIT source code (Mike Pall) — performance reference
 - System V ABI AMD64 — calling convention (PHASE 7)
+- AsmJIT documentation — JIT and Assembler
+- ELFIO documentation — ELF emitter
+- AXL documentation — arena allocator and low-level utilities
+- Cosmopolitan Libc — multi-platform CLI (optional)
 
 ---
 
-## 12. First task
+## 13. First task
 
 When the user types **`start`**, the agent must:
 
 1. Confirm the design of `include/bytecode.h` with the minimum opcodes.
 2. Show the **complete file**.
-3. Explain why each opcode maps to ASM.
+3. Explain why each opcode maps to 1:1 or 1:2 ASM (or 1 call).
 4. Wait for **explicit approval** before moving on to the next phase.

@@ -8,6 +8,14 @@
 
 #include "value.h"
 
+// <windows.h> defines `IN` as a macro (the input-control parameter annotation),
+// which would rewrite the `OpCode::IN` enumerator below. The bytecode header is
+// included after <windows.h> in the CLI, so drop the macro here rather than
+// depending on include order in every translation unit.
+#ifdef IN
+#undef IN
+#endif
+
 // Low-level bytecode for Jolt's register-based VM.
 //
 // Every instruction works on registers and has exactly one direct native
@@ -17,9 +25,10 @@
 // whose `c` field selects the operation, and collections share the GET/SET
 // table pair.
 //
-// PHASE 6 adds functions, collections and iteration, so the set is exactly 40
-// opcodes: the ones below. 40 is a hard ceiling; the retirement ladder for a
-// new opcode is in AGENT.md §3.3.
+// PHASE 6 adds functions, collections and iteration. PHASE 6f retires the
+// temporary `PRINT` opcode (every `print` arity compiles to `CALL` to the
+// builtin), leaving 39 opcodes. 40 is a hard ceiling; the retirement ladder
+// for a new opcode is in AGENT.md §3.3.
 
 enum class OpCode : std::uint8_t {
   LOADK,   // R[a] = constants[b]  (nil, bool, int, float or string)
@@ -67,16 +76,29 @@ enum class OpCode : std::uint8_t {
   GETUPVAL,   // R[a] = upvalues[b]->value
   SETUPVAL,   // upvalues[b]->value = R[a]
 
-  // Collections and iteration (PHASE 6). `GETTABLE`/`SETTABLE` cover both
-  // numeric indices and members: the compiler picks the mode through `c`.
-  NEWTABLE,   // R[a] = new table (array or map selected by `c`)
-  GETTABLE,   // R[a] = R[b][R[c]]
-  SETTABLE,   // R[b][R[c]] = R[a]
-  ITER,       // R[a] = next item of R[b], or R[a] = nil when exhausted
+  // Collections and iteration (PHASE 6).
+  //
+  // NEWTABLE creates an array when `c == 0` (with `b` pre-sized nil slots) and
+  // an insertion-ordered map when `c == 1`.
+  //
+  // GETTABLE/SETTABLE cover both dynamic indices and constant member names.
+  // `c >= 0` means the key lives in register `c` (array index, map key, or the
+  // string key produced for a computed map-literal entry). `c < 0` means the
+  // key is the string constant at index `-(c + 1)`: a member access/assignment
+  // for GETTABLE/SETTABLE, or a literal map key when building a map.
+  //
+  // ITER reads the iterable from R[b] and keeps its cursor in R[c]. The
+  // compiler initializes R[c] to nil; ITER starts the iteration on the first
+  // call. R[a] receives the next item, or nil when the sequence is exhausted.
+  // `instruction.jump` holds a destination register index for the done flag
+  // (0 while items remain, 1 when exhausted), so a nil item is not mistaken
+  // for the end.
+  NEWTABLE,   // R[a] = new table (array if c == 0, map if c == 1)
+  GETTABLE,   // R[a] = R[b][R[c]] or R[b].<constants[-c-1]>
+  SETTABLE,   // R[b][R[c]] = R[a] or R[b].<constants[-c-1]> = R[a]
+  ITER,       // R[a] = next item of R[b]; R[jump] = done flag
   IN,         // R[a] = R[b] in R[c]
 
-  PRINT,      // print R[a] (temporary: CALL to the print builtin from 6c/6e,
-              // deleted at the 6f parity gate; AGENT.md §3.6)
   HALT,       // stop execution
 };
 
