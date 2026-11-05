@@ -106,4 +106,12 @@ assertEq(nil == 0, false);
 assertEq("a" + "b", "ab");
 assertEq([1] + [2], [1, 2]);
 
+assertEq(5 in 5..0, false);
+assertEq(4 in 5..0, true);
+assertEq(1 in 5..0, true);
+assertEq(0 in 5..0, false);
+assertEq(0 in 5..=0, true);
+assertEq(5 in 5..=0, true);
+assertEq(3 in 5..=0, true);
+
 print("operators ok");

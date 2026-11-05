@@ -52,3 +52,14 @@ assertEq(selfArray[3][3][0], 1);
 assertEq(parent.down.name, "child");
 assertEq(child.up.down.up.name, "parent");
 assertEq(fib(15), 610);
+
+fn makeBoundCycle() {
+  let arr = [1, 2, 3];
+  arr[0] = arr.push;
+  arr[1] = arr.pop;
+  return nil;
+}
+for i in 0..20000 {
+  makeBoundCycle();
+}
+assertEq(true, true);
