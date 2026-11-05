@@ -269,6 +269,12 @@ class Lexer {
         advance();
         if (atEnd()) break;
         advance();
+      } else if (peek() == '$' && peek(1) == '{') {
+        // A nested interpolated string inside an interpolation expression:
+        // skip its `${...}` body as well, so the outer scan stays balanced.
+        advance();
+        advance();
+        scanInterpolation(line_, col_);
       } else if (peek() == '"') {
         advance();
         return;
