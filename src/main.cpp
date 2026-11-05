@@ -10,17 +10,20 @@
 #include <windows.h>
 #endif
 
+#include "ast.h"
+#include "builtins.h"
+#include "compiler.h"
 #include "diagnostic.h"
-#include "interpreter.h"
 #include "lexer.h"
 #include "parser.h"
 #include "util.h"
+#include "vm.h"
 
 namespace {
 
-const char* kVersion = "0.1.0";
+const char *kVersion = "0.1.0";
 
-const char* kUsage =
+const char *kUsage =
     "usage:\n"
     "  jolt                      start the interactive REPL\n"
     "  jolt <file.jolt> [args]   run a script\n"
@@ -34,12 +37,12 @@ const char* kUsage =
     "  -c, --check               only check the script for errors\n";
 
 // Returns 0 on success, 65 for compile errors, 70 for runtime errors.
-int execute(Interpreter& interp, const std::string& source, const std::string& name) {
+int execute(VM &vm, const std::string &source, const std::string &name) {
   std::vector<Token> tokens;
   try {
     tokens = lex(source);
-  } catch (const CompileError& error) {
-    printCompileError(name, source, error);
+  } catch (const CompileError &error) {
+    printCompileError(name, source, error, platformPosix());
     return 65;
   }
 
@@ -47,47 +50,59 @@ int execute(Interpreter& interp, const std::string& source, const std::string& n
   try {
     Parser parser(std::move(tokens), name);
     program = parser.parseProgram();
-  } catch (const CompileError& error) {
-    printCompileError(name, source, error);
+  } catch (const CompileError &error) {
+    printCompileError(name, source, error, platformPosix());
+    return 65;
+  }
+
+  Bytecode bytecode;
+  try {
+    bytecode = Compiler{}.compile(program);
+  } catch (const CompileError &error) {
+    printCompileError(name, source, error, platformPosix());
     return 65;
   }
 
   try {
-    interp.run(program);
-  } catch (const RuntimeError& error) {
-    printRuntimeError(name, source, error);
+    vm.run(bytecode);
+  } catch (const RuntimeError &error) {
+    printRuntimeError(name, source, error, platformPosix());
     return 70;
   }
   return 0;
 }
 
-int runSource(const std::string& source, const std::string& name,
-              const std::vector<std::string>& scriptArgs, bool checkOnly) {
+int runSource(const std::string &source, const std::string &name,
+              const std::vector<std::string> &scriptArgs, bool checkOnly) {
   if (checkOnly) {
     try {
       Parser parser(lex(source), name);
       parser.parseProgram();
-    } catch (const CompileError& error) {
-      printCompileError(name, source, error);
+    } catch (const CompileError &error) {
+      printCompileError(name, source, error, platformPosix());
       return 65;
     }
     return 0;
   }
 
-  Interpreter interp(name);
-  interp.scriptArgs = scriptArgs;
-  return execute(interp, source, name);
+  VM vm;
+  vm.sourceName = name;
+  vm.scriptArgs = scriptArgs;
+  registerBuiltins(vm);
+  return execute(vm, source, name);
 }
 
-bool isStatementStart(const std::string& text) {
+bool isStatementStart(const std::string &text) {
   size_t end = 0;
-  while (end < text.size() && (std::isalnum(static_cast<unsigned char>(text[end])) || text[end] == '_')) {
+  while (end < text.size() &&
+         (std::isalnum(static_cast<unsigned char>(text[end])) ||
+          text[end] == '_')) {
     ++end;
   }
   std::string word = text.substr(0, end);
-  return word == "let" || word == "var" || word == "const" || word == "fn" || word == "if" || word == "while" ||
-         word == "for" || word == "return" || word == "break" || word == "continue" ||
-         word == "else";
+  return word == "let" || word == "var" || word == "const" || word == "fn" ||
+         word == "if" || word == "while" || word == "for" || word == "return" ||
+         word == "break" || word == "continue" || word == "else";
 }
 
 void printReplHelp() {
@@ -100,9 +115,9 @@ void printReplHelp() {
 }
 
 // Returns true when the REPL should exit.
-bool handleCommand(Interpreter& interp, const std::string& command,
-                   const std::vector<std::string>& scriptArgs) {
-  if (command == ":quit" || command == ":q" || command == ":exit") return true;
+bool handleCommand(VM &vm, const std::string &command) {
+  if (command == ":quit" || command == ":q" || command == ":exit")
+    return true;
 
   if (command == ":help" || command == ":?") {
     printReplHelp();
@@ -110,24 +125,25 @@ bool handleCommand(Interpreter& interp, const std::string& command,
   }
 
   if (command == ":clear") {
-    interp = Interpreter("<repl>");
-    interp.scriptArgs = scriptArgs;
+    vm.clearGlobals();
+    registerBuiltins(vm);
     std::cout << "all definitions cleared\n";
     return false;
   }
 
   if (command == ":vars") {
     std::vector<std::pair<std::string, std::string>> entries;
-    for (const auto& entry : interp.globals->vars) {
-      const Value& value = entry.second.value;
-      if (value.isFunc() && value.func().isNative()) continue;
+    for (const auto &entry : vm.globals()) {
+      const Value &value = entry.second;
+      if (value.isFunc() && value.func().isNative())
+        continue;
       entries.emplace_back(entry.first, value.typeName());
     }
     std::sort(entries.begin(), entries.end());
     if (entries.empty()) {
       std::cout << "(no user definitions)\n";
     }
-    for (const auto& entry : entries) {
+    for (const auto &entry : entries) {
       std::cout << "  " << entry.first << ": " << entry.second << '\n';
     }
     return false;
@@ -144,7 +160,7 @@ bool handleCommand(Interpreter& interp, const std::string& command,
       std::cout << "cannot read file '" << path << "'\n";
       return false;
     }
-    execute(interp, source, path);
+    execute(vm, source, path);
     return false;
   }
 
@@ -152,11 +168,22 @@ bool handleCommand(Interpreter& interp, const std::string& command,
   return false;
 }
 
-void repl(const std::vector<std::string>& scriptArgs) {
-  Interpreter interp("<repl>");
-  interp.scriptArgs = scriptArgs;
+// Reports the value of a REPL expression and keeps it in `_`, like the AST
+// interpreter did.
+void publishReplValue(VM &vm, const Value &value) {
+  vm.defineGlobal("_", value, false);
+  if (!value.isNil())
+    std::cout << value.repr() << '\n';
+}
 
-  std::cout << "Jolt " << kVersion << " - a small scripting language written in C++\n";
+void repl(const std::vector<std::string> &scriptArgs) {
+  VM vm;
+  vm.sourceName = "<repl>";
+  vm.scriptArgs = scriptArgs;
+  registerBuiltins(vm);
+
+  std::cout << "Jolt " << kVersion
+            << " - a small scripting language written in C++\n";
   std::cout << "Type :help for help, :quit to exit.\n";
 
   std::string buffer;
@@ -175,10 +202,12 @@ void repl(const std::vector<std::string>& scriptArgs) {
       continue;
     }
     if (buffer.empty() && !trimmed.empty() && trimmed[0] == ':') {
-      if (handleCommand(interp, trimmed, scriptArgs)) break;
+      if (handleCommand(vm, trimmed))
+        break;
       continue;
     }
-    if (buffer.empty() && trimmed.empty()) continue;
+    if (buffer.empty() && trimmed.empty())
+      continue;
 
     buffer += line;
     buffer += '\n';
@@ -186,9 +215,10 @@ void repl(const std::vector<std::string>& scriptArgs) {
     std::vector<Token> tokens;
     try {
       tokens = lex(buffer);
-    } catch (const CompileError& error) {
-      if (error.message.find("unterminated") != std::string::npos) continue;
-      printCompileError("<repl>", buffer, error);
+    } catch (const CompileError &error) {
+      if (error.message.find("unterminated") != std::string::npos)
+        continue;
+      printCompileError("<repl>", buffer, error, platformPosix());
       buffer.clear();
       continue;
     }
@@ -196,22 +226,23 @@ void repl(const std::vector<std::string>& scriptArgs) {
     // A new REPL entry that begins with a statement keyword is parsed as a
     // program; everything else is first tried as a bare expression.
     size_t firstNewline = buffer.find('\n');
-    std::string firstLineText =
-        firstNewline == std::string::npos ? buffer : buffer.substr(0, firstNewline);
+    std::string firstLineText = firstNewline == std::string::npos
+                                    ? buffer
+                                    : buffer.substr(0, firstNewline);
 
     if (!isStatementStart(trim(firstLineText))) {
       try {
         Parser expressionParser(tokens, "<repl>");
         auto expr = expressionParser.parseFullExpression();
-        Value value = interp.evalRepl(expr);
-        interp.defineGlobal("_", value, false);
-        if (!value.isNil()) std::cout << value.repr() << '\n';
+        Bytecode bytecode = Compiler{}.compileExpression(expr);
+        Value value = vm.run(bytecode);
+        publishReplValue(vm, value);
         buffer.clear();
         continue;
-      } catch (const CompileError&) {
+      } catch (const CompileError &) {
         // Fall through and try to parse it as a program.
-      } catch (const RuntimeError& error) {
-        printRuntimeError("<repl>", buffer, error);
+      } catch (const RuntimeError &error) {
+        printRuntimeError("<repl>", buffer, error, platformPosix());
         buffer.clear();
         continue;
       }
@@ -221,57 +252,61 @@ void repl(const std::vector<std::string>& scriptArgs) {
     try {
       Parser parser(tokens, "<repl>");
       program = parser.parseProgram();
-    } catch (const CompileError& error) {
+    } catch (const CompileError &error) {
       if (error.message.find("end of input") != std::string::npos) {
         // Convenience: accept a missing ';' at the end of a REPL entry.
         try {
           Parser parser(lex(buffer + ";"), "<repl>");
           program = parser.parseProgram();
-        } catch (const CompileError& retry) {
-          bool incomplete = retry.message.find("end of input") != std::string::npos ||
-                            retry.message.find("unterminated") != std::string::npos;
-          if (incomplete) continue;
-          printCompileError("<repl>", buffer, retry);
+        } catch (const CompileError &retry) {
+          bool incomplete =
+              retry.message.find("end of input") != std::string::npos ||
+              retry.message.find("unterminated") != std::string::npos;
+          if (incomplete)
+            continue;
+          printCompileError("<repl>", buffer, retry, platformPosix());
           buffer.clear();
           continue;
         }
       } else {
-        printCompileError("<repl>", buffer, error);
+        printCompileError("<repl>", buffer, error, platformPosix());
         buffer.clear();
         continue;
       }
     }
 
     try {
-      const auto& block = std::get<BlockStmt>(program->node);
+      const auto &block = std::get<BlockStmt>(program->node);
       if (block.stmts.empty()) {
         buffer.clear();
         continue;
       }
 
-      for (size_t i = 0; i + 1 < block.stmts.size(); ++i) {
-        interp.runStatement(*block.stmts[i]);
+      bool endsWithExpression = false;
+      const ExprPtr *tailExpression = nullptr;
+      if (const auto *last = std::get_if<ExprStmt>(&block.stmts.back()->node)) {
+        endsWithExpression = true;
+        tailExpression = &last->expr;
       }
 
-      const auto& last = block.stmts.back();
-      if (auto* expression = std::get_if<ExprStmt>(&last->node)) {
-        Value value = interp.evalRepl(expression->expr);
-        interp.defineGlobal("_", value, false);
-        if (!value.isNil()) std::cout << value.repr() << '\n';
-      } else {
-        interp.runStatement(*last);
-      }
+      Bytecode bytecode = Compiler{}.compileRepl(program);
+      Value value = vm.run(bytecode);
+      if (endsWithExpression && tailExpression)
+        publishReplValue(vm, value);
       buffer.clear();
-    } catch (const RuntimeError& error) {
-      printRuntimeError("<repl>", buffer, error);
+    } catch (const CompileError &error) {
+      printCompileError("<repl>", buffer, error, platformPosix());
+      buffer.clear();
+    } catch (const RuntimeError &error) {
+      printRuntimeError("<repl>", buffer, error, platformPosix());
       buffer.clear();
     }
   }
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
 #ifdef _WIN32
   SetConsoleOutputCP(CP_UTF8);
   SetConsoleCP(CP_UTF8);
@@ -285,7 +320,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> scriptArgs;
 
   for (size_t i = 0; i < arguments.size(); ++i) {
-    const std::string& arg = arguments[i];
+    const std::string &arg = arguments[i];
     if (arg == "-h" || arg == "--help") {
       std::cout << "Jolt " << kVersion << "\n\n" << kUsage;
       return 0;
@@ -301,7 +336,8 @@ int main(int argc, char** argv) {
       }
       evalCode = arguments[++i];
       hasEval = true;
-      scriptArgs.assign(arguments.begin() + static_cast<std::ptrdiff_t>(i + 1), arguments.end());
+      scriptArgs.assign(arguments.begin() + static_cast<std::ptrdiff_t>(i + 1),
+                        arguments.end());
       break;
     }
     if (arg == "-c" || arg == "--check") {
@@ -311,7 +347,9 @@ int main(int argc, char** argv) {
     if (arg == "--") {
       if (i + 1 < arguments.size()) {
         file = arguments[i + 1];
-        scriptArgs.assign(arguments.begin() + static_cast<std::ptrdiff_t>(i + 2), arguments.end());
+        scriptArgs.assign(arguments.begin() +
+                              static_cast<std::ptrdiff_t>(i + 2),
+                          arguments.end());
       }
       break;
     }
@@ -320,11 +358,13 @@ int main(int argc, char** argv) {
       return 64;
     }
     file = arg;
-    scriptArgs.assign(arguments.begin() + static_cast<std::ptrdiff_t>(i + 1), arguments.end());
+    scriptArgs.assign(arguments.begin() + static_cast<std::ptrdiff_t>(i + 1),
+                      arguments.end());
     break;
   }
 
-  if (hasEval) return runSource(evalCode, "<eval>", scriptArgs, checkOnly);
+  if (hasEval)
+    return runSource(evalCode, "<eval>", scriptArgs, checkOnly);
 
   if (!file.empty()) {
     std::string source;
