@@ -866,9 +866,13 @@ void Compiler::compileForIn(const ForInStmt& s) {
 
   int loopStart = currentOffset();
   int iterIndex = emit(OpCode::ITER, item, iterable, cursor);
+  // ITER has three operands (item, iterable, cursor). The `done` flag needs
+  // a fourth output, so the compiler stores its register in `instruction.jump`
+  // and the VM reads it from there. That is a private convention, not a real
+  // jump target: ITER is not a jump instruction.
   bc_.code[static_cast<size_t>(iterIndex)].jump = done;
+  
   int exitJump = emitJump(OpCode::JMP_IF_TRUE, done);
-
   // Each turn gets a fresh cell for the loop variable, so closures created in
   // the body capture the value of their own iteration (interpreter parity).
   pushScope();
