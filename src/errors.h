@@ -29,8 +29,8 @@ struct RuntimeError : std::exception {
   explicit RuntimeError(std::string errorMessage) : message(std::move(errorMessage)) {}
 
   std::string message;
-  int line = 0;
-  int col = 0;
+  int line = 1;
+  int col = 1;
   std::vector<Frame> stack;
 
   const char* what() const noexcept override { return message.c_str(); }
