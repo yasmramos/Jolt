@@ -29,11 +29,21 @@ class VM : public Runtime {
   explicit VM(Platform& platform) : Runtime(platform) {}
 
   // Runs the bytecode from the first instruction until HALT or the end.
+  // Returns the value produced by a root-level RETURN (used by the REPL for
+  // expression chunks); a program that ends with HALT returns nil.
   // Throws `RuntimeError` if the bytecode attempts an invalid operation.
-  void run(const Bytecode& bytecode);
+  Value run(const Bytecode& bytecode);
 
   // Returns the value of a global, or nullptr if it does not exist.
   const Value* findGlobal(const std::string& name) const;
+
+  // All globals, used by the REPL's `:vars` command. The map is owned by the
+  // VM and must not outlive it.
+  const std::unordered_map<std::string, Value>& globals() const { return globals_; }
+
+  // Forgets every global. The caller re-registers the standard library when
+  // it wants to keep it (the REPL's `:clear`).
+  void clearGlobals() { globals_.clear(); }
 
   // Number of registers reserved by the last execution.
   int registerCount() const { return static_cast<int>(registers_.size()); }
