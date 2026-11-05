@@ -693,13 +693,7 @@ Value VM::runFrames(std::size_t stopDepth) {
           fail(std::string("cannot iterate over a value of type '") + iterable.typeName() + "'",
                line, col);
         }
-
-        std::printf("DEBUG ITER: a=%d b=%d c=%d jump=%d done=%d cursor=%s item=%s\n",
-                    instruction.a, instruction.b, instruction.c, instruction.jump,
-                    done ? 1 : 0,
-                    cursor.isNil() ? "nil" : cursor.toString().c_str(),
-                    item.isNil() ? "nil" : item.toString().c_str());
-                // Persist the advanced cursor; without this the loop would restart
+        // Persist the advanced cursor; without this the loop would restart
         setReg(instruction.c, std::move(cursor));
         setReg(instruction.a, done ? Value() : std::move(item));
         setReg(instruction.jump, Value(done));
