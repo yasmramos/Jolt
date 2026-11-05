@@ -441,6 +441,7 @@ struct Function : RefCounted, GcNode {
   // is empty until PHASE 6b.
   std::shared_ptr<const Bytecode> proto;
   std::vector<CellPtr> upvalues;
+  std::vector<std::shared_ptr<void>> capturedGcNodes;
   bool isNative() const { return static_cast<bool>(native); }
   bool isVm() const { return static_cast<bool>(proto); }
 };
@@ -477,6 +478,17 @@ ArrayPtr makeArray(std::vector<Value> items = {});
 MapPtr makeMap();
 RangePtr makeRange(int64_t start, int64_t end, bool inclusive);
 Value makeNative(std::string name, NativeFn fn);
+
+template <typename T>
+std::shared_ptr<void> pinGcNode(const Ref<T>& ref) {
+  static_assert(std::is_base_of<GcNode, T>::value,
+                "pinGcNode requires a collector-tracked type");
+  // Keep the strong reference alive through an aliasing handle whose stored
+  // pointer is the GcNode subobject. `functionVisit` recovers that pointer and
+  // hands it to the collector, so it must not point at the Ref<T> holder.
+  auto holder = std::make_shared<Ref<T>>(ref);
+  return std::shared_ptr<void>(holder, static_cast<GcNode*>(ref.get()));
+}
 
 std::string quoteString(const std::string& s);
 
