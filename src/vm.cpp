@@ -253,14 +253,23 @@ Value VM::run(const Bytecode& bytecode) {
   depth = 0;
   stack.clear();
   scratchCells_.clear();
-  // The root chunk is owned by the caller, so the frame keeps a non-owning
-  // handle. Child protos are owned by the Function values that instantiate
-  // them and outlive both the frame and this call to `run`.
   std::shared_ptr<const Bytecode> root(&bytecode, [](const Bytecode*) {});
   frames_.push_back(CallFrame{std::move(root), 0, kNoResult, kNoResult, 0, 0, {}});
-  // stopDepth 1 makes a root-level RETURN cross the boundary and hand its
-  // value back; HALT still returns nil for whole-program chunks.
-  return runFrames(1);
+  Value result = runFrames(1);
+  // `HALT` pops the root frame and shrinks `registers_` / `locals_` to the
+  // root's bases (0), so `registerCount()` / `localCount()` would report 0
+  // after `run()`. Restore the proto's counts so the public accessors keep
+  // reporting what the last execution reserved.
+  registers_.resize(static_cast<size_t>(registerCount));
+  locals_.resize(static_cast<size_t>(localCount));
+  if (!frames_.empty()) {
+    frames_.clear();
+    registers_.clear();
+    locals_.clear();
+    scratchCells_.clear();
+    fail("VM::run: HALT left frames on the stack (malformed bytecode)");
+  }
+  return result;
 }
 
 Value VM::runFrames(std::size_t stopDepth) {
@@ -579,9 +588,12 @@ Value VM::runFrames(std::size_t stopDepth) {
 
       case OpCode::NEWTABLE: {
         if (instruction.c == 0) {
-          const int count = instruction.b > 0 ? instruction.b : 0;
-          setReg(instruction.a,
-                 Value(makeArray(std::vector<Value>(static_cast<std::size_t>(count)))));
+          // `b` is a capacity hint, not the number of elements. The array
+          // starts empty; `SETTABLE` with an index equal to the current
+          // length grows it, and `push` grows it from the end. Creating `b`
+          // nils would make `len(arr)` report the hint instead of the real
+          // size (PHASE 6c fix).
+          setReg(instruction.a, Value(makeArray()));
         } else if (instruction.c == 1) {
           setReg(instruction.a, Value(makeMap()));
         } else {
@@ -682,8 +694,12 @@ Value VM::runFrames(std::size_t stopDepth) {
                line, col);
         }
 
-        // Persist the advanced cursor; without this the loop would restart
-        // from the same element forever.
+        std::printf("DEBUG ITER: a=%d b=%d c=%d jump=%d done=%d cursor=%s item=%s\n",
+                    instruction.a, instruction.b, instruction.c, instruction.jump,
+                    done ? 1 : 0,
+                    cursor.isNil() ? "nil" : cursor.toString().c_str(),
+                    item.isNil() ? "nil" : item.toString().c_str());
+                // Persist the advanced cursor; without this the loop would restart
         setReg(instruction.c, std::move(cursor));
         setReg(instruction.a, done ? Value() : std::move(item));
         setReg(instruction.jump, Value(done));
@@ -706,6 +722,7 @@ Value VM::runFrames(std::size_t stopDepth) {
       }
 
       case OpCode::HALT:
+        leaveFrame(Value());
         return Value();
     }
   }
