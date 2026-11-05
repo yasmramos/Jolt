@@ -36,6 +36,7 @@ class Interpreter : public Runtime {
   Interpreter& operator=(Interpreter&&) = default;
 
   void run(const StmtPtr& program);
+  void runIncremental(const StmtPtr& program);
   void runStatement(const Stmt& stmt);
   void exec(const Stmt& stmt);
   Value eval(const Expr& expr);

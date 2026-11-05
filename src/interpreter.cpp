@@ -71,6 +71,13 @@ void Interpreter::defineGlobal(const std::string& name, Value value, bool isImmu
 }
 
 void Interpreter::run(const StmtPtr& program) {
+    runIncremental(program);
+    globals->clear();
+    registerBuiltins(*this);
+    gcCollect();
+}
+
+void Interpreter::runIncremental(const StmtPtr& program) {
   // Drop user definitions from a previous run() so that repeated executions
   // (for example one-per-line in the REPL) do not keep every intermediate
   // value alive until process exit. Builtins are registered in the
@@ -90,13 +97,6 @@ void Interpreter::run(const StmtPtr& program) {
   } catch (const ReturnSignal&) {
     fail("'return' outside of a function");
   }
-
-  // Top-level functions close over the global scope that also holds them.
-  // Releasing the globals here breaks that cycle at the end of the run, and the
-  // collector reclaims whatever cycles the program left behind.
-  globals->clear();
-  registerBuiltins(*this);
-  gcCollect();
 }
 
 void Interpreter::runStatement(const Stmt& stmt) {
