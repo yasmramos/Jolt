@@ -240,9 +240,14 @@ void Compiler::popScope() {
   scopes_.pop_back();
 }
 
-int Compiler::declareLocal(const std::string& name, bool isImmutable) {
+int Compiler::allocLocalSlot() {
   int slot = nextLocal_++;
   if (nextLocal_ > maxLocal_) maxLocal_ = nextLocal_;
+  return slot;
+}
+
+int Compiler::declareLocal(const std::string& name, bool isImmutable) {
+  int slot = allocLocalSlot();
   Scope& scope = scopes_.back();
   scope.vars[name] = LocalVar{name, slot, isImmutable};
   return slot;
@@ -306,16 +311,27 @@ void Compiler::declareGlobal(const std::string& name, bool isImmutable) {
 
 // -------------------------------------------------------------------- program
 
-Bytecode Compiler::compile(const StmtPtr& program) {
+void Compiler::resetChunk(const std::string& name) {
   bytecodeInit(bc_);
+  bc_.name = name;
   nextReg_ = 0;
   maxReg_ = 0;
   nextLocal_ = 0;
   maxLocal_ = 0;
   scopes_.clear();
   loops_.clear();
+  funcStack_.clear();
+  currentUpvalueNames_.clear();
   globalConsts_.clear();
+  predeclaredLetSlots_.clear();
+  predeclaredFnSlots_.clear();
   inFunction_ = false;
+  currentLine_ = 1;
+  currentCol_ = 1;
+}
+
+Bytecode Compiler::compile(const StmtPtr& program) {
+  resetChunk();
 
   if (!program) fail("empty program", 1, 1);
 
@@ -347,13 +363,164 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   return std::move(bc_);
 }
 
+Bytecode Compiler::compileExpression(const ExprPtr& expr) {
+  resetChunk("<expression>");
+  if (!expr) fail("empty expression", 1, 1);
+
+  // Expressions run in the global scope: a REPL entry can read and write the
+  // globals defined by earlier entries.
+  scopes_.push_back(Scope{});
+  int result = compileExpr(*expr);
+  emit(OpCode::RETURN, result);
+  bc_.numRegisters = maxReg_;
+  bc_.numLocals = maxLocal_;
+  return std::move(bc_);
+}
+
+Bytecode Compiler::compileRepl(const StmtPtr& program) {
+  resetChunk();
+  if (!program) fail("empty program", 1, 1);
+
+  scopes_.push_back(Scope{});
+  const auto* block = std::get_if<BlockStmt>(&program->node);
+  if (!block) {
+    compileStmt(*program);
+    emit(OpCode::HALT);
+  } else {
+    // Hoist top-level function declarations, then compile every statement.
+    for (const auto& child : block->stmts) {
+      if (!child) continue;
+      if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        compileFnDecl(*fn, child->line, child->col);
+      }
+    }
+    const size_t count = block->stmts.size();
+    for (size_t i = 0; i < count; ++i) {
+      const StmtPtr& child = block->stmts[i];
+      if (!child || std::holds_alternative<FnDeclStmt>(child->node)) continue;
+      const bool isLast = i + 1 == count;
+      if (isLast) {
+        if (const auto* expression = std::get_if<ExprStmt>(&child->node)) {
+          int result = compileExpr(*expression->expr);
+          emit(OpCode::RETURN, result);
+          bc_.numRegisters = maxReg_;
+          bc_.numLocals = maxLocal_;
+          return std::move(bc_);
+        }
+      }
+      compileStmt(*child);
+    }
+    emit(OpCode::HALT);
+  }
+
+  bc_.numRegisters = maxReg_;
+  bc_.numLocals = maxLocal_;
+  return std::move(bc_);
+}
+
 Bytecode compileProgram(const StmtPtr& program) { return Compiler{}.compile(program); }
 
 // ----------------------------------------------------------------- statements
 
 void Compiler::compileBlockBody(const BlockStmt& block) {
+  // Function declarations are hoisted within their block, so a call can appear
+  // before the declaration and mutually recursive local functions can resolve
+  // each other. Block-local `let`/`var` declarations also need their slots
+  // reserved up front: a hoisted function declared after such a binding must
+  // capture its cell (the interpreter resolves free names against the whole
+  // block environment).
+  bool hasHoistedFunction = false;
   for (const auto& child : block.stmts) {
-    if (child) compileStmt(*child);
+    if (child && std::holds_alternative<FnDeclStmt>(child->node)) {
+      hasHoistedFunction = true;
+      break;
+    }
+  }
+
+  if (!inGlobalScope() && hasHoistedFunction) {
+    std::unordered_map<std::string, int> blockSlots;
+    for (const auto& [name, local] : scopes_.back().vars) blockSlots[name] = local.slot;
+
+    int nilReg = -1;
+    auto ensureNil = [&]() {
+      if (nilReg < 0) {
+        nilReg = allocReg();
+        emit(OpCode::LOADK, nilReg, addConstant(Value()));
+      }
+    };
+
+    // Reserve slots in source order. A `var` reuses a binding already present
+    // in this scope; `let`/`const` always create a fresh cell, like
+    // `Env::define` overwriting an existing name.
+    for (const auto& child : block.stmts) {
+      if (!child) continue;
+      if (const auto* let = std::get_if<LetStmt>(&child->node)) {
+        auto found = blockSlots.find(let->name);
+        if (let->kind == Tok::Var && found != blockSlots.end()) {
+          predeclaredLetSlots_[let] = found->second;
+        } else {
+          int slot = allocLocalSlot();
+          blockSlots[let->name] = slot;
+          predeclaredLetSlots_[let] = slot;
+          // Create the cell before any closure is built: a hoisted function
+          // captures the slot while it is still nil, so the cell must already
+          // exist and be the one the later declaration fills in.
+          ensureNil();
+          emit(OpCode::DECLLOCAL, nilReg, slot);
+        }
+      } else if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        auto found = blockSlots.find(fn->name);
+        int slot;
+        if (found != blockSlots.end()) {
+          slot = found->second;
+        } else {
+          slot = allocLocalSlot();
+          blockSlots[fn->name] = slot;
+          ensureNil();
+          emit(OpCode::DECLLOCAL, nilReg, slot);
+        }
+        predeclaredFnSlots_[fn] = slot;
+      }
+    }
+    if (nilReg >= 0) freeReg();
+
+    // Compile hoisted functions with every block-local name visible, so their
+    // bodies capture the right cells even when the declaration appears later.
+    std::unordered_map<std::string, LocalVar> beforeHoisting = scopes_.back().vars;
+    for (const auto& [name, slot] : blockSlots) {
+      scopes_.back().vars[name] = LocalVar{name, slot, false};
+    }
+    for (const auto& child : block.stmts) {
+      if (!child) continue;
+      if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        compileFnDecl(*fn, child->line, child->col);
+      }
+    }
+
+    // Restore source-order visibility for ordinary statements. Only hoisted
+    // function names stay visible before their textual declaration.
+    scopes_.back().vars = std::move(beforeHoisting);
+    for (const auto& child : block.stmts) {
+      if (!child) continue;
+      if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        int slot = predeclaredFnSlots_[fn];
+        scopes_.back().vars[fn->name] = LocalVar{fn->name, slot, false};
+      }
+    }
+  } else if (hasHoistedFunction) {
+    // A block compiled directly in the global scope has no local slots; the
+    // declarations still run before the other statements, as in `compile`.
+    for (const auto& child : block.stmts) {
+      if (!child) continue;
+      if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        compileFnDecl(*fn, child->line, child->col);
+      }
+    }
+  }
+  for (const auto& child : block.stmts) {
+    if (!child) continue;
+    if (std::holds_alternative<FnDeclStmt>(child->node)) continue;
+    compileStmt(*child);
   }
 }
 
@@ -392,6 +559,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const IfStmt& s) { compileIf(s); },
           [&](const WhileStmt& s) { compileWhile(s); },
           [&](const ForStmt& s) { compileFor(s); },
+          [&](const ForInStmt& s) { compileForIn(s); },
           [&](const BreakStmt&) { compileBreak(stmt); },
           [&](const ContinueStmt&) { compileContinue(stmt); },
           [&](const auto&) {
@@ -415,24 +583,32 @@ void Compiler::compileLet(const LetStmt& s) {
     // Top level: global variable (persists in the REPL).
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.kind != Tok::Var);
-  } else if (s.kind == Tok::Var && scopes_.size() > 1) {
-    // `var` redeclares an existing binding of an enclosing scope in the same
-    // frame: it assigns to that slot instead of creating a new cell, matching
-    // the interpreter's `Env::define` overwrite behavior.
-    LocalVar outer;
-    const bool reassign =
-        resolveLocalIn(std::vector<Scope>(scopes_.begin(), scopes_.end() - 1), s.name, outer);
-    if (reassign) {
-      emit(OpCode::SETLOCAL, reg, outer.slot);
+  } else {
+    // `compileBlockBody` reserved a slot (and created its cell) for every
+    // direct declaration of the block. Fill that cell instead of allocating a
+    // second one, so hoisted closures keep sharing it.
+    auto predeclared = predeclaredLetSlots_.find(&s);
+    if (predeclared != predeclaredLetSlots_.end()) {
+      int slot = predeclared->second;
+      emit(OpCode::SETLOCAL, reg, slot);
+      scopes_.back().vars[s.name] = LocalVar{s.name, slot, s.kind != Tok::Var};
+    } else if (s.kind == Tok::Var) {
+      // `var` redeclares a binding only when it already exists in the *current*
+      // scope. A declaration in a nested block shadows an enclosing binding by
+      // creating a new cell, exactly like `Env::define` does.
+      auto existing = scopes_.back().vars.find(s.name);
+      if (existing != scopes_.back().vars.end()) {
+        emit(OpCode::SETLOCAL, reg, existing->second.slot);
+      } else {
+        int slot = declareLocal(s.name, false);
+        emit(OpCode::DECLLOCAL, reg, slot);
+      }
     } else {
-      int slot = declareLocal(s.name, false);
+      // Nested block: frame-local variable. The declaration happens after the
+      // initializer is compiled, exactly like `Env::define`.
+      int slot = declareLocal(s.name, s.kind != Tok::Var);
       emit(OpCode::DECLLOCAL, reg, slot);
     }
-  } else {
-    // Nested block: frame-local variable. The declaration happens after the
-    // initializer is compiled, exactly like `Env::define`.
-    int slot = declareLocal(s.name, s.kind != Tok::Var);
-    emit(OpCode::DECLLOCAL, reg, slot);
   }
   freeReg();
 }
@@ -451,9 +627,22 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     declareGlobal(fn.name, false);
   } else {
     // Local declaration: a frame slot holding the closure value (PHASE 6b).
-    // Unlike `let`, a function name is mutable, matching the interpreter.
-    int slot = declareLocal(fn.name, false);
-    emit(OpCode::DECLLOCAL, reg, slot);
+    // `compileBlockBody` reserves the slot so mutual recursion resolves and a
+    // later declaration can reuse the same cell; fill it in place.
+    auto predeclared = predeclaredFnSlots_.find(&fn);
+    if (predeclared != predeclaredFnSlots_.end()) {
+      int slot = predeclared->second;
+      emit(OpCode::SETLOCAL, reg, slot);
+      scopes_.back().vars[fn.name] = LocalVar{fn.name, slot, false};
+    } else {
+      auto existing = scopes_.back().vars.find(fn.name);
+      if (existing != scopes_.back().vars.end()) {
+        emit(OpCode::SETLOCAL, reg, existing->second.slot);
+      } else {
+        int slot = declareLocal(fn.name, false);
+        emit(OpCode::DECLLOCAL, reg, slot);
+      }
+    }
   }
   freeReg();
 }
@@ -665,6 +854,48 @@ void Compiler::compileFor(const ForStmt& s) {
   popScope();
 }
 
+void Compiler::compileForIn(const ForInStmt& s) {
+  // Evaluate the iterable once. The cursor starts as nil, which tells ITER to
+  // initialize it from the iterable on the first call (0 for arrays, strings
+  // and maps; the start bound for ranges).
+  int iterable = compileExpr(*s.iterable);
+  int cursor = allocReg();
+  emit(OpCode::LOADK, cursor, addConstant(Value()));
+  int item = allocReg();
+  int done = allocReg();
+
+  int loopStart = currentOffset();
+  int iterIndex = emit(OpCode::ITER, item, iterable, cursor);
+  bc_.code[static_cast<size_t>(iterIndex)].jump = done;
+  int exitJump = emitJump(OpCode::JMP_IF_TRUE, done);
+
+  // Each turn gets a fresh cell for the loop variable, so closures created in
+  // the body capture the value of their own iteration (interpreter parity).
+  pushScope();
+  int slot = declareLocal(s.var, false);
+  emit(OpCode::DECLLOCAL, item, slot);
+
+  loops_.push_back(Loop{});
+  if (const auto* block = std::get_if<BlockStmt>(&s.body->node)) {
+    compileBlockBody(*block);
+  } else {
+    compileStmt(*s.body);
+  }
+  Loop loop = std::move(loops_.back());
+  loops_.pop_back();
+
+  int backJump = emitJump(OpCode::JMP);
+  patchJump(backJump, loopStart);
+
+  int after = currentOffset();
+  patchJump(exitJump, after);
+  for (int index : loop.breaks) patchJump(index, after);
+  for (int index : loop.continues) patchJump(index, loopStart);
+
+  popScope();
+  freeReg(nextReg_ - iterable);
+}
+
 void Compiler::compileBreak(const Stmt& stmt) {
   if (loops_.empty()) fail("'break' outside of a loop", stmt.line, stmt.col);
   int jump = emitJump(OpCode::JMP);
@@ -715,38 +946,84 @@ int Compiler::compileCall(const CallExpr& call, int line, int col) {
 }
 
 int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
-  const auto* target = std::get_if<VariableExpr>(&assign.target->node);
-  if (!target) {
-    fail("only assignment to variables is supported by the bytecode compiler yet (Phase 6)",
-         line, col);
+  if (const auto* target = std::get_if<VariableExpr>(&assign.target->node)) {
+    const std::string& name = target->name;
+    LocalVar local;
+    bool isLocal = resolveLocal(name, local);
+
+    if (isLocal && local.isImmutable) {
+      fail("cannot assign to immutable variable '" + name + "'", line, col);
+    }
+    // A captured local of an enclosing function becomes an upvalue read/write
+    // on the shared cell (PHASE 6b). The lookup must happen after the compile
+    // of the value below only insofar as register allocation is concerned;
+    // doing it first keeps the resolution stable and mirrors `compileVariable`.
+    int upvalueSlot = isLocal ? -1 : resolveUpvalue(name);
+    if (!isLocal && upvalueSlot < 0 && globalConsts_.find(name) != globalConsts_.end()) {
+      fail("cannot assign to immutable variable '" + name + "'", line, col);
+    }
+
+    if (assign.op == Tok::Eq) {
+      int value = compileExpr(*assign.value);
+      if (isLocal) {
+        emit(OpCode::SETLOCAL, value, local.slot);
+      } else if (upvalueSlot >= 0) {
+        emit(OpCode::SETUPVAL, value, upvalueSlot);
+      } else {
+        emit(OpCode::SETGLOBAL, value, addString(name));
+      }
+      return value;
+    }
+
+    OpCode op;
+    if (!compoundOpCode(assign.op, op)) {
+      fail("unsupported compound assignment operator", assign.opLine, assign.opCol);
+    }
+
+    int current = allocReg();
+    if (isLocal) {
+      emit(OpCode::GETLOCAL, current, local.slot);
+    } else if (upvalueSlot >= 0) {
+      emit(OpCode::GETUPVAL, current, upvalueSlot);
+    } else {
+      emit(OpCode::GETGLOBAL, current, addString(name));
+    }
+    int right = compileExpr(*assign.value);
+    emit(op, current, current, right);
+    freeReg();
+
+    if (isLocal) {
+      emit(OpCode::SETLOCAL, current, local.slot);
+    } else if (upvalueSlot >= 0) {
+      emit(OpCode::SETUPVAL, current, upvalueSlot);
+    } else {
+      emit(OpCode::SETGLOBAL, current, addString(name));
+    }
+    return current;
   }
 
-  const std::string& name = target->name;
-  LocalVar local;
-  bool isLocal = resolveLocal(name, local);
-
-  if (isLocal && local.isImmutable) {
-    fail("cannot assign to immutable variable '" + name + "'", line, col);
-  }
-  // A captured local of an enclosing function becomes an upvalue read/write on
-  // the shared cell (PHASE 6b). The lookup must happen after the compile of
-  // the value below only insofar as register allocation is concerned; doing it
-  // first keeps the resolution stable and mirrors `compileVariable`.
-  int upvalueSlot = isLocal ? -1 : resolveUpvalue(name);
-  if (!isLocal && upvalueSlot < 0 && globalConsts_.find(name) != globalConsts_.end()) {
-    fail("cannot assign to immutable variable '" + name + "'", line, col);
+  // Indexed and member assignment share the same shape: evaluate the receiver
+  // and key once, then either store the value or read/operate/store for a
+  // compound operator. The receiver register becomes the result so the
+  // register stack stays balanced for the enclosing expression.
+  int object = 0;
+  int key = 0;
+  if (const auto* index = std::get_if<IndexExpr>(&assign.target->node)) {
+    object = compileExpr(*index->object);
+    key = compileExpr(*index->index);
+  } else if (const auto* member = std::get_if<MemberExpr>(&assign.target->node)) {
+    object = compileExpr(*member->object);
+    key = -addString(member->name) - 1;  // constant member name
+  } else {
+    fail("invalid assignment target", line, col);
   }
 
   if (assign.op == Tok::Eq) {
     int value = compileExpr(*assign.value);
-    if (isLocal) {
-      emit(OpCode::SETLOCAL, value, local.slot);
-    } else if (upvalueSlot >= 0) {
-      emit(OpCode::SETUPVAL, value, upvalueSlot);
-    } else {
-      emit(OpCode::SETGLOBAL, value, addString(name));
-    }
-    return value;
+    emit(OpCode::SETTABLE, value, object, key);
+    emit(OpCode::MOVE, object, value);
+    freeReg(nextReg_ - object - 1);
+    return object;
   }
 
   OpCode op;
@@ -755,25 +1032,14 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   }
 
   int current = allocReg();
-  if (isLocal) {
-    emit(OpCode::GETLOCAL, current, local.slot);
-  } else if (upvalueSlot >= 0) {
-    emit(OpCode::GETUPVAL, current, upvalueSlot);
-  } else {
-    emit(OpCode::GETGLOBAL, current, addString(name));
-  }
+  emit(OpCode::GETTABLE, current, object, key);
   int right = compileExpr(*assign.value);
   emit(op, current, current, right);
   freeReg();
-
-  if (isLocal) {
-    emit(OpCode::SETLOCAL, current, local.slot);
-  } else if (upvalueSlot >= 0) {
-    emit(OpCode::SETUPVAL, current, upvalueSlot);
-  } else {
-    emit(OpCode::SETGLOBAL, current, addString(name));
-  }
-  return current;
+  emit(OpCode::SETTABLE, current, object, key);
+  emit(OpCode::MOVE, object, current);
+  freeReg(nextReg_ - object - 1);
+  return object;
 }
 
 int Compiler::compileTernary(const TernaryExpr& ternary) {
@@ -795,6 +1061,90 @@ int Compiler::compileTernary(const TernaryExpr& ternary) {
   return result;
 }
 
+int Compiler::compileHelperCall(const std::string& helper, const std::vector<int>& args,
+                                int line, int col) {
+  // Hidden helper names contain `$`, which the lexer never accepts in an
+  // identifier, so user code cannot shadow them. They are registered by the
+  // standard library (`registerBuiltins`) together with `print` and friends.
+  int callee = allocReg();
+  emit(OpCode::GETGLOBAL, callee, addString(helper));
+  for (int source : args) {
+    int argument = allocReg();
+    emit(OpCode::MOVE, argument, source);
+  }
+  currentLine_ = line;
+  currentCol_ = col;
+  emit(OpCode::CALL, callee, static_cast<int>(args.size()));
+  freeReg(static_cast<int>(args.size()));
+  return callee;
+}
+
+int Compiler::compileToString(int source, int line, int col) {
+  return compileHelperCall("$str", {source}, line, col);
+}
+
+int Compiler::compileArray(const ArrayExpr& array) {
+  int table = allocReg();
+  emit(OpCode::NEWTABLE, table, static_cast<int>(array.elements.size()), 0);
+  for (size_t i = 0; i < array.elements.size(); ++i) {
+    int index = allocReg();
+    emit(OpCode::LOADK, index, addConstant(Value(static_cast<int64_t>(i))));
+    int value = compileExpr(*array.elements[i]);
+    emit(OpCode::SETTABLE, value, table, index);
+    freeReg(nextReg_ - index);
+  }
+  return table;
+}
+
+int Compiler::compileMap(const MapExpr& map) {
+  int table = allocReg();
+  emit(OpCode::NEWTABLE, table, 0, 1);
+  for (const MapEntry& entry : map.entries) {
+    int key;
+    if (entry.keyExpr) {
+      // Computed keys use the language's canonical string form, exactly like
+      // the interpreter (`Value::toString`).
+      int rawKey = compileExpr(*entry.keyExpr);
+      key = compileToString(rawKey, entry.keyExpr->line, entry.keyExpr->col);
+    } else {
+      key = -addString(entry.literalKey) - 1;
+    }
+    int value = compileExpr(*entry.value);
+    emit(OpCode::SETTABLE, value, table, key);
+    freeReg(nextReg_ - table - 1);
+  }
+  return table;
+}
+
+int Compiler::compileRange(const RangeExpr& range, int line, int col) {
+  int start = compileExpr(*range.start);
+  int end = compileExpr(*range.end);
+  int inclusive = allocReg();
+  emit(OpCode::LOADK, inclusive, addConstant(Value(range.inclusive)));
+  int result = compileHelperCall("$range", {start, end, inclusive}, line, col);
+  emit(OpCode::MOVE, start, result);
+  freeReg(nextReg_ - start - 1);
+  return start;
+}
+
+int Compiler::compileInterpolation(const InterpExpr& interpolation, int /*line*/, int /*col*/) {
+  int result = allocReg();
+  emit(OpCode::LOADK, result, addConstant(Value(std::string())));
+  for (const InterpPart& part : interpolation.parts) {
+    int text;
+    if (part.isText()) {
+      text = allocReg();
+      emit(OpCode::LOADK, text, addConstant(Value(part.text())));
+    } else {
+      int value = compileExpr(*part.expr());
+      text = compileToString(value, part.expr()->line, part.expr()->col);
+    }
+    emit(OpCode::ADD, result, result, text);
+    freeReg(nextReg_ - result - 1);
+  }
+  return result;
+}
+
 int Compiler::compileExpr(const Expr& expr) {
   currentLine_ = expr.line;
   currentCol_ = expr.col;
@@ -811,7 +1161,12 @@ int Compiler::compileExpr(const Expr& expr) {
             }
             fail("unsupported literal in the bytecode compiler", expr.line, expr.col);
           },
+          [&](const InterpExpr& interpolation) -> int {
+            return compileInterpolation(interpolation, expr.line, expr.col);
+          },
           [&](const VariableExpr& variable) -> int { return compileVariable(variable.name); },
+          [&](const ArrayExpr& array) -> int { return compileArray(array); },
+          [&](const MapExpr& map) -> int { return compileMap(map); },
           [&](const UnaryExpr& unary) -> int {
             int operand = compileExpr(*unary.operand);
             if (unary.op == Tok::Plus) return operand;  // +x is x
@@ -839,6 +1194,16 @@ int Compiler::compileExpr(const Expr& expr) {
               return left;
             }
 
+            if (binary.op == Tok::In) {
+              int left = compileExpr(*binary.lhs);
+              int right = compileExpr(*binary.rhs);
+              currentLine_ = binary.opLine;
+              currentCol_ = binary.opCol;
+              emit(OpCode::IN, left, left, right);
+              freeReg();
+              return left;
+            }
+
             OpCode op;
             if (!binaryOpCode(binary.op, op)) {
               fail("binary operator '" + opName(binary.op) +
@@ -863,6 +1228,22 @@ int Compiler::compileExpr(const Expr& expr) {
           [&](const CallExpr& call) -> int { return compileCall(call, expr.line, expr.col); },
           [&](const LambdaExpr& lambda) -> int { return compileLambda(lambda, expr.line, expr.col); },
           [&](const TernaryExpr& ternary) -> int { return compileTernary(ternary); },
+          [&](const IndexExpr& index) -> int {
+            int object = compileExpr(*index.object);
+            int key = compileExpr(*index.index);
+            emit(OpCode::GETTABLE, object, object, key);
+            freeReg();
+            return object;
+          },
+          [&](const MemberExpr& member) -> int {
+            int object = compileExpr(*member.object);
+            int key = -addString(member.name) - 1;
+            emit(OpCode::GETTABLE, object, object, key);
+            return object;
+          },
+          [&](const RangeExpr& range) -> int {
+            return compileRange(range, expr.line, expr.col);
+          },
           [&](const auto&) -> int {
             fail("this expression is not supported by the bytecode compiler yet (Phase 6)",
                  expr.line, expr.col);
