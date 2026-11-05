@@ -279,7 +279,7 @@ static void test_sse() {
   // addsd xmm9, xmm2 -> dst=9 in reg (REX.R) -> 44 F2 0F 58 CA.
   CodeGen g3;
   g3.addsd(kXmmBase + 9, kXmmBase + 2);
-  checkBytes("addsd xmm9, xmm2", g3, "44F20F58CA");
+  checkBytes("addsd xmm9, xmm2", g3, "F2440F58CA");
 
   // movsd xmm0, [rsi] -> F2 0F 10 06 (load form 0x10, mod=00 rm=110).
   CodeGen g4;
