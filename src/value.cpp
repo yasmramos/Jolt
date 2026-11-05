@@ -360,16 +360,19 @@ void mapClear(GcNode& node) { static_cast<Map&>(node).clear(); }
 
 std::size_t functionRefCount(const GcNode& node) { return static_cast<const Function&>(node).refs; }
 
-// A function owns its defining scope. Natives may also own objects through the
-// state captured by their std::function; the collector cannot see those, so
-// such objects are simply treated as referenced from outside.
+// A function owns its defining scope, the cells it captured, and the objects its
+// native captured state keeps alive. Anything it owns that this does not report
+// looks like a reference from outside, which keeps cycles through it alive.
 void functionVisit(const GcNode& node, GcNode::Visitor visitor, void* context) {
   const Function& function = static_cast<const Function&>(node);
   if (function.closure) visitor(*function.closure, context);
   // Captured cells are shared between closures, so each one is a node of its own.
   // The VM tracks a cell as soon as a closure captures it.
+  for (const CellPtr& cell : function.upvalues) {
+    if (cell && cell->isTracked()) visitor(*cell, context);
+  }
   for (const auto& captured : function.capturedGcNodes) {
-      if (captured) visitor(*static_cast<GcNode*>(captured.get()), context);
+    if (captured) visitor(*static_cast<GcNode*>(captured.get()), context);
   }
 }
 
