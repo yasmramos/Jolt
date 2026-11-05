@@ -376,8 +376,10 @@ void testGlobalsPersistBetweenRuns() {
 void testRegisterCount() {
   TEST_SCOPE();
   Bytecode bytecode = compileSource("let x = 1 + 2 * 3;\n");
+  std::printf("DEBUG: bytecode.numRegisters = %d\n", bytecode.numRegisters);
   VM vm;
   vm.run(bytecode);
+  std::printf("DEBUG: vm.registerCount = %d\n", vm.registerCount());
   assert(vm.registerCount() == 3);
 }
 
