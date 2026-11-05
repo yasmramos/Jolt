@@ -322,28 +322,35 @@ Value indexGet(Runtime &rt, const Value &object, const Value &index, int line,
           line, col);
 }
 
-void indexSet(Runtime &rt, const Value &object, const Value &index, Value value,
-              int line, int col) {
+void indexSet(Runtime& rt, const Value& object, const Value& index, Value value, int line, int col) {
   if (object.isArray()) {
-    if (!index.isInt())
-      rt.fail("array index must be an integer", line, col);
-    auto &items = object.arr().items;
-    int64_t i =
-        normalizeIndex(rt, index.asInt(), static_cast<int64_t>(items.size()),
-                       "array", line, col);
+    if (!index.isInt()) rt.fail("array index must be an integer", line, col);
+    auto& items = object.arr().items;
+    int64_t i = index.asInt();
+    if (i < 0) i += static_cast<int64_t>(items.size());
+    if (i == static_cast<int64_t>(items.size())) {
+      // Appending at the end: grow the array. This is what makes
+      // `arr[#arr] = value` equivalent to `arr.push(value)`, and it is the
+      // path the compiler uses to build array literals with NEWTABLE +
+      // SETTABLE (PHASE 6c).
+      items.push_back(std::move(value));
+      return;
+    }
+    if (i < 0 || i >= static_cast<int64_t>(items.size())) {
+      rt.fail("array index " + std::to_string(index.asInt()) + " out of range (length " +
+                  std::to_string(items.size()) + ")",
+              line, col);
+    }
     items[static_cast<size_t>(i)] = std::move(value);
     return;
   }
-  if (object.isStr())
-    rt.fail("strings are immutable", line, col);
+  if (object.isStr()) rt.fail("strings are immutable", line, col);
   if (object.isMap()) {
-    if (!index.isStr())
-      rt.fail("map keys must be strings", line, col);
+    if (!index.isStr()) rt.fail("map keys must be strings", line, col);
     object.map().set(index.asStr(), std::move(value));
     return;
   }
-  rt.fail(std::string("cannot assign to an index of a value of type '") +
-              object.typeName() + "'",
+  rt.fail(std::string("cannot assign to an index of a value of type '") + object.typeName() + "'",
           line, col);
 }
 
