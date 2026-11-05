@@ -27,7 +27,7 @@
 class VM : public Runtime {
  public:
   VM() { registerBuiltins(*this); }
-  explicit VM(Platform& platform) : Runtime(platform) {}
+  explicit VM(Platform& platform) : Runtime(platform) { registerBuiltins(*this); }
 
   // Runs the bytecode from the first instruction until HALT or the end.
   // Returns the value produced by a root-level RETURN (used by the REPL for
