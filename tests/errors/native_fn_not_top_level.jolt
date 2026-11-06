@@ -1,0 +1,5 @@
+// expect-exit: 65
+// 'native fn' is module-level metadata: it is only allowed at the top level.
+fn outer() {
+  native fn inner(): int;
+}

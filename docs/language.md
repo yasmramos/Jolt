@@ -15,6 +15,7 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 5. [Operators](#5-operators)
 6. [Statements](#6-statements)
 7. [Functions and closures](#7-functions-and-closures)
+   - [7.6 `native fn`](#76-native-fn)
 8. [Arrays](#8-arrays)
 9. [Strings](#9-strings)
 10. [Maps](#10-maps)
@@ -74,7 +75,7 @@ Reserved words:
 
 ```text
 break  case   const  continue  default  defer  else  false  fn  for  if  import
-in     let    nil    return    switch   true  var    while
+in     let    native nil      return   struct switch true  var    while
 ```
 
 They cannot be used as names of variables, parameters or unquoted map keys.
@@ -872,7 +873,28 @@ fn square(x) => x * x;
 print(square(4)); // 16
 ```
 
-The number of arguments must match the number of parameters exactly. There are no default parameters or variadic arguments in user functions (native functions such as `print` are variadic).
+The number of arguments must match the number of parameters exactly, unless the
+last parameter is **variadic**. A parameter written `rest...` collects every
+extra argument into an array; the `...` follows the optional type annotation
+(`rest...` or `parts: int...`), which describes the elements, not the array.
+A variadic parameter must be the last one, and a function may have at most one.
+
+```jolt
+fn sum(first, rest...) {
+  var total = first;
+  for x in rest {
+    total += x;
+  }
+  return total;
+}
+
+print(sum(1));          // 1
+print(sum(1, 2, 3));    // 6
+print(sum(1, 2, 3, 4)); // 10
+```
+
+`rest` is an ordinary array inside the body, so `len(rest)`, indexing and
+`for ... in rest` all work. There are no default parameters.
 
 Parameters are local. Arrays and maps are passed by reference; reassigning the parameter inside the function does not change the caller's variable.
 
@@ -964,6 +986,50 @@ fn factorial(n) {
   return n * factorial(n - 1);
 }
 ```
+
+### 7.6 `native fn`
+
+A `native fn` declares a function whose body is **not** written in Jolt: the
+name binds to a function the host (the VM or the future AOT runtime) already
+provides, such as a standard-library builtin. The declaration is bodyless and
+carries only a signature, so it emits no bytecode and adds no opcode — the name
+is bound with a plain `GETGLOBAL` of the host function.
+
+```jolt
+native fn sqrt(x: float): float;
+
+print(sqrt(9.0));   // 3
+print(sqrt(16));    // 4  (int widens to float)
+```
+
+The signature is checked at compile time: a call must pass the exact number of
+arguments, and each argument must be assignable to its parameter type. A
+trailing `rest...` parameter makes the native variadic: the call must pass the
+fixed parameters plus zero or more extras, and each extra is checked against the
+variadic parameter's element type. The return type is used for inference, so
+`let y: float = sqrt(4.0)` is checked like any other annotated binding. An
+unannotated parameter (or `any`) turns the check off for that argument, which is
+how a builtin with a loose signature is declared:
+
+```jolt
+native fn str(v: any): string;
+native fn min(first: float, rest: float...): float;   // variadic
+native fn len(v);                 // fully untyped parameter
+
+assertEq(str(42), "42");
+assertEq(len([1, 2, 3]), 3);
+```
+
+Like `struct`, a `native fn` is **module-level metadata**: it may only be
+declared at the top level of a file. Its parameter and return types must be
+type names the compiler knows (or `any`).
+
+A `native fn` binds the name at run time to whatever the host registered under
+that name. If the host provides nothing, using the name reports
+`undefined variable '<name>'`, so a typo or a missing host function is a clear
+runtime error rather than a silent failure. Builtins such as `print`, `len` and
+`str` are host functions, so a `native fn` declaration is the typed way to
+expose one to the checker.
 
 ---
 
@@ -1254,19 +1320,42 @@ assertEq(repr("a"), "\"a\"");
 
 ### 12.3 Math
 
+Some math functions are host builtins (always in scope); `abs`, `min`, `max`
+and `clamp` live in the `std.math` module and are imported. See §18.
+
+Host builtins:
+
 | Function | Description |
 | --- | --- |
-| `abs(n)` | Absolute value. |
 | `floor(n)` | Rounds down. |
 | `ceil(n)` | Rounds up. |
 | `round(n)` | Rounds to the nearest integer (halves away from zero). |
 | `sqrt(n)` | Square root; error if `n < 0`. |
 | `pow(base, exp)` | Power as `float`. |
+| `sin(n)`, `cos(n)`, `tan(n)` | Trigonometric functions (radians). |
+| `log(n)` | Natural logarithm; error if `n <= 0`. |
+| `exp(n)` | `e ** n`. |
+
+`std.math` (import it first):
+
+| Function | Description |
+| --- | --- |
+| `abs(n)` | Absolute value. |
 | `min(a, ...)` | Minimum of at least one argument. |
 | `max(a, ...)` | Maximum of at least one argument. |
 | `clamp(n, minimum, maximum)` | Limits `n` to the interval. |
+| `PI`, `E` | Constants. |
 
 `floor`, `ceil` and `round` return the same `int` if they receive an `int`, and a `float` if they receive a `float`.
+
+```jolt
+import std.math.*;
+
+assertEq(abs(-7), 7);
+assertEq(min(3, 1, 2), 1);
+assertEq(clamp(15, 0, 10), 10);
+assertEq(sqrt(81), 9.0);
+```
 
 ### 12.4 Randomness and time
 
@@ -1427,9 +1516,9 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
-- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require`; a module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
-- No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
-- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7); `native fn` is still pending for PHASE 6.5.
+- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
+- No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
+- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).

@@ -381,6 +381,51 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
        line, col);
 }
 
+// A `native fn` declares the arity and the argument types the host function
+// expects. The check is best-effort: an unannotated parameter means the
+// argument is not checked, so a native with a loose signature still compiles.
+void Compiler::checkNativeCall(const std::string& name, const NativeSig& sig,
+                               const CallExpr& call, int line, int col) {
+  const bool variadic = !sig.params.empty() && sig.params.back().variadic;
+  // A variadic native accepts `params.size() - 1` or more arguments; the extras
+  // are checked against the variadic parameter's element type.
+  const size_t required = sig.params.size() - (variadic ? 1 : 0);
+  const bool arityOk =
+      variadic ? call.args.size() >= required : call.args.size() == required;
+  if (!arityOk) {
+    fail("'" + name + "' expects " + std::to_string(required) + " argument" +
+             (required == 1 ? "" : "s") + (variadic ? " or more" : "") + ", got " +
+             std::to_string(call.args.size()),
+         line, col);
+  }
+  for (size_t i = 0; i < call.args.size(); ++i) {
+    // Arguments past the fixed parameters all bind the variadic element type.
+    const size_t slot = i < required ? i : sig.params.size() - 1;
+    if (!sig.params[slot].type.isPresent()) continue;
+    checkAssignable(inferExprType(*call.args[i]), sig.params[slot].type,
+                    "argument " + std::to_string(i + 1) + " of '" + name + "'",
+                    call.args[i]->line, call.args[i]->col);
+  }
+}
+
+// Resolves `name` the way a variable read does and returns its native
+// signature when the binding is a `native fn`. The scopes of the function
+// being compiled come first, then every enclosing frame, innermost first: the
+// first binding wins, so a local or an upvalue that shadows a native name is a
+// different function and yields null. A name with no local binding is a
+// global, which is a native when it was declared as one.
+const Compiler::NativeSig* Compiler::nativeSigFor(const std::string& name) const {
+  auto declared = nativeSigs_.find(name);
+  const NativeSig* sig = declared == nativeSigs_.end() ? nullptr : &declared->second;
+
+  LocalVar local;
+  if (resolveLocalIn(scopes_, name, local)) return local.isNative ? sig : nullptr;
+  for (auto frame = funcStack_.rbegin(); frame != funcStack_.rend(); ++frame) {
+    if (resolveLocalIn(frame->scopes, name, local)) return local.isNative ? sig : nullptr;
+  }
+  return sig;
+}
+
 TypeRef Compiler::inferExprType(const Expr& expr) const {
   if (const auto* literal = std::get_if<LiteralExpr>(&expr.node)) {
     TypeRef type;
@@ -419,6 +464,13 @@ TypeRef Compiler::inferExprType(const Expr& expr) const {
       return left;
     }
   }
+  // A call to a declared `native fn` has its declared return type, so
+  // `let y: float = sqrt(x)` is checked like any other annotated binding.
+  if (const auto* call = std::get_if<CallExpr>(&expr.node)) {
+    if (const auto* callee = std::get_if<VariableExpr>(&call->callee->node)) {
+      if (const NativeSig* sig = nativeSigFor(callee->name)) return sig->returnType;
+    }
+  }
   return TypeRef{};  // any other shape: unknown, so no check
 }
 
@@ -439,6 +491,7 @@ void Compiler::resetChunk(const std::string& name) {
   globalConsts_.clear();
   globalTypes_.clear();
   structDefs_.clear();
+  nativeSigs_.clear();
   currentReturnType_ = TypeRef{};
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
@@ -465,6 +518,9 @@ Bytecode Compiler::compile(const StmtPtr& program) {
     // Register the struct shapes first so a hoisted function (compiled next)
     // can already build a literal.
     registerStructDecls(*block);
+    // Register native signatures too: a hoisted function may call one and must
+    // be checked against its signature.
+    registerNativeDecls(*block);
     // Top-level function declarations are hoisted, like `execBlock` does in
     // the interpreter, so a call can appear before the declaration.
     for (const auto& child : block->stmts) {
@@ -515,6 +571,7 @@ Bytecode Compiler::compileRepl(const StmtPtr& program) {
   } else {
     // Register struct shapes first, then hoist top-level function declarations.
     registerStructDecls(*block);
+    registerNativeDecls(*block);
     for (const auto& child : block->stmts) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
@@ -554,6 +611,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
   // before compiling anything: a hoisted function that builds a literal must
   // already see them.
   registerStructDecls(block);
+  registerNativeDecls(block);
   // Function declarations are hoisted within their block, so a call can appear
   // before the declaration and mutually recursive local functions can resolve
   // each other. Block-local `let`/`var` declarations also need their slots
@@ -571,6 +629,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
   if (!inGlobalScope() && hasHoistedFunction) {
     std::unordered_map<std::string, int> blockSlots;
     std::unordered_map<std::string, TypeRef> blockTypes;
+    std::unordered_map<std::string, bool> blockNatives;
     for (const auto& [name, local] : scopes_.back().vars) blockSlots[name] = local.slot;
 
     int nilReg = -1;
@@ -607,6 +666,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
         }
       } else if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         blockTypes[fn->name] = TypeRef{"function", false};
+        blockNatives[fn->name] = fn->isNative;
         auto found = blockSlots.find(fn->name);
         int slot;
         if (found != blockSlots.end()) {
@@ -626,7 +686,8 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
     // bodies capture the right cells even when the declaration appears later.
     std::unordered_map<std::string, LocalVar> beforeHoisting = scopes_.back().vars;
     for (const auto& [name, slot] : blockSlots) {
-      scopes_.back().vars[name] = LocalVar{name, slot, false, blockTypes[name]};
+      scopes_.back().vars[name] =
+          LocalVar{name, slot, false, blockTypes[name], blockNatives[name]};
     }
     for (const auto& child : block.stmts) {
       if (!child) continue;
@@ -642,7 +703,8 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         int slot = predeclaredFnSlots_[fn];
-        scopes_.back().vars[fn->name] = LocalVar{fn->name, slot, false, TypeRef{"function", false}};
+        scopes_.back().vars[fn->name] =
+            LocalVar{fn->name, slot, false, TypeRef{"function", false}, fn->isNative};
       }
     }
   } else if (hasHoistedFunction) {
@@ -745,6 +807,9 @@ void Compiler::compileLet(const LetStmt& s) {
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.kind != Tok::Var);
     declareGlobalType(s.name, declared);
+    // A global binding replaces a `native fn` of the same name, so its
+    // signature no longer applies to calls of the name.
+    nativeSigs_.erase(s.name);
   } else {
     // `compileBlockBody` reserved a slot (and created its cell) for every
     // direct declaration of the block. Fill that cell instead of allocating a
@@ -806,6 +871,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedGlobalConsts = std::move(globalConsts_);
   auto savedGlobalTypes = std::move(globalTypes_);
   auto savedStructDefs = std::move(structDefs_);
+  auto savedNativeSigs = std::move(nativeSigs_);
   std::deque<FuncState> savedFuncStack = std::move(funcStack_);
 
   bc_ = Bytecode{};
@@ -825,6 +891,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   globalConsts_.clear();
   globalTypes_.clear();
   structDefs_.clear();
+  nativeSigs_.clear();
 
   std::vector<std::string> symbols;
   const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
@@ -870,6 +937,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   globalConsts_ = std::move(savedGlobalConsts);
   globalTypes_ = std::move(savedGlobalTypes);
   structDefs_ = std::move(savedStructDefs);
+  nativeSigs_ = std::move(savedNativeSigs);
   funcStack_ = std::move(savedFuncStack);
   return module;
 }
@@ -1088,9 +1156,18 @@ void Compiler::compileNameImport(const ImportedModule& module,
 void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
   currentLine_ = line;
   currentCol_ = col;
-  int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col, fn.returnType);
   int reg = allocReg();
-  emit(OpCode::CLOSURE, reg, child);
+  if (fn.isNative) {
+    // A `native fn` has no body: it binds the name to the function the host
+    // registered under the same name (the registry `registerBuiltins` fills).
+    // `GETGLOBAL` reports a clear error at run time when the host does not
+    // provide it, which for a module means when the module is loaded. No
+    // opcode is added and no proto is compiled.
+    emit(OpCode::GETGLOBAL, reg, addString(fn.name));
+  } else {
+    int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col, fn.returnType);
+    emit(OpCode::CLOSURE, reg, child);
+  }
 
   if (inGlobalScope()) {
     // Top-level functions are globals; the interpreter hoists them in the global
@@ -1098,6 +1175,13 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     emit(OpCode::SETGLOBAL, reg, addString(fn.name));
     declareGlobal(fn.name, false);
     declareGlobalType(fn.name, TypeRef{"function", false});
+    // Keep the signature table in step with the binding that actually wins: a
+    // native keeps its signature, any other global of the same name drops it.
+    if (fn.isNative) {
+      nativeSigs_[fn.name] = NativeSig{fn.params, fn.returnType};
+    } else {
+      nativeSigs_.erase(fn.name);
+    }
   } else {
     // Local declaration: a frame slot holding the closure value (PHASE 6b).
     // `compileBlockBody` reserves the slot so mutual recursion resolves and a
@@ -1106,14 +1190,17 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     if (predeclared != predeclaredFnSlots_.end()) {
       int slot = predeclared->second;
       emit(OpCode::SETLOCAL, reg, slot);
-      scopes_.back().vars[fn.name] = LocalVar{fn.name, slot, false, TypeRef{"function", false}};
+      scopes_.back().vars[fn.name] =
+          LocalVar{fn.name, slot, false, TypeRef{"function", false}, fn.isNative};
     } else {
       auto existing = scopes_.back().vars.find(fn.name);
       if (existing != scopes_.back().vars.end()) {
         emit(OpCode::SETLOCAL, reg, existing->second.slot);
+        existing->second.isNative = fn.isNative;
       } else {
         int slot = declareLocal(fn.name, false, TypeRef{"function", false});
         emit(OpCode::DECLLOCAL, reg, slot);
+        scopes_.back().vars[fn.name].isNative = fn.isNative;
       }
     }
   }
@@ -1140,6 +1227,18 @@ void Compiler::registerStructDecls(const BlockStmt& block) {
     if (!child) continue;
     if (const auto* decl = std::get_if<StructDeclStmt>(&child->node)) {
       structDefs_[decl->name] = decl->fields;
+    }
+  }
+}
+
+// Registers every `native fn` declared directly in `block` before anything else
+// in it is compiled. A hoisted function is compiled first, so without this pass
+// a call to a native declared later in the file would not be checked.
+void Compiler::registerNativeDecls(const BlockStmt& block) {
+  for (const auto& child : block.stmts) {
+    if (!child) continue;
+    if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+      if (fn->isNative) nativeSigs_[fn->name] = NativeSig{fn->params, fn->returnType};
     }
   }
 }
@@ -1213,6 +1312,10 @@ int Compiler::compileFunctionProto(const std::string& name,
   bc_ = Bytecode{};
   bc_.name = name;
   bc_.numParams = static_cast<int>(params.size());
+  // A trailing `rest...` parameter makes the function variadic: the frame takes
+  // `numParams - 1` or more arguments and the VM binds the last slot to an
+  // array of the extras (PHASE 6.5). The parser guarantees it is the last one.
+  bc_.variadic = !params.empty() && params.back().variadic;
   currentUpvalueNames_.clear();
   nextReg_ = 0;
   maxReg_ = 0;
@@ -1246,7 +1349,12 @@ int Compiler::compileFunctionProto(const std::string& name,
 
   // The function body lives in the parameter scope; it is not a nested block.
   pushScope();
-  for (const Param& param : params) declareLocal(param.name, false, param.type);
+  for (const Param& param : params) {
+    // A variadic parameter binds an array of the extra arguments, so its
+    // annotation describes the elements and its binding type is `array`.
+    TypeRef bindingType = param.variadic ? TypeRef{"array", false} : param.type;
+    declareLocal(param.name, false, bindingType);
+  }
   currentReturnType_ = returnType;
 
   // Incoming arguments already sit in R0 .. R(n-1), so the prologue only has
@@ -1580,6 +1688,15 @@ int Compiler::compileVariable(const std::string& name) {
 }
 
 int Compiler::compileCall(const CallExpr& call, int line, int col) {
+  // A call to a declared `native fn` is checked against its signature: arity
+  // must match and each argument must be assignable to its parameter type.
+  // Types are metadata only, so the emitted code is the same either way.
+  if (const auto* callee = std::get_if<VariableExpr>(&call.callee->node)) {
+    if (const NativeSig* sig = nativeSigFor(callee->name)) {
+      checkNativeCall(callee->name, *sig, call, line, col);
+    }
+  }
+
   // `CALL` reads a contiguous window, so the callee and every argument must be
   // in consecutive registers. The counter discipline of `compileExpr` already
   // guarantees it; the check turns a future regression into a clear error.

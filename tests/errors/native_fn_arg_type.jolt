@@ -1,0 +1,4 @@
+// expect-exit: 65
+// An argument must be assignable to the declared parameter type.
+native fn sqrt(x: float): float;
+print(sqrt("not a number"));

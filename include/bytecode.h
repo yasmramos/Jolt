@@ -145,6 +145,10 @@ struct UpvalDesc {
 struct Bytecode {
   std::string name = "<main>";
   int numParams = 0;
+  // True when the last parameter is variadic (`fn min(a, rest...)`). The frame
+  // then accepts `numParams - 1` or more arguments and binds the last slot to
+  // an array of the extras; the VM packs them, so no opcode is needed.
+  bool variadic = false;
   std::vector<Instruction> code;
   // Tagged constant pool. Uses `Value` so the difference between integers and
   // floats survives, and so strings and global names live in the same pool.

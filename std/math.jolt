@@ -6,27 +6,52 @@
 //
 // A leading underscore marks a binding private: `_helper` below is not part
 // of the module's public surface and is not exported.
+//
+// The primitives that need C++ (libm) are declared `native fn`: the name binds
+// to the host function of the same name, and the signature is checked at the
+// call site. Everything that can be written in Jolt (abs, min, max, clamp) is
+// plain Jolt, so the standard library is mostly Jolt.
+
+native fn sqrt(x: float): float;
+native fn pow(base: float, exponent: float): float;
+native fn sin(x: float): float;
+native fn cos(x: float): float;
+native fn tan(x: float): float;
+native fn log(x: float): float;
+native fn exp(x: float): float;
+native fn floor(x: float): float;
+native fn ceil(x: float): float;
+native fn round(x: float): float;
 
 const PI = 3.141592653589793;
-
-fn sqrt(x) {
-  return x ** 0.5;
-}
-
-fn pow(base, exponent) {
-  return base ** exponent;
-}
+const E = 2.718281828459045;
 
 fn abs(x) {
   return x < 0 ? -x : x;
 }
 
-fn max(a, b) {
-  return a > b ? a : b;
+fn min(first, rest...) {
+  var best = first;
+  for x in rest {
+    if (x < best) {
+      best = x;
+    }
+  }
+  return best;
 }
 
-fn min(a, b) {
-  return a < b ? a : b;
+fn max(first, rest...) {
+  var best = first;
+  for x in rest {
+    if (x > best) {
+      best = x;
+    }
+  }
+  return best;
+}
+
+fn clamp(x, lo, hi) {
+  return min(max(x, lo), hi);
 }
 
 fn _helper() {

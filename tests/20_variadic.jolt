@@ -1,0 +1,63 @@
+// PHASE 6.5: variadic parameters (`rest...`).
+//
+// A trailing `rest...` parameter binds an array holding every extra argument.
+// The `...` follows the optional type annotation (`rest...` or `parts: int...`)
+// and must be the last parameter. A variadic function accepts `n - 1` or more
+// arguments; the extras are packed by the VM, so no opcode is added.
+
+fn sum(first, rest...) {
+  var total = first;
+  for x in rest {
+    total += x;
+  }
+  return total;
+}
+
+assertEq(sum(1), 1);
+assertEq(sum(1, 2), 3);
+assertEq(sum(1, 2, 3, 4, 5), 15);
+
+// The variadic binding is an ordinary array: index it, measure it, iterate it.
+fn describe(head, tail...) {
+  assertEq(type(tail), "array");
+  return head + ":" + str(len(tail));
+}
+assertEq(describe("a"), "a:0");
+assertEq(describe("a", 1, 2), "a:2");
+
+// A type annotation on the variadic parameter describes its elements; the
+// binding itself is still an array.
+fn joined(sep: string, parts: string...) {
+  var out = "";
+  var first = true;
+  for p in parts {
+    if (first) {
+      out += p;
+      first = false;
+    } else {
+      out += sep + p;
+    }
+  }
+  return out;
+}
+assertEq(joined(","), "");
+assertEq(joined(",", "a"), "a");
+assertEq(joined(",", "a", "b", "c"), "a,b,c");
+
+// A variadic parameter does not have to follow fixed ones only; a function may
+// be variadic on its own.
+fn count(rest...) {
+  return len(rest);
+}
+assertEq(count(), 0);
+assertEq(count(1, 2, 3), 3);
+
+// Lambdas take variadic parameters too.
+let spread = (first, rest...) => first + len(rest);
+assertEq(spread(10, 1, 2, 3), 13);
+
+// A function value passed around keeps its variadic behaviour.
+let f = sum;
+assertEq(f(2, 3, 4), 9);
+
+print("variadic ok");

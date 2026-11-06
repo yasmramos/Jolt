@@ -1,0 +1,5 @@
+// expect-exit: 65
+// A 'native fn' declares no body: the runtime provides the implementation.
+native fn foo(x: int): int {
+  return x;
+}
