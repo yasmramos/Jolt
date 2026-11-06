@@ -269,7 +269,7 @@ void CodeGen::leaRip(X64Reg dst, std::int32_t ripDelta) {
   std::uint8_t d = enc(dst);
   rex(true, d, false, 0, 5);  // rm = 101 without SIB => RIP-relative
   emitByte(0x8D);
-  emitByte(static_cast<std::uint8_t>((0x00 << 6) | (d << 3) | 0x05));
+  emitByte(static_cast<std::uint8_t>((0x00 << 6) | ((d & 0x07) << 3) | 0x05));
   emit32(ripDelta);
 }
 
@@ -278,7 +278,10 @@ void CodeGen::aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src) {
   std::uint8_t s = enc(src);
   rex(true, s, false, 0, d);
   emitByte(opcode);
-  emitByte(static_cast<std::uint8_t>(0xC0 | (s << 3) | d));
+  // ModRM carries only the low three bits of each register; the high bit is
+  // REX.R (reg field) or REX.B (rm field). Without the masks, r8-r15 leak
+  // their bit 3 into the neighbouring field and corrupt the instruction.
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((s & 0x07) << 3) | (d & 0x07)));
 }
 
 void CodeGen::addReg(X64Reg dst, X64Reg src) { aluRegOp(0x01, dst, src); }
@@ -304,7 +307,7 @@ void CodeGen::imulReg(X64Reg dst, X64Reg src) {
   rex(true, d, false, 0, s);
   emitByte(0x0F);
   emitByte(0xAF);
-  emitByte(static_cast<std::uint8_t>(0xC0 | (d << 3) | s));
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
 }
 
 void CodeGen::idiv(X64Reg divisor) {
@@ -340,7 +343,38 @@ void CodeGen::testReg(X64Reg reg) {
   std::uint8_t r = enc(reg);
   rex(true, r, false, 0, r);
   emitByte(0x85);
-  emitByte(static_cast<std::uint8_t>(0xC0 | (r << 3) | r));
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((r & 0x07) << 3) | (r & 0x07)));
+}
+
+// setcc r/m8: 0F 90+cc /0. The condition code is the low nibble of the Jcc
+// value (0x84 -> 4, `sete`). Only the low byte of `dst` is written, so the
+// caller zero-extends with `movzx` to get a clean 0/1 in the full register.
+//
+// The low-byte registers spl/bpl/sil/dil (numbers 4-7) are only reachable
+// through a REX prefix: without one, ModRM rm=100..111 still means
+// ah/ch/dh/bh. Registers 8-15 additionally need REX.B.
+void CodeGen::setcc(Jcc cc, X64Reg dst) {
+  std::uint8_t d = enc(dst);
+  if (d >= 4) {
+    std::uint8_t byte = 0x40;
+    if (d >= 8) byte |= 0x01;
+    emitByte(byte);
+  }
+  emitByte(0x0F);
+  emitByte(static_cast<std::uint8_t>(0x90 | (static_cast<std::uint8_t>(cc) & 0x0F)));
+  emitByte(static_cast<std::uint8_t>(0xC0 | (d & 0x07)));
+}
+
+// movzx r64, r/m8: REX.W 0F B6 /r. Zero-extends the low byte of `src` into
+// the full 64-bit `dst`, which turns the byte written by `setcc` into a
+// canonical 0/1 integer.
+void CodeGen::movzx(X64Reg dst, X64Reg src) {
+  std::uint8_t d = enc(dst);
+  std::uint8_t s = enc(src);
+  rex(true, d, false, 0, s);
+  emitByte(0x0F);
+  emitByte(0xB6);
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
 }
 
 void CodeGen::sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int srcXmm) {
@@ -359,7 +393,7 @@ void CodeGen::sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int
   if (byte != 0x40) emitByte(byte);
   emitByte(0x0F);
   emitByte(opcode);
-  emitByte(static_cast<std::uint8_t>(0xC0 | (d << 3) | s));
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
 }
 
 void CodeGen::addsd(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x58, dstXmm, srcXmm); }
@@ -405,7 +439,7 @@ void CodeGen::cvttsd2si(X64Reg dst, int srcXmm) {
   emitByte(0xF2);
   emitByte(0x0F);
   emitByte(0x2C);
-  emitByte(static_cast<std::uint8_t>(0xC0 | (d << 3) | s));
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
 }
 
 void CodeGen::cvtsi2sd(int dstXmm, X64Reg src) {
@@ -421,7 +455,7 @@ void CodeGen::cvtsi2sd(int dstXmm, X64Reg src) {
   emitByte(byte);
   emitByte(0x0F);
   emitByte(0x2A);
-  emitByte(static_cast<std::uint8_t>(0xC0 | (d << 3) | (s & 7)));
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
 }
 
 void CodeGen::jmp(Label label) {

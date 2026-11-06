@@ -659,6 +659,104 @@ static void test_exec_syscall_write() {
 }
 #endif
 
+static void test_setcc_movzx() {
+  // setcc r/m8 -> 0F 90+cc /0. The condition code is the low nibble of Jcc.
+  CodeGen g;
+  g.setcc(Jcc::Eq, X64Reg::Rax);
+  checkBytes("sete al", g, "0F94C0");
+
+  CodeGen g2;
+  g2.setcc(Jcc::Ne, X64Reg::Rax);
+  checkBytes("setne al", g2, "0F95C0");
+
+  CodeGen g3;
+  g3.setcc(Jcc::Lt, X64Reg::Rax);
+  checkBytes("setl al", g3, "0F9CC0");
+
+  // spl/bpl/sil/dil (registers 4-7) need a REX prefix even without REX.W:
+  // without it, rm=100 means ah, not spl. `sete spl` -> 40 0F 94 C4.
+  CodeGen g4;
+  g4.setcc(Jcc::Eq, X64Reg::Rsp);
+  checkBytes("sete spl (REX needed)", g4, "400F94C4");
+
+  // r8-r15 add REX.B: `sete r8b` -> 41 0F 94 C0.
+  CodeGen g5;
+  g5.setcc(Jcc::Eq, X64Reg::R8);
+  checkBytes("sete r8b (REX.B)", g5, "410F94C0");
+
+  // Extended registers (r8-r15) must not leak bit 3 of their register number
+  // into the neighbouring ModRM field: the reg/rm fields are only 3 bits wide
+  // and the high bit lives in REX. `test r8, r8` -> 4D 85 C0, not 4D 85 C8.
+  CodeGen g8;
+  g8.testReg(X64Reg::R8);
+  checkBytes("test r8, r8 (ModRM mask)", g8, "4D85C0");
+
+  CodeGen g9;
+  g9.testReg(X64Reg::R15);
+  checkBytes("test r15, r15 (ModRM mask)", g9, "4D85FF");
+
+  // `mov r13, r14` -> 4D 89 F5.
+  CodeGen g10;
+  g10.movReg(X64Reg::R13, X64Reg::R14);
+  checkBytes("mov r13, r14 (ModRM mask)", g10, "4D89F5");
+
+  // `cmp r12, r13` -> 4D 39 EC.
+  CodeGen g11;
+  g11.cmpReg(X64Reg::R12, X64Reg::R13);
+  checkBytes("cmp r12, r13 (ModRM mask)", g11, "4D39EC");
+
+  // `imul r9, r10` -> 4D 0F AF CA.
+  CodeGen g12;
+  g12.imulReg(X64Reg::R9, X64Reg::R10);
+  checkBytes("imul r9, r10 (ModRM mask)", g12, "4D0FAFCA");
+
+  // movzx r64, r/m8 -> REX.W 0F B6 /r.
+  CodeGen g6;
+  g6.movzx(X64Reg::Rax, X64Reg::Rax);
+  checkBytes("movzx rax, al", g6, "480FB6C0");
+
+  CodeGen g7;
+  g7.movzx(X64Reg::R8, X64Reg::Rax);
+  checkBytes("movzx r8, al (REX.R)", g7, "4C0FB6C0");
+}
+
+#ifdef CODEGEN_EXEC_TESTS
+static void test_exec_setcc() {
+  // cmp rax, rcx ; sete al ; movzx rax, al ; ret. With rax=5, rcx=5 the
+  // result must be exactly 1 (not 0xFF.. or a stale high byte).
+  CodeGen g;
+  g.movImm(X64Reg::Rax, 5);
+  g.movImm(X64Reg::Rcx, 5);
+  g.cmpReg(X64Reg::Rax, X64Reg::Rcx);
+  g.setcc(Jcc::Eq, X64Reg::Rax);
+  g.movzx(X64Reg::Rax, X64Reg::Rax);
+  g.retInsn();
+  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g.code()));
+  check(fn() == 1, "exec: (5 == 5) materializes as 1");
+
+  // A false comparison must materialize as exactly 0.
+  CodeGen g2;
+  g2.movImm(X64Reg::Rax, 5);
+  g2.movImm(X64Reg::Rcx, 9);
+  g2.cmpReg(X64Reg::Rax, X64Reg::Rcx);
+  g2.setcc(Jcc::Lt, X64Reg::Rax);
+  g2.movzx(X64Reg::Rax, X64Reg::Rax);
+  g2.retInsn();
+  auto fn2 = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g2.code()));
+  check(fn2() == 1, "exec: (5 < 9) materializes as 1");
+
+  CodeGen g3;
+  g3.movImm(X64Reg::Rax, 9);
+  g3.movImm(X64Reg::Rcx, 5);
+  g3.cmpReg(X64Reg::Rax, X64Reg::Rcx);
+  g3.setcc(Jcc::Lt, X64Reg::Rax);
+  g3.movzx(X64Reg::Rax, X64Reg::Rax);
+  g3.retInsn();
+  auto fn3 = reinterpret_cast<std::int64_t (*)()>(emitExecutable(g3.code()));
+  check(fn3() == 0, "exec: (9 < 5) materializes as 0");
+}
+#endif
+
 int main() {
   test_target_descriptor();
   test_mov_imm();
@@ -668,6 +766,7 @@ int main() {
   test_control_flow();
   test_backward_jmp_bytes();
   test_sse();
+  test_setcc_movzx();
 #ifdef CODEGEN_EXEC_TESTS
   test_exec_arithmetic();
   test_exec_division();
@@ -676,6 +775,7 @@ int main() {
   test_exec_backward_jmp_with_trailing_epilogue();
   test_exec_rbp_disp32_roundtrip();
   test_exec_syscall_write();
+  test_exec_setcc();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

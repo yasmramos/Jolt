@@ -114,6 +114,8 @@ class CodeGen {
   // Comparisons and control flow.
   void cmpReg(X64Reg lhs, X64Reg rhs);
   void testReg(X64Reg reg);
+  void setcc(Jcc cc, X64Reg dst);          // setcc r/m8: dst low byte = 0/1
+  void movzx(X64Reg dst, X64Reg src);      // movzx r64, r/m8 (zero-extend)
   void jmp(Label label);
   void jcc(Jcc cc, Label label);
   void callRel(std::int32_t offsetBytes);  // call rel32 (caller resolves the target)
