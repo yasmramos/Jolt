@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A call must match the declared arity of the native.
+native fn sqrt(x: float): float;
+print(sqrt(1.0, 2.0));

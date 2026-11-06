@@ -1,0 +1,5 @@
+// expect-exit: 65
+// The declared return type of a native is used for inference, so binding it to
+// an incompatible annotated type is a compile error.
+native fn sqrt(x: float): float;
+let n: int = sqrt(4.0);

@@ -37,6 +37,10 @@ struct TypeRef {
 struct Param {
   std::string name;
   TypeRef type;
+  // `rest...` (PHASE 6.5): a variadic parameter. It must be the last one, and
+  // its `type` describes the *elements*, not the array; at run time `name`
+  // binds an array holding every extra argument. A function has at most one.
+  bool variadic = false;
 };
 
 // The primitive type names accepted in an annotation. `any` opts out of
@@ -250,7 +254,12 @@ struct FnDeclStmt {
   std::string name;
   std::vector<Param> params;
   TypeRef returnType;  // optional, e.g. `fn f(): int`
-  StmtPtr body;  // BlockStmt
+  StmtPtr body;  // BlockStmt; null for a `native fn` (no body)
+  // `native fn name(params): ret;` (PHASE 6.5): a bodyless declaration that
+  // binds `name` to a native function the host registered (see
+  // `registerBuiltins`). The parser rejects a body on a native declaration, so
+  // `body` is null exactly when this is true.
+  bool isNative = false;
 };
 
 // `struct Point { x: int; y: int; }` (PHASE 6.5). A data-only type: no

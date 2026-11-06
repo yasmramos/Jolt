@@ -266,6 +266,7 @@ StmtPtr Parser::parseStatement() {
 
   if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
   if (match(Tok::Fn)) return parseFnDecl();
+  if (match(Tok::Native)) return parseNativeDecl();
   if (match(Tok::Struct)) return parseStructDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
@@ -545,6 +546,34 @@ StmtPtr Parser::parseFnDecl() {
                   keyword.line, keyword.col);
 }
 
+// `native fn name(params): ret;` (PHASE 6.5): a bodyless declaration that binds
+// `name` to a native function the host registered (the same registry
+// `registerBuiltins` fills). The signature is checked like a normal function
+// and the binding is resolved at runtime, so no opcode is added.
+//
+// Like `struct` and `import`, it is module-level metadata, so it is only
+// allowed at the top level. It has no body: a `{ ... }` or `=>` body is
+// rejected, and the declaration ends with `;`.
+StmtPtr Parser::parseNativeDecl() {
+  const Token& keyword = previous();
+  if (nestingDepth_ > 0) {
+    throw CompileError{"'native fn' is only allowed at the top level of a module", keyword.line,
+                       keyword.col};
+  }
+  consume(Tok::Fn, "expected 'fn' after 'native'");
+  const Token& name = consume(Tok::Ident, "expected a function name");
+  auto params = parseParams();
+  TypeRef returnType = parseTypeAnnotation();
+  if (check(Tok::Arrow) || check(Tok::LBrace)) {
+    throw CompileError{"a 'native fn' has no body; it binds to a function the runtime provides",
+                       peek().line, peek().col};
+  }
+  consume(Tok::Semicolon, "expected ';' after the 'native fn' declaration");
+  FnDeclStmt decl{name.lexeme, std::move(params), std::move(returnType), nullptr};
+  decl.isNative = true;
+  return makeStmt(std::move(decl), keyword.line, keyword.col);
+}
+
 // `struct Name { field: T; other; ... }` (PHASE 6.5). A data-only type: fields
 // are separated (and optionally terminated) by ';', and the type annotation is
 // optional (`struct P { x: int; y; }`). Declaring a name twice in the same
@@ -617,6 +646,11 @@ bool Parser::atLambda() const {
       ++i;
       if (peek(i).type == Tok::Question) ++i;
     }
+    // A trailing `...` marks a variadic parameter; it must end the list.
+    if (peek(i).type == Tok::Ellipsis) {
+      ++i;
+      break;
+    }
     if (peek(i).type != Tok::Comma) break;
     ++i;
   }
@@ -648,8 +682,22 @@ std::vector<Param> Parser::parseParams() {
       const Token& param = consume(Tok::Ident, "expected a parameter name");
       Param parsed;
       parsed.name = param.lexeme;
-      parsed.type = parseTypeAnnotation();
+      // `rest...` collects the extra arguments into an array. The `...` comes
+      // after the optional type annotation (`rest...` or `parts: string...`)
+      // and must be the last parameter, so anything after it is rejected.
+      if (match(Tok::Ellipsis)) {
+        parsed.variadic = true;
+      } else {
+        parsed.type = parseTypeAnnotation();
+        if (match(Tok::Ellipsis)) parsed.variadic = true;
+      }
       params.push_back(std::move(parsed));
+      if (parsed.variadic) {
+        if (!check(Tok::RParen)) {
+          error(peek(), "a variadic parameter must be the last one");
+        }
+        break;
+      }
       if (!match(Tok::Comma)) break;
     }
   }

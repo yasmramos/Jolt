@@ -1,4 +1,9 @@
 // Numbers, literals and conversions.
+//
+// `abs`, `min`, `max` and `clamp` live in the standard library, so they are
+// imported here; `floor`, `ceil`, `round`, `sqrt` and `pow` are host builtins.
+
+import std.math.*;
 
 assertEq(1 + 2 * 3, 7);
 assertEq((1 + 2) * 3, 9);

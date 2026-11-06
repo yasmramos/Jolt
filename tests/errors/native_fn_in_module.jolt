@@ -1,0 +1,7 @@
+// expect-exit: 65
+// A `native fn` inside an imported module is a local binding of that module's
+// frame. A call to it inside the module must still be checked against the
+// declared signature, not skipped because the name resolves to a local.
+
+import mods.badnative;
+print(badnative.bad);

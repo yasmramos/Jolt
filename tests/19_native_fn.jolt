@@ -1,0 +1,55 @@
+// PHASE 6.5: `native fn` declarations.
+//
+// A `native fn` is a bodyless declaration that binds a name to a function the
+// host registered (the same registry `registerBuiltins` fills). It carries the
+// signature so calls are checked (arity and argument types) at compile time,
+// but it adds no opcode: the binding is a plain GETGLOBAL of the native, so the
+// name must exist at run time or the program reports an undefined variable.
+
+// A native bound to a builtin, with a fully typed signature.
+native fn sqrt(x: float): float;
+native fn floor(x: float): float;
+
+assertEq(sqrt(9.0), 3.0);
+// `int` widens to `float`, so an int argument is accepted.
+assertEq(sqrt(16), 4.0);
+assertEq(floor(2.9), 2.0);
+
+// The declared return type is used for inference: `let y: float = ...` checks.
+let y: float = sqrt(25.0);
+assertEq(y, 5.0);
+
+// A native may also be called through a reference, like any other function.
+let f = sqrt;
+assertEq(f(36.0), 6.0);
+
+// The declaration binds the name as an ordinary global holding a function.
+assertEq(type(sqrt), "function");
+
+// A parameter with no annotation is not checked; `any` opts out explicitly.
+native fn str(v: any): string;
+assertEq(str(42), "42");
+assertEq(str(true), "true");
+
+// An untyped parameter accepts any value.
+native fn len(v);
+assertEq(len("abcd"), 4);
+assertEq(len([1, 2, 3]), 3);
+
+// A local that shadows a native name is a different function: the signature
+// check does not apply to it. `str` is declared with one parameter above, but
+// the local `str` below is called with two.
+fn shadowTest() {
+  let str = pow;
+  return str(3, 4);
+}
+assertEq(shadowTest(), 81.0);
+
+// A `native fn` declared in a module is bound in the module's frame and
+// exported like any other public name; a call inside the module is checked
+// against the same signature.
+import modules.hostmath;
+assertEq(modules.hostmath.sqrt(81.0), 9);
+assertEq(modules.hostmath.hypotenuse(3.0, 4.0), 5);
+
+print("native fn ok");

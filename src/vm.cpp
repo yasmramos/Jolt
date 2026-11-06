@@ -99,9 +99,15 @@ void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t re
   }
 
   const Bytecode& proto = *function->proto;
-  if (args.size() != static_cast<std::size_t>(proto.numParams)) {
-    fail(function->name + "() expects " + std::to_string(proto.numParams) + " argument" +
-             (proto.numParams == 1 ? "" : "s") + ", got " + std::to_string(args.size()),
+  // A variadic function accepts `numParams - 1` or more arguments: the extras
+  // are packed into an array bound to the last parameter (PHASE 6.5). A
+  // non-variadic one needs the exact count.
+  const std::size_t required = static_cast<std::size_t>(proto.numParams) - (proto.variadic ? 1 : 0);
+  const bool arityOk = proto.variadic ? args.size() >= required : args.size() == required;
+  if (!arityOk) {
+    fail(function->name + "() expects " + std::to_string(required) + " argument" +
+             (required == 1 ? "" : "s") + (proto.variadic ? " or more" : "") + ", got " +
+             std::to_string(args.size()),
          line, col);
   }
   if (depth >= maxDepth) {
@@ -110,12 +116,22 @@ void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t re
 
   // The new window starts where the caller's data ends. Arguments are copied
   // into R0 .. R(n-1), which is exactly the parameter layout the compiler
-  // expects; the prologue then boxes them into local cells.
+  // expects; the prologue then boxes them into local cells. A variadic
+  // function packs its extra arguments into an array in the last slot instead.
   const std::size_t regBase = registers_.size();
   const int registerCount = proto.numRegisters > proto.numParams ? proto.numRegisters
                                                                  : proto.numParams;
   registers_.resize(regBase + static_cast<std::size_t>(registerCount));
-  for (std::size_t i = 0; i < args.size(); ++i) registers_[regBase + i] = std::move(args[i]);
+  if (proto.variadic) {
+    const std::size_t fixed = required;  // numParams - 1
+    for (std::size_t i = 0; i < fixed; ++i) registers_[regBase + i] = std::move(args[i]);
+    std::vector<Value> rest;
+    rest.reserve(args.size() - fixed);
+    for (std::size_t i = fixed; i < args.size(); ++i) rest.push_back(std::move(args[i]));
+    registers_[regBase + fixed] = Value(makeArray(std::move(rest)));
+  } else {
+    for (std::size_t i = 0; i < args.size(); ++i) registers_[regBase + i] = std::move(args[i]);
+  }
 
   const std::size_t localBase = locals_.size();
   const int localCount = proto.numLocals > 0 ? proto.numLocals : 0;

@@ -1,0 +1,9 @@
+// Test fixture: a module that declares a `native fn` bound to a host builtin
+// and re-exports it. `import modules.hostmath;` makes it available as
+// `modules.hostmath.sqrt`.
+
+native fn sqrt(x: float): float;
+
+fn hypotenuse(a: float, b: float): float {
+  return sqrt(a * a + b * b);
+}

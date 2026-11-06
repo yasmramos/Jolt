@@ -6,6 +6,9 @@
 // Run with: jolt examples/full.jolt [args...]
 // ============================================================
 
+// `abs`, `min`, `max` and `clamp` live in the standard library.
+import std.math.*;
+
 // ------------------------------------------------------------
 // 1. Constants and variables
 // ------------------------------------------------------------
@@ -305,6 +308,8 @@ assertEq(cycleTotal, 499500);
 // ------------------------------------------------------------
 // 12. Standard library: math, conversions, utilities
 // ------------------------------------------------------------
+// `abs`, `min`, `max` and `clamp` come from the standard library (imported
+// once at the top); the rest are host builtins.
 assertEq(abs(-7), 7);
 assertEq(abs(-2.5), 2.5);
 assertEq(floor(3.7), 3.0);
