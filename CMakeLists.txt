@@ -98,6 +98,7 @@ if(BUILD_TESTING)
   jolt_add_cpp_test(elf_test)
   jolt_add_cpp_test(pe_test)
   jolt_add_cpp_test(lower_test)
+  jolt_add_cpp_test(freestanding_test)
 
   # --- REPL scripted test (clear) ---
   add_test(NAME repl.clear

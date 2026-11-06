@@ -54,8 +54,12 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
-| `native/elf.cpp` | ELF structures | ELF bytes | ⬜ PHASE 7c |
 | `native/lower.cpp` | bytecode | x86-64 | 🔶 PHASE 7b |
+| `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
+| `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
+| `native/arena.cpp` | block + size | aligned allocations | ✅ PHASE 7c.0 |
+| `native/platform_freestanding.cpp` | `Platform` ops | direct Linux syscalls | ✅ PHASE 7c.0 |
+| `native/entry.cpp` | program entry label | `_start` + runtime prelude | ✅ PHASE 7c.0 |
 
 ### Toolchain binaries and the compiler boundary
 
@@ -441,6 +445,31 @@ previous one.
   - **7c** — freestanding embedded runtime calls (strings, the `print`
     builtin, collections on top of the custom allocator) and the boxed
     `Value` representation that unlocks floats and the rest of the opcodes.
+    - **7c.0** (done) — the freestanding substrate: the static ELF64 emitter
+      (`include/native/elf.h`, `src/native/elf.cpp`) and the PE32+ emitter
+      (`include/native/pe.h`, `src/native/pe.cpp`); the bump allocator
+      (`include/native/arena.h`, `src/native/arena.cpp`); `PlatformFreestanding`
+      (`include/native/platform_freestanding.h`,
+      `src/native/platform_freestanding.cpp`), the second `Platform`
+      implementation, reaching the kernel through direct Linux x86-64 syscalls
+      (`write`, `read`, `openat`, `close`, `lseek`, `mmap`, `exit_group`) with
+      no libc; and the entry point (`include/native/entry.h`,
+      `src/native/entry.cpp`), which appends the `_start` and the runtime
+      prelude (`jolt_write`, `jolt_exit`) to the same code buffer as the
+      program so every `call` resolves through the emitter's labels, with no
+      relocations and no linker. Verified end to end in
+      `tests/freestanding_test.cpp`: the test emits a program, wraps it in an
+      ELF, writes it to disk, runs it and checks its stdout, exit code and
+      that `ldd` reports no dynamic dependencies.
+    - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
+      collections and functions. **Open architectural question**: the hosted
+      `Value` is reference counted and cycle collected (`gc.cpp`), which cannot
+      live in a no-libc binary; the AOT runtime needs its own boxed value and
+      its own arena-backed objects, sharing *semantics* with `ops.h` but not
+      code. `PlatformFreestanding` currently pulls `operator delete` through
+      `Platform`'s virtual destructor, so linking it into a `-nostdlib` binary
+      needs either a tiny shim or a `-fno-exceptions`-friendly base — to be
+      settled when 7c.1 first links the runtime into a generated binary.
   - **7d** — `jolt build` wired into the CLI.
 - Deferred: per-instruction type annotations for fast paths without dynamic
   dispatch (bridge toward the speculative work in
@@ -456,8 +485,11 @@ previous one.
   x86-64 only). The 7b lowering (`include/native/lower.h`,
   `src/native/lower.cpp`) turns the runtime-free, integer-only opcodes into
   machine code, tested byte-exactly and by execution in `tests/lower_test.cpp`.
-  Still missing: the ELF/freestanding emitter, `_start`, the arena allocator,
-  the `Platform` layer, the boxed `Value` runtime (7c) and `jolt build`.
+  7c.0 adds the freestanding substrate: the static ELF64 and PE32+ emitters,
+  the arena, `PlatformFreestanding` (direct syscalls, no libc) and the
+  `_start`/prelude, exercised end to end (a real generated binary is run) in
+  `tests/freestanding_test.cpp`. Still missing: the boxed `Value` runtime
+  (7c.1), the embedded runtime calls (7c.2/7c.3) and `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -493,7 +525,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module)
 Phase 6.6: ⬜ pending (FFI with C)
-Phase 7: 🔶 in progress (7a and 7b done; 7c, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

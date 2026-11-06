@@ -718,6 +718,34 @@ static void test_setcc_movzx() {
   CodeGen g7;
   g7.movzx(X64Reg::R8, X64Reg::Rax);
   checkBytes("movzx r8, al (REX.R)", g7, "4C0FB6C0");
+
+  // `add rax, imm32` -> REX.W 81 /0 id. `add rax, 8` -> 48 81 C0 08 00 00 00.
+  CodeGen g13;
+  g13.addImm32(X64Reg::Rax, 8);
+  checkBytes("add rax, 8", g13, "4881C008000000");
+
+  // The rm field is masked to three bits, so `add r8, imm32` keeps REX.B and
+  // a clean ModRM: 49 81 C0 08 00 00 00 (not ...C8).
+  CodeGen g14;
+  g14.addImm32(X64Reg::R8, 8);
+  checkBytes("add r8, 8 (ModRM mask)", g14, "4981C008000000");
+
+  // `sub rax, imm32` -> REX.W 81 /5 id.
+  CodeGen g15;
+  g15.subRegImm32(X64Reg::Rax, 16);
+  checkBytes("sub rax, 16", g15, "4881E810000000");
+
+  CodeGen g16;
+  g16.subRegImm32(X64Reg::R15, 16);
+  checkBytes("sub r15, 16 (ModRM mask)", g16, "4981EF10000000");
+
+  // `call rel32` to a label patches the displacement at finalize: the target
+  // sits 5 bytes after the call, so the displacement is 0.
+  CodeGen g17;
+  CodeGen::Label target = g17.newLabel();
+  g17.callLabel(target);
+  g17.bind(target);
+  checkBytes("call label (displacement 0)", g17, "E800000000");
 }
 
 #ifdef CODEGEN_EXEC_TESTS
