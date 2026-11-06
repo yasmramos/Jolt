@@ -63,6 +63,8 @@ std::string opName(Tok op) {
       return "&&";
     case Tok::PipePipe:
       return "||";
+    case Tok::QuestionQuestion:
+      return "??";
     case Tok::Amp:
       return "&";
     case Tok::Pipe:
@@ -392,6 +394,25 @@ TypeRef Compiler::inferExprType(const Expr& expr) const {
     TypeRef global;
     if (lookupGlobalType(variable->name, global)) return global;
     return TypeRef{};
+  }
+  // `a!!` narrows away the nullability of its operand (PHASE 6.5).
+  if (const auto* assertion = std::get_if<NonNullExpr>(&expr.node)) {
+    TypeRef inner = inferExprType(*assertion->operand);
+    inner.nullable = false;
+    return inner;
+  }
+  // `a ?? b`: when `a` is a nullable `T?`, the result is `b`'s type (or a
+  // non-null `T`); otherwise it is `a`'s type unchanged.
+  if (const auto* binary = std::get_if<BinaryExpr>(&expr.node)) {
+    if (binary->op == Tok::QuestionQuestion) {
+      TypeRef left = inferExprType(*binary->lhs);
+      if (left.isPresent() && left.nullable) {
+        TypeRef right = inferExprType(*binary->rhs);
+        if (right.isPresent()) return right;
+        left.nullable = false;
+      }
+      return left;
+    }
   }
   return TypeRef{};  // any other shape: unknown, so no check
 }
@@ -1772,6 +1793,24 @@ int Compiler::compileExpr(const Expr& expr) {
               return left;
             }
 
+            // `a ?? b` (PHASE 6.5): yields `a` unless it is nil, in which case
+            // it evaluates `b`. The test is an explicit `== nil` (not
+            // truthiness) so `0`, `false` and `""` are kept, and the right-hand
+            // side is skipped entirely when `a` is not nil.
+            if (binary.op == Tok::QuestionQuestion) {
+              int left = compileExpr(*binary.lhs);
+              int nilReg = allocReg();
+              emit(OpCode::LOADK, nilReg, addConstant(Value()));
+              int isNil = allocReg();
+              emit(OpCode::EQ, isNil, left, nilReg);
+              int endJump = emitJump(OpCode::JMP_IF_FALSE, isNil);
+              int right = compileExpr(*binary.rhs);
+              emit(OpCode::MOVE, left, right);
+              patchJump(endJump, currentOffset());
+              freeReg(nextReg_ - left - 1);
+              return left;
+            }
+
             if (binary.op == Tok::In) {
               int left = compileExpr(*binary.lhs);
               int right = compileExpr(*binary.rhs);
@@ -1815,9 +1854,35 @@ int Compiler::compileExpr(const Expr& expr) {
           },
           [&](const MemberExpr& member) -> int {
             int object = compileExpr(*member.object);
+            if (!member.safe) {
+              int key = -addString(member.name) - 1;
+              emit(OpCode::GETTABLE, object, object, key);
+              return object;
+            }
+            // `a?.b` (PHASE 6.5): when `a` is nil the member is not looked up
+            // and the result is nil (the register already holds nil). The guard
+            // is an explicit `== nil`, so a non-nil object such as `0` or `""`
+            // is still dereferenced.
+            int nilReg = allocReg();
+            emit(OpCode::LOADK, nilReg, addConstant(Value()));
+            int isNil = allocReg();
+            emit(OpCode::EQ, isNil, object, nilReg);
+            int skip = emitJump(OpCode::JMP_IF_TRUE, isNil);
             int key = -addString(member.name) - 1;
             emit(OpCode::GETTABLE, object, object, key);
+            patchJump(skip, currentOffset());
+            freeReg(nextReg_ - object - 1);
             return object;
+          },
+          [&](const NonNullExpr& assertion) -> int {
+            // `a!!` (PHASE 6.5): the `$nonNull` helper raises when the operand
+            // is nil and returns it otherwise. Lowered as a call, so no opcode
+            // is added to the budget.
+            int operand = compileExpr(*assertion.operand);
+            int result = compileHelperCall("$nonNull", {operand}, expr.line, expr.col);
+            emit(OpCode::MOVE, operand, result);
+            freeReg(nextReg_ - operand - 1);
+            return operand;
           },
           [&](const RangeExpr& range) -> int {
             return compileRange(range, expr.line, expr.col);

@@ -799,6 +799,65 @@ void testTypeMismatchErrors() {
   expectCompileError("let x: integer = 1;\n", "unknown type name");
 }
 
+void testNullCoalesceBytecode() {
+  // PHASE 6.5: `a ?? b` lowers to existing opcodes only (no new opcode).
+  // LOADK a; LOADK nil; EQ isNil, a, nil; JMP_IF_FALSE isNil -> end;
+  // <b>; MOVE a, b; end: ...  The right-hand side is skipped when `a` != nil.
+  Bytecode bc = compileSource("let x = a ?? b;\n");
+
+  bool sawEq = false;
+  bool sawJmpIfFalse = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::EQ) sawEq = true;
+    if (instruction.op == OpCode::JMP_IF_FALSE) sawJmpIfFalse = true;
+  }
+  assert(sawEq && "?? must compare against nil with EQ");
+  assert(sawJmpIfFalse && "?? must short-circuit with JMP_IF_FALSE");
+
+  expectCompiles("let x = nil ?? 1 ?? 2;\n");
+}
+
+void testSafeMemberBytecode() {
+  // `a?.b` lowers to EQ nil + JMP_IF_TRUE + GETTABLE, all existing opcodes.
+  Bytecode bc = compileSource("let x = a?.b;\n");
+  bool sawEq = false;
+  bool sawJmpIfTrue = false;
+  bool sawGetTable = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::EQ) sawEq = true;
+    if (instruction.op == OpCode::JMP_IF_TRUE) sawJmpIfTrue = true;
+    if (instruction.op == OpCode::GETTABLE) sawGetTable = true;
+  }
+  assert(sawEq && "?. must compare the receiver against nil");
+  assert(sawJmpIfTrue && "?. must skip the lookup when the receiver is nil");
+  assert(sawGetTable && "?. must still perform the member lookup otherwise");
+
+  // A plain member access must not add the nil guard.
+  Bytecode plain = compileSource("let x = a.b;\n");
+  bool plainHasEq = false;
+  for (const Instruction& instruction : plain.code) {
+    if (instruction.op == OpCode::EQ) plainHasEq = true;
+  }
+  assert(!plainHasEq && "plain `.` must not emit a nil guard");
+
+  // A safe member access is not an assignment target.
+  expectCompileError("a?.b = 1;\n", "safe member assignment");
+}
+
+void testNonNullBytecode() {
+  // `a!!` lowers to a call to the hidden `$nonNull` helper (no new opcode).
+  Bytecode bc = compileSource("let x = a!!;\n");
+  bool sawGetGlobalNonNull = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::GETGLOBAL) {
+      const Value& name = bc.constants[static_cast<size_t>(instruction.b)];
+      if (name.isStr() && name.asStr() == "$nonNull") sawGetGlobalNonNull = true;
+    }
+  }
+  assert(sawGetGlobalNonNull && "!! must call the $nonNull helper");
+  expectCompiles("let s: string? = \"x\";\nlet t = s!!;\n");
+}
+
 }  // namespace
 
 int main() {
@@ -850,6 +909,9 @@ int main() {
   testTypeAnnotationsAreErased();
   testTypeAnnotationsAccepted();
   testTypeMismatchErrors();
+  testNullCoalesceBytecode();
+  testSafeMemberBytecode();
+  testNonNullBytecode();
 
   std::puts("compiler tests passed");
   return 0;

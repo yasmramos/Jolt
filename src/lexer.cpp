@@ -467,6 +467,8 @@ class Lexer {
       case ';':
         return make(Tok::Semicolon, 1);
       case '?':
+        if (c1 == '.') return make(Tok::QuestionDot, 2);
+        if (c1 == '?') return make(Tok::QuestionQuestion, 2);
         return make(Tok::Question, 1);
       case ':':
         return make(Tok::Colon, 1);
@@ -499,6 +501,7 @@ class Lexer {
         return make(Tok::Eq, 1);
       case '!':
         if (c1 == '=') return make(Tok::BangEq, 2);
+        if (c1 == '!') return make(Tok::BangBang, 2);
         return make(Tok::Bang, 1);
       case '<':
         if (c1 == '=') return make(Tok::LtEq, 2);

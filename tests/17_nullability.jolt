@@ -1,0 +1,77 @@
+// PHASE 6.5: nullability in expressions — `??`, `?.` and `!!`.
+//
+// `??` and `?.` lower to existing opcodes (EQ / JMP_IF_* / GETTABLE / MOVE);
+// `!!` lowers to a call to the hidden `$nonNull` helper. No new opcode is
+// added, so the bytecode stays within the 40-opcode budget (AGENT.md §3).
+
+// --- `??` yields the left side unless it is nil ----------------------------
+let a: string? = nil;
+assertEq(a ?? "fallback", "fallback");
+
+let b: string? = "value";
+assertEq(b ?? "fallback", "value");
+
+// Only nil triggers the fallback: 0, false and "" are kept.
+let zero = 0;
+assertEq(zero ?? 99, 0);
+assertEq(false ?? true, false);
+assertEq("" ?? "x", "");
+let empty: string? = "";
+assertEq(empty ?? "x", "");
+
+// Chained and right-associative use.
+let x: string? = nil;
+let y: string? = nil;
+assertEq(x ?? y ?? "last", "last");
+assertEq(nil ?? nil, nil);
+
+// `??` is not truthiness: a non-nil left side wins even if it is falsy.
+let n: int? = nil;
+assertEq(n ?? 42, 42);
+
+// --- short circuit: the right side is not evaluated when left is not nil ---
+var evaluated = false;
+fn sideEffect() {
+  evaluated = true;
+  return "called";
+}
+let kept: string? = "kept";
+assertEq(kept ?? sideEffect(), "kept");
+assertEq(evaluated, false);
+assertEq(nil ?? sideEffect(), "called");
+assertEq(evaluated, true);
+
+// --- `?.` returns nil when the receiver is nil, else looks up the member ---
+let m: map? = nil;
+assertEq(m?.length, nil);
+
+let m2: map? = {k: 1};
+assertEq(m2?.k, 1);
+assertEq(m2?.missing, nil);  // a missing key on a map is nil
+
+// A non-nil receiver that is falsy (empty string) is still dereferenced.
+let s: string? = "";
+assertEq(s?.length, 0);
+
+// Chained safe access.
+let outer: map? = nil;
+assertEq(outer?.inner?.value, nil);
+
+// --- `!!` asserts non-nil and yields the value otherwise -------------------
+let ok: string? = "here";
+assertEq(ok!!, "here");
+
+let num: int? = 7;
+assertEq(num!! + 1, 8);
+
+// `??` composes with `!!`: assert the left, fall back on the right.
+let maybe: string? = nil;
+assertEq(maybe ?? "d", "d");
+let present: string? = "p";
+assertEq(present!!, "p");
+
+// `??` is folded in a `const` initializer, using the same nil-only rule.
+const folded = nil ?? 5;
+assertEq(folded, 5);
+const keptZero = 0 ?? 9;
+assertEq(keptZero, 0);

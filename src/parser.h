@@ -88,6 +88,7 @@ class Parser {
   ExprPtr parseExpression();
   ExprPtr parseAssignment();
   ExprPtr parseTernary();
+  ExprPtr parseNullCoalesce();
   ExprPtr parseOr();
   ExprPtr parseAnd();
   ExprPtr parseBitOr();

@@ -183,9 +183,12 @@ bool isAssignOp(Tok type) {
 }
 
 bool isAssignable(const ExprPtr& expr) {
+  if (const auto* member = std::get_if<MemberExpr>(&expr->node)) {
+    // `a?.b` is a read-only safe access; it cannot be an assignment target.
+    return !member->safe;
+  }
   return std::holds_alternative<VariableExpr>(expr->node) ||
-         std::holds_alternative<IndexExpr>(expr->node) ||
-         std::holds_alternative<MemberExpr>(expr->node);
+         std::holds_alternative<IndexExpr>(expr->node);
 }
 
 Parser::Parser(std::vector<Token> tokens, std::string where)
@@ -385,6 +388,14 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
         if (!foldConstant(*b.lhs, left, reason)) return false;
         const bool takeRight = (b.op == Tok::AmpAmp) ? left.truthy() : !left.truthy();
         if (!takeRight) { out = left; return true; }
+        return foldConstant(*b.rhs, out, reason);
+      }
+      // `a ?? b`: `a` unless it is nil. Only nil triggers the fallback, so a
+      // falsy-but-non-nil left side (0, false, "") is folded as-is.
+      if (b.op == Tok::QuestionQuestion) {
+        Value left;
+        if (!foldConstant(*b.lhs, left, reason)) return false;
+        if (!left.isNil()) { out = left; return true; }
         return foldConstant(*b.rhs, out, reason);
       }
       Value left;
@@ -856,7 +867,7 @@ ExprPtr Parser::parseAssignment() {
 
 ExprPtr Parser::parseTernary() {
   const Token& start = peek();
-  auto condition = parseOr();
+  auto condition = parseNullCoalesce();
   if (match(Tok::Question)) {
     auto thenExpr = parseAssignment();
     consume(Tok::Colon, "expected ':' in ternary expression");
@@ -865,6 +876,21 @@ ExprPtr Parser::parseTernary() {
                     start.line, start.col);
   }
   return condition;
+}
+
+// `??` (null coalescing, PHASE 6.5). Binds looser than `||` so `a || b ?? c`
+// groups as `(a || b) ?? c`, and left-associatively so `a ?? b ?? c` is
+// `(a ?? b) ?? c`. It is compiled as a short-circuiting binary, exactly like
+// `&&`/`||`, so the right-hand side is evaluated only when the left is nil.
+ExprPtr Parser::parseNullCoalesce() {
+  auto lhs = parseOr();
+  while (match(Tok::QuestionQuestion)) {
+    const Token& op = previous();
+    auto rhs = parseOr();
+    lhs = makeExpr(BinaryExpr{std::move(lhs), op.type, std::move(rhs), op.line, op.col}, op.line,
+                   op.col);
+  }
+  return lhs;
 }
 
 ExprPtr Parser::parseOr() {
@@ -1037,6 +1063,15 @@ ExprPtr Parser::parsePostfix() {
       const Token& dot = previous();
       const Token& name = consume(Tok::Ident, "expected a member name after '.'");
       expr = makeExpr(MemberExpr{std::move(expr), name.lexeme}, dot.line, dot.col);
+    } else if (match(Tok::QuestionDot)) {
+      // `a?.b` (PHASE 6.5): safe member access; yields nil when `a` is nil.
+      const Token& dot = previous();
+      const Token& name = consume(Tok::Ident, "expected a member name after '?.'");
+      expr = makeExpr(MemberExpr{std::move(expr), name.lexeme, true}, dot.line, dot.col);
+    } else if (match(Tok::BangBang)) {
+      // `a!!` (PHASE 6.5): non-null assertion; raises at runtime if `a` is nil.
+      const Token& op = previous();
+      expr = makeExpr(NonNullExpr{std::move(expr)}, op.line, op.col);
     } else {
       break;
     }
