@@ -28,6 +28,10 @@ static Bytecode compileSource(const std::string& source) {
   return Compiler{}.compile(parseSource(source));
 }
 
+static Bytecode compileReplSource(const std::string& source) {
+  return Compiler{}.compileRepl(parseSource(source));
+}
+
 static void testLoadPreservesGlobals() {
   VM vm;
   // Simular el estado previo del REPL: `let x = 42` ya ejecutado.
@@ -57,9 +61,28 @@ static void testClearForgetsGlobals() {
   check(vm.findGlobal("z") == nullptr, "clearGlobals() forgets 'z'");
 }
 
+static void testSwitchReplChunk() {
+  // A `switch` entered at the REPL is compiled with `compileRepl`; the
+  // appended ';' the REPL uses to complete a program must not break the switch
+  // body, so `parseSwitch` skips stray semicolons between clauses.
+  VM vm;
+  vm.run(compileReplSource(
+      "var result = \"\";\n"
+      "switch (2) {\n"
+      "  case 1: { result = \"one\"; }\n"
+      "  case 2: { result = \"two\"; }\n"
+      "  default: { result = \"other\"; }\n"
+      "}\n"
+      ";\n"));
+  const Value* result = vm.findGlobal("result");
+  check(result != nullptr && result->isStr() && result->asStr() == "two",
+        "switch at the REPL runs the matching case");
+}
+
 int main() {
   testLoadPreservesGlobals();
   testClearForgetsGlobals();
+  testSwitchReplChunk();
   if (g_failures != 0) {
     std::printf("%d test(s) failed\n", g_failures);
     return 1;

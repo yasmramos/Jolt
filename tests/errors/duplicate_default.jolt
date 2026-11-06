@@ -1,0 +1,7 @@
+// expect-exit: 65
+// A switch may declare at most one `default` clause.
+
+switch (1) {
+  default: { print("a"); }
+  default: { print("b"); }
+}

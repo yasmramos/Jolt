@@ -71,8 +71,8 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  const  continue  else  false  fn  for  if  import  in  let
-nil    return true  var     while
+break  case   const  continue  default  else  false  fn  for  if  import
+in     let    nil    return    switch   true  var    while
 ```
 
 They cannot be used as names of variables, parameters or unquoted map keys.
@@ -591,6 +591,41 @@ fn name(parameter1, parameter2) {
 ```
 
 They can be declared in the global scope or inside a block. They are hoisted within their block. See section 7.
+
+### 6.10 `switch`
+
+```jolt
+switch (value) {
+  case 1: {
+    print("one");
+  }
+  case 2: case 3: {
+    print("two or three");
+  }
+  case 10..=20: {
+    print("in the teens");
+  }
+  default: {
+    print("something else");
+  }
+}
+```
+
+A `switch` evaluates its subject **exactly once** and compares it against the case labels in order. A label is either a **literal** (`nil`, `true`, `false`, a number or a string, optionally signed as in `-1`), or an **integer range** (`10..20`, `10..=20`). A literal matches by equality; a range matches by membership, exactly like `value in 10..=20`.
+
+The first matching case runs and then control leaves the switch. **There is no fallthrough**: unlike C or Java, the body of the next case does not run after a match, so a forgotten `break` cannot cause a bug. Several labels may share one body (`case 2: case 3:`), and a `default` clause (at most one) runs only when nothing matched; it is optional, so a switch with no match simply does nothing.
+
+The subject may be any expression. Each case body is a block with its own scope, so a `let` declared there stays local. `break` and `continue` inside a switch bind to the enclosing loop (the switch is not a loop), and `return` works as usual inside a case. Because the bytecode is built from the existing `EQ`, `IN` and `JMP` instructions, `switch` adds no opcode.
+
+```jolt
+fn classify(n) {
+  switch (n) {
+    case 0: { return "zero"; }
+    case 1..=9: { return "small"; }
+    default: { return "big"; }
+  }
+}
+```
 
 ---
 
@@ -1170,7 +1205,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No classes, structs, interfaces or inheritance yet. `struct` (data only, no methods) is planned for PHASE 6.5 (1.0). There are no classes or inheritance (and there never will be — maps + closures replace them).
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require` and no lazy/cyclic-import handling; a module is loaded once, eagerly, when the program is compiled.
-- No `switch` yet. `switch` (literals and ranges) is planned for PHASE 6.5 (1.0). No `do`/`while`, `++`, `--`, default parameters or variadic arguments.
+- No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
 - No optional types or nullability yet. `let x: int = 5`, `string?`, `?.`, `??`, `!!` are planned for PHASE 6.5 (1.0).
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.

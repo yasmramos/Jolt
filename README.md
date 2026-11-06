@@ -260,9 +260,9 @@ Current limitations:
 - There are no classes, structs, interfaces or inheritance.
 - There is no `try`/`catch` or exceptions that can be caught from the language.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require` and no lazy/cyclic-import handling.
-- There is no `switch`, `do`/`while`, `++`/`--` or default parameters.
+- There is no `do`/`while`, `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough.
 - Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
-- Braces are mandatory in the bodies of `if`, `while` and `for`.
+- Braces are mandatory in the bodies of `if`, `while`, `for` and `switch`.
 - There is no slicing syntax (`s[1:3]`); use `substr`, `slice`, etc.
 - `upper` and `lower` only transform ASCII letters.
 - The maximum call depth is 2000.

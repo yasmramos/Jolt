@@ -15,6 +15,19 @@ const std::vector<StmtPtr>* blockStatements(const StmtNode& node) {
   return nullptr;
 }
 
+// A `case` label is a literal, an integer range, or a signed numeric literal
+// (`-1`, `+1`). Anything else (a variable, a call) would not be a fixed value
+// to compare the subject against.
+bool isCaseLabel(const ExprPtr& label) {
+  if (std::holds_alternative<LiteralExpr>(label->node) ||
+      std::holds_alternative<RangeExpr>(label->node)) {
+    return true;
+  }
+  const auto* unary = std::get_if<UnaryExpr>(&label->node);
+  return unary != nullptr && (unary->op == Tok::Minus || unary->op == Tok::Plus) &&
+         std::holds_alternative<LiteralExpr>(unary->operand->node);
+}
+
 }  // namespace
 
 // Parse-time resolution of top-level `const` declarations. Runs as a second
@@ -245,6 +258,13 @@ StmtPtr Parser::parseStatement() {
   if (match(Tok::For)) return parseFor();
   if (match(Tok::Return)) return parseReturn();
   if (match(Tok::Import)) return parseImport();
+  if (match(Tok::Switch)) return parseSwitch();
+  if (check(Tok::Case) || check(Tok::Default)) {
+    // Thrown directly, not through `error`, so the message matches the other
+    // "only allowed here" diagnostics without the trailing ", found ...".
+    throw CompileError{"'" + peek().lexeme + "' is only allowed inside a 'switch'", peek().line,
+                       peek().col};
+  }
   if (match(Tok::Break)) {
     consume(Tok::Semicolon, "expected ';' after 'break'");
     return makeStmt(BreakStmt{}, token.line, token.col);
@@ -699,6 +719,69 @@ std::string Parser::parseImportPath() {
     path += advance().lexeme;
   }
   return path;
+}
+
+// Parses a `switch` statement:
+//
+//   switch (subject) {
+//     case 1: { ... }
+//     case 2: case 3: { ... }
+//     case 10..=20: { ... }
+//     default: { ... }
+//   }
+//
+// A case label is a literal (nil, bool, number, string) or an integer range.
+// There is no fallthrough: the body is a block and only the matching case runs.
+StmtPtr Parser::parseSwitch() {
+  const Token& keyword = previous();
+  consume(Tok::LParen, "expected '(' after 'switch'");
+  auto subject = parseExpression();
+  consume(Tok::RParen, "expected ')' after the switch subject");
+  consume(Tok::LBrace, "expected '{' to start the switch body");
+
+  SwitchStmt stmt;
+  stmt.subject = std::move(subject);
+  bool seenDefault = false;
+
+  while (!check(Tok::RBrace)) {
+    if (check(Tok::Eof)) error(peek(), "expected '}' to close the switch body");
+    // A stray ';' between clauses is harmless, as inside a block. This also
+    // keeps a multi-line REPL entry working: the REPL retries a program by
+    // appending ';', which can land right after a case body.
+    if (match(Tok::Semicolon)) continue;
+
+    if (match(Tok::Default)) {
+      if (seenDefault) error(previous(), "duplicate 'default' clause");
+      seenDefault = true;
+      consume(Tok::Colon, "expected ':' after 'default'");
+      stmt.defaultBody = parseBlock();
+      match(Tok::Semicolon);
+      continue;
+    }
+
+    if (!match(Tok::Case)) error(peek(), "expected 'case' or 'default' in the switch body");
+    SwitchCase entry;
+    // One or more labels may share a body: `case 2: case 3: { ... }`.
+    while (true) {
+      auto label = parseExpression();
+      // Only fixed values (literals, signed numeric literals and ranges) are
+      // valid case labels; a variable or a call would not be a fixed value.
+      if (!isCaseLabel(label)) {
+        throw CompileError{"a 'case' label must be a literal or a range", label->line, label->col};
+      }
+      entry.values.push_back(std::move(label));
+      consume(Tok::Colon, "expected ':' after the case label");
+      if (!check(Tok::Case)) break;
+      advance();  // another label for the same body
+    }
+    entry.body = parseBlock();
+    match(Tok::Semicolon);
+    stmt.cases.push_back(std::move(entry));
+  }
+
+  consume(Tok::RBrace, "expected '}' to close the switch body");
+  match(Tok::Semicolon);
+  return makeStmt(std::move(stmt), keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseExpressionStatement() {

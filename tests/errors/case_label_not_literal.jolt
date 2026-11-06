@@ -1,0 +1,7 @@
+// expect-exit: 65
+// A case label must be a literal or a range, not an arbitrary expression.
+
+let x = 1;
+switch (1) {
+  case x: { print("nope"); }
+}
