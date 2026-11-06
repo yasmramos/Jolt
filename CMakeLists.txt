@@ -72,15 +72,19 @@ if(BUILD_TESTING)
 
   # Registers one C++ test. The test file is `tests/<name>.cpp`; it links
   # against `jolt_lib` so it does not repeat the source list.
+  # Run from the repository root so a test can read fixtures by their path
+  # relative to the root (e.g. `tests/modules/util.jolt`).
   function(jolt_add_cpp_test name)
     add_executable(${name} "${CMAKE_CURRENT_SOURCE_DIR}/tests/${name}.cpp")
     target_link_libraries(${name} PRIVATE jolt_lib)
     target_compile_options(${name} PRIVATE ${JOLT_WARNINGS})
-    add_test(NAME ${name} COMMAND ${name})
+    add_test(NAME ${name} COMMAND ${name}
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   endfunction()
 
   # --- C++ tests (one line each) ---
   jolt_add_cpp_test(compiler_test)
+  jolt_add_cpp_test(module_test)
   jolt_add_cpp_test(vm_test)
   jolt_add_cpp_test(repl_test)
   jolt_add_cpp_test(gc_test)

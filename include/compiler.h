@@ -1,6 +1,10 @@
 #pragma once
 
 #include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -9,6 +13,18 @@
 #include "ast.h"
 #include "bytecode.h"
 #include "errors.h"
+
+// One resolved import: a module's compiled body plus the names it exports.
+//
+// `code` is a proto that, when run, evaluates the module's top-level bindings
+// as locals of its own frame and returns a table mapping each public name to
+// its value. Keeping the bindings local to the module frame is what stops a
+// module's internals from leaking into the importing program's globals.
+struct ImportedModule {
+  std::string path;                    // dotted module path, e.g. "std.math"
+  std::shared_ptr<Bytecode> code;      // module body, run once per program
+  std::vector<std::string> symbols;    // public names, in declaration order
+};
 
 // AST to bytecode compiler (PHASE 2-5).
 //
@@ -30,6 +46,8 @@
 //     locals (upvalues resolved at compile time)
 //   - arrays, maps, ranges, interpolation, indexing, members and `in`
 //   - `for-in` over arrays, strings, maps and ranges
+//   - Java-style `import` (qualified, wildcard, alias and selective forms)
+//     with compile-time conflict detection
 class Compiler {
  public:
   Compiler() = default;
@@ -46,6 +64,23 @@ class Compiler {
   // ends with HALT like a regular program. Top-level declarations are hoisted
   // exactly as in `compile`.
   Bytecode compileRepl(const StmtPtr& program);
+
+  // Provides the module loader used to resolve `import` declarations. The
+  // callback receives a dotted module path and the position of the import
+  // declaration, and returns the module's parsed program, or throws
+  // `CompileError` ("module 'X' not found") when it cannot be resolved. The
+  // compiler stays free of any file-system or resolver dependency, which keeps
+  // the toolchain boundary (AGENT.md §2) intact; the CLI injects the loader,
+  // and tests inject their own. Without a loader, `import` reports that the
+  // module cannot be resolved.
+  using ImportLoader = std::function<StmtPtr(const std::string& path, int line, int col)>;
+  void setImportLoader(ImportLoader loader) { importLoader_ = std::move(loader); }
+
+  // Compiles a module body into a standalone proto: its top-level bindings are
+  // locals of the proto's frame (not globals) and the proto returns a table of
+  // its public names. `path` is the dotted module path. Used by the module
+  // loader when it compiles an imported file.
+  ImportedModule importModule(const StmtPtr& program, const std::string& path);
 
  private:
   struct LocalVar {
@@ -153,8 +188,11 @@ class Compiler {
   void patchJump(int index, int target);
   int currentOffset() const;
 
-  // Scopes and variables.
-  bool inGlobalScope() const { return !inFunction_ && scopes_.size() <= 1; }
+  // Scopes and variables. A module body is compiled at scope depth 0 but its
+  // bindings must stay local to the module frame, so it is not a global scope.
+  bool inGlobalScope() const {
+    return !inFunction_ && !moduleBody_ && scopes_.size() <= 1;
+  }
   void pushScope();
   void popScope();
   int allocLocalSlot();
@@ -205,6 +243,59 @@ class Compiler {
   // index in `bc_.children`. The parent compiler state is saved and restored.
   int compileFunctionProto(const std::string& name, const std::vector<std::string>& params,
                            const StmtPtr& body, int line, int col);
+
+  // Compiles a module's top-level statements into `bc_` (bindings stay
+  // frame-local) and returns its public surface as a table. Called by
+  // `importModule` while `moduleBody_` is set.
+  void compileModuleBody(const StmtPtr& program);
+
+  // Resolves an import path once per compiler and caches the result, so two
+  // imports of the same module share one proto and one symbols list.
+  const ImportedModule& loadModule(const std::string& path, int line, int col);
+
+  // Compiles an `import` declaration: loads the module, then binds its names
+  // according to the import mode, detecting wildcard conflicts.
+  void compileImport(const ImportStmt& import, int line, int col);
+
+  // Emits (once) the code that runs a module body and stores its exported
+  // table in the hidden global `$module$<path>`. Later imports of the same
+  // module reuse that global instead of running the body again.
+  void materializeModule(const ImportedModule& module, int line, int col);
+
+  // Compiles `import <path>;` / `import <path> as <alias>;`. The module table
+  // becomes a real runtime value reachable through the dotted path (`std.math`
+  // or the alias `m`), so qualified access uses the ordinary member chain.
+  void compileQualifiedImport(const ImportedModule& module, const std::string& boundName,
+                              int line, int col);
+
+  // Compiles a wildcard or selective import, binding each imported name to a
+  // global. Reports an ambiguity when two `.*` imports export the same name.
+  void compileNameImport(const ImportedModule& module, const std::vector<std::string>& names,
+                         int line, int col);
+
+  // Creates the namespace prefix `prefix` (e.g. "std" or "std.math") as a
+  // global map if it was not created by an earlier import, and returns the
+  // register holding the deepest existing map on the path.
+  int ensureNamespace(const std::string& prefix, int line, int col);
+
+  ImportLoader importLoader_;
+  std::map<std::string, ImportedModule> loadedModules_;
+  // Set while compiling a module body: its top-level declarations become
+  // frame locals and are exported instead of becoming globals.
+  bool moduleBody_ = false;
+  // Module paths whose exported table has already been stored in its hidden
+  // global, so the module body runs at most once per program.
+  std::set<std::string> materializedModules_;
+  // Namespace prefixes already created as runtime maps ("std", "std.math"),
+  // so repeated imports reuse the same table instead of replacing it.
+  std::set<std::string> namespaces_;
+  // Bound qualified names ("std.math", or the alias "m"), so a repeated
+  // import of the same module does not bind twice.
+  std::set<std::string> boundImports_;
+  // Unqualified names already introduced by an `import ... .*`, mapped to the
+  // module that brought them in, so a second wildcard exporting the same name
+  // is reported as ambiguous.
+  std::unordered_map<std::string, std::string> wildcardBindings_;
 };
 
 // Shortcut equivalent to `Compiler{}.compile(program)`.

@@ -1,0 +1,7 @@
+// expect-exit: 65
+// Two wildcard imports export `sqrt`, so the compiler must report the exact
+// ambiguity error instead of silently picking one.
+
+import mods.a.*;
+import mods.b.*;
+print(sqrt(4));

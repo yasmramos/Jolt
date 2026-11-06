@@ -47,6 +47,7 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `parser.cpp` | `Token[]` | `Node*` (AST) | ✅ |
 | `bytecode.cpp` | `Bytecode` | basic operations | ✅ |
 | `compiler.cpp` | `Node*` | `Bytecode*` | ✅ |
+| `module_resolver.cpp` | dotted module path | source file path | ✅ |
 | `vm.cpp` | `Bytecode*` | execution | ✅ |
 | `main.cpp` | CLI | full pipeline | ⬜ (VM as dev engine, PHASE 4) |
 | `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
@@ -325,7 +326,7 @@ previous one.
 - Retire the temporary `PRINT` opcode: from 6c/6e every `print` arity compiles
   to `CALL`, and the opcode is deleted at the 6f gate (§3.6)
 - Already in the tree: the shared `Value` and lexical `Env` (`value.cpp`, `env.cpp`) plus the cycle collector in `gc.cpp`. Slice 6a is done: top-level `fn` declarations, parameters, `return`, recursion and general calls compile and run on the VM. Slice 6b is done: `GETUPVAL`/`SETUPVAL`, upvalue descriptors, lambdas and closures that escape their defining scope (verified by `examples/closures.jolt` and `tests/09_lambdas.jolt`). The compiler still rejects collections and `for-in` with a `(Phase 6)` message; those land in 6c.
-- Memory in the VM: closures that capture each other's variables form cycles through `Cell`s, which reference counting cannot free. A `Cell` registers with the cycle collector when a closure captures it, `Function`s report their upvalue cells to it, and the VM runs `gcCollectIfNeeded()` at `CLOSURE` (the place where such cycles are created). Regression tests: `testCapturedCellsAreNotRetainedByTheVM` and `testClosureCyclesAreCollected` in `tests/vm_test.cpp`; build it with `-DJOLT_GC_STRESS` to collect at every safe point.
+- Memory in the VM: closures that capture each other's variables, and tables that contain themselves (directly or through a closure stored in them), form cycles that reference counting cannot free. A `Cell` registers with the cycle collector when a closure captures it, and `Function` must report its `upvalues` (the captured cells) as well as `capturedGcNodes` from `visit`; a missing edge makes every cycle through a cell immortal. The VM runs `gcCollectIfNeeded()` at `CLOSURE` and `NEWTABLE`, the instructions that create the objects cycles are made of, so a program that never creates a closure is still collected. Regression tests: `testCapturedCellsAreNotRetainedByTheVM`, `testClosureCyclesAreCollected`, `testTableCyclesAreCollectedWithoutClosures` and `testClosureStoredInTheTableItCapturesIsCollected` in `tests/vm_test.cpp`; build it with `-DJOLT_GC_STRESS` to collect at every safe point.
 - **6f done**: `PRINT` retired. Every `print` arity compiles to `CALL`. The
   opcode count is now 39/40.
 
@@ -335,7 +336,10 @@ previous one.
 - Local type inference: `let x = 5` (x: int).
 - Nullability: `string?`, `?.`, `??`, `!!`.
 - `defer`.
-- **`require`** (modules, Lua-style).
+- **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
+  `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
+  conflict detection for `.*` and a reserved `std.` prefix. `require`
+  (Lua-style) is not used.
 - **`struct`** (data only, no methods).
 - `switch` simple (literals and ranges).
 - **`native fn`** for internal FFI (stdlib in Jolt).
@@ -426,7 +430,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: ⬜ pending (types, nullability, `require`, `struct`, `switch`, `native fn`)
+Phase 6.5: 🔶 in progress (Java-style `import` done; types, nullability, `struct`, `switch`, `native fn` pending)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

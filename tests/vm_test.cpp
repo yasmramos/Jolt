@@ -1101,6 +1101,63 @@ void testClosureCyclesAreCollected() {
   assert(gcTrackedCount() <= before + 2);
 }
 
+void testTableCyclesAreCollectedWithoutClosures() {
+  TEST_SCOPE();
+  // A table that contains itself is a cycle reference counting cannot free. No
+  // closure is created here, so nothing but the tables themselves may trigger
+  // the collector.
+  VM vm;
+  gcCollect();
+  const std::size_t before = gcTrackedCount();
+  Bytecode bytecode = compileSource(R"JOLT(
+fn make(i) {
+  let m = {};
+  m.me = m;
+  let a = [0];
+  a[0] = a;
+  return i;
+}
+var total = 0;
+var k = 0;
+while (k < 30000) { total += make(k); k += 1; }
+)JOLT");
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "total").asInt() == 449985000);
+  // 60000 cyclic tables were created; the collector must have run meanwhile.
+  assert(gcTrackedCount() < before + 20000);
+  gcCollect();
+  assert(gcTrackedCount() <= before + 2);
+}
+
+void testClosureStoredInTheTableItCapturesIsCollected() {
+  TEST_SCOPE();
+  // map -> closure -> captured cell -> map, and the same through an array. The
+  // collector has to follow a function's captured cells to see these cycles.
+  VM vm;
+  gcCollect();
+  const std::size_t before = gcTrackedCount();
+  Bytecode bytecode = compileSource(R"JOLT(
+fn make(i) {
+  let m = {};
+  m.cb = () => m;
+  let xs = [0];
+  xs[0] = () => xs;
+  return i;
+}
+var total = 0;
+var k = 0;
+while (k < 10000) { total += make(k); k += 1; }
+)JOLT");
+  runOrFail(vm, bytecode);
+
+  assert(requireGlobal(vm, "total").asInt() == 49995000);
+  // 60000 objects were left in cycles (table, closure and cell, twice).
+  assert(gcTrackedCount() < before + 20000);
+  gcCollect();
+  assert(gcTrackedCount() <= before + 2);
+}
+
 void testNestedClosureThroughTwoLevels() {
   TEST_SCOPE();
   // An inner lambda resolves an outer-local via the parent's upvalue list
@@ -1239,6 +1296,8 @@ int main() {
   testCapturedLocalsSurviveFrameExit();
   testCapturedCellsAreNotRetainedByTheVM();
   testClosureCyclesAreCollected();
+  testTableCyclesAreCollectedWithoutClosures();
+  testClosureStoredInTheTableItCapturesIsCollected();
   testNestedClosureThroughTwoLevels();
   testUpvalueIndexOutOfRangeFailsCleanly();
   testClosureWriteBackIntoEnclosingLocal();

@@ -244,6 +244,7 @@ StmtPtr Parser::parseStatement() {
   if (match(Tok::While)) return parseWhile();
   if (match(Tok::For)) return parseFor();
   if (match(Tok::Return)) return parseReturn();
+  if (match(Tok::Import)) return parseImport();
   if (match(Tok::Break)) {
     consume(Tok::Semicolon, "expected ';' after 'break'");
     return makeStmt(BreakStmt{}, token.line, token.col);
@@ -613,14 +614,91 @@ StmtPtr Parser::parseReturn() {
 
 StmtPtr Parser::parseBlock() {
   const Token& open = consume(Tok::LBrace, "expected '{'");
+  ++nestingDepth_;
   std::vector<StmtPtr> statements;
   while (!check(Tok::RBrace)) {
     if (check(Tok::Eof)) error(peek(), "expected '}' to close the block");
     if (match(Tok::Semicolon)) continue;
     statements.push_back(parseStatement());
   }
+  --nestingDepth_;
   consume(Tok::RBrace, "expected '}' to close the block");
   return makeStmt(BlockStmt{std::move(statements)}, open.line, open.col);
+}
+
+// Parses a Java-style import declaration. The grammar is:
+//
+//   import <dotted.path>;                 // qualified access
+//   import <dotted.path>.*;               // wildcard: names enter the scope
+//   import <dotted.path> as <alias>;      // qualified access under `alias`
+//   import { a, b } from <dotted.path>;   // selective: only those names
+//
+// `import` is a top-level declaration: a nested import (inside a block or a
+// function body) is a compile error, since the imported names must be visible
+// to the whole module.
+StmtPtr Parser::parseImport() {
+  const Token& keyword = previous();
+  if (nestingDepth_ > 0) {
+    // Thrown directly, not through `error`, so the message matches the other
+    // "only allowed here" diagnostics without the trailing ", found ...".
+    throw CompileError{"'import' is only allowed at the top level of a module", keyword.line,
+                       keyword.col};
+  }
+
+  ImportStmt stmt;
+
+  if (match(Tok::LBrace)) {
+    // Selective: `import { sqrt, pow } from std.math;`
+    stmt.mode = ImportStmt::Mode::Selective;
+    if (!check(Tok::RBrace)) {
+      while (true) {
+        if (check(Tok::RBrace)) break;
+        const Token& name = consume(Tok::Ident, "expected an imported name");
+        stmt.names.push_back(name.lexeme);
+        if (!match(Tok::Comma)) break;
+      }
+    }
+    consume(Tok::RBrace, "expected '}' to close the import list");
+    if (!check(Tok::Ident) || peek().lexeme != "from") {
+      error(peek(), "expected 'from' after the imported names");
+    }
+    advance();
+    stmt.module = parseImportPath();
+    consume(Tok::Semicolon, "expected ';' after the import declaration");
+    return makeStmt(std::move(stmt), keyword.line, keyword.col);
+  }
+
+  stmt.module = parseImportPath();
+
+  if (match(Tok::Dot)) {
+    // Wildcard: the only valid continuation after the dot is `*`.
+    consume(Tok::Star, "expected '*' after '.' in a wildcard import");
+    stmt.mode = ImportStmt::Mode::Wildcard;
+  } else if (check(Tok::Ident) && peek().lexeme == "as") {
+    advance();
+    stmt.mode = ImportStmt::Mode::Qualified;
+    const Token& alias = consume(Tok::Ident, "expected an alias name after 'as'");
+    stmt.alias = alias.lexeme;
+  } else {
+    stmt.mode = ImportStmt::Mode::Qualified;
+  }
+
+  consume(Tok::Semicolon, "expected ';' after the import declaration");
+  return makeStmt(std::move(stmt), keyword.line, keyword.col);
+}
+
+std::string Parser::parseImportPath() {
+  const Token& first = consume(Tok::Ident, "expected a module name");
+  std::string path = first.lexeme;
+  while (check(Tok::Dot)) {
+    // A dot only continues the path when an identifier follows; otherwise the
+    // dot belongs to the caller (the wildcard `.*` case).
+    if (!peek(1).is(Tok::Ident)) break;
+    advance();  // '.'
+    path += '.';
+    path += advance().lexeme;
+  }
+  return path;
 }
 
 StmtPtr Parser::parseExpressionStatement() {

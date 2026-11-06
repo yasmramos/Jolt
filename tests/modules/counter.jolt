@@ -1,0 +1,9 @@
+// Test fixture: proves a module body runs exactly once even when it is
+// imported several times. The main program declares `runs` as a global and
+// this module increments it at load time.
+
+runs = runs + 1;
+
+fn bump() {
+  return runs;
+}

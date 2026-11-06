@@ -1,0 +1,25 @@
+// Modules and the four Java-style import forms.
+//
+// The fixture lives at examples/modules/geometry.jolt, so the dotted path
+// `modules.geometry` resolves relative to this file.
+
+// 1. Qualified: the module is bound under its path.
+import modules.geometry;
+print("area: ${modules.geometry.area(3, 4)}");
+
+// 2. Alias: bound under a shorter name.
+import modules.geometry as geo;
+print("perimeter: ${geo.perimeter(3, 4)}");
+
+// 3. Selective: only the listed names enter the scope.
+import { area } from modules.geometry;
+print("area again: ${area(5, 2)}");
+
+// 4. Wildcard: every public name enters the scope.
+import modules.geometry.*;
+print("perimeter again: ${perimeter(5, 2)}");
+
+// The standard library is reached through the reserved `std.` prefix.
+import std.math;
+print("sqrt(2): ${std.math.sqrt(2)}");
+print("PI: ${std.math.PI}");

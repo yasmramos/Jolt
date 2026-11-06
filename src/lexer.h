@@ -25,6 +25,7 @@ enum class Tok {
   Break,
   Continue,
   Return,
+  Import,
   True,
   False,
   Nil,

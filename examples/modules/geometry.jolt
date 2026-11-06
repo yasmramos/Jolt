@@ -1,0 +1,14 @@
+// A user module. Its public names are the top-level declarations that do not
+// start with `_`; `_diagonal` is private.
+
+fn area(w, h) {
+  return w * h;
+}
+
+fn perimeter(w, h) {
+  return 2 * (w + h);
+}
+
+fn _diagonal(w, h) {
+  return (w ** 2 + h ** 2) ** 0.5;
+}

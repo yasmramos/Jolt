@@ -587,6 +587,9 @@ Value VM::runFrames(std::size_t stopDepth) {
       }
 
       case OpCode::NEWTABLE: {
+        // A safe point, like CLOSURE: tables are what cycles are made of, and a
+        // program that only builds self-referencing tables creates no closure.
+        gcCollectIfNeeded();
         if (instruction.c == 0) {
           // `b` is a capacity hint, not the number of elements. The array
           // starts empty; `SETTABLE` with an index equal to the current

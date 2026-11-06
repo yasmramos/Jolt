@@ -220,8 +220,26 @@ struct ReturnStmt {
   ExprPtr value;  // may be null
 };
 
+// `import std.math;` / `import std.math.*;` / `import std.math as m;` /
+// `import { sqrt, pow } from std.math;`.
+//
+// The declaration always names a module with its dotted path (`std.math`).
+// `mode` selects how its public names enter the current scope:
+//   Qualified -> bound under the path (`std.math.sqrt`) or under `alias`;
+//   Wildcard  -> every public name enters the scope unqualified (`sqrt`);
+//   Selective -> only `names` enter the scope unqualified (`sqrt`, `pow`).
+struct ImportStmt {
+  enum class Mode { Qualified, Wildcard, Selective };
+
+  std::string module;        // dotted path, e.g. "std.math"
+  Mode mode = Mode::Qualified;
+  std::string alias;         // Qualified only: bound under this name instead
+  std::vector<std::string> names;  // Selective only: the selected names
+};
+
 using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, BlockStmt, IfStmt, WhileStmt,
-                              ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt>;
+                              ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
+                              ImportStmt>;
 
 struct Stmt {
   StmtNode node;

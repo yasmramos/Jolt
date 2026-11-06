@@ -24,6 +24,15 @@ inline bool startsWith(const std::string& s, const std::string& prefix) {
   return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
 
+// Directory part of a path ("a/b/c.jolt" -> "a/b", "c.jolt" -> "."). Used to
+// resolve an import relative to the file that declares it.
+inline std::string directoryOf(const std::string& path) {
+  size_t slash = path.find_last_of("/\\");
+  if (slash == std::string::npos) return ".";
+  if (slash == 0) return "/";
+  return path.substr(0, slash);
+}
+
 inline bool readSourceFile(const std::string& path, std::string& out) {
   std::ifstream file(path, std::ios::binary);
   if (!file) return false;
