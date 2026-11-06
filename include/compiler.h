@@ -66,6 +66,23 @@ class Compiler {
   // exactly as in `compile`.
   Bytecode compileRepl(const StmtPtr& program);
 
+  // Forgets the definitions carried from one compilation to the next: global
+  // immutability and types, `struct` shapes, native signatures, and the
+  // imported modules and namespaces they brought in. `compile` resets the
+  // session automatically, so a file (and `:load`) always starts clean. The
+  // REPL keeps it across entries and clears it on `:clear`, so its behaviour
+  // matches one accumulating program instead of a sequence of unrelated ones.
+  void clearSession();
+
+  // The `struct` names declared so far in the session. The REPL hands them to
+  // the next entry's parser (see Parser::seedStructNames) so a literal or an
+  // annotation written after the declaration is still recognized.
+  std::unordered_set<std::string> structNames() const {
+    std::unordered_set<std::string> names;
+    for (const auto& entry : structDefs_) names.insert(entry.first);
+    return names;
+  }
+
   // Provides the module loader used to resolve `import` declarations. The
   // callback receives a dotted module path and the position of the import
   // declaration, and returns the module's parsed program, or throws
@@ -350,6 +367,11 @@ class Compiler {
   void emitDeferredBlocks(size_t minDepth);
 
   void resetChunk(const std::string& name = "<main>");
+
+  // The body of `compileRepl`, split out so the public wrapper can restore the
+  // session state when the entry throws (a definition is committed only when
+  // its entry compiles).
+  Bytecode compileReplEntry(const StmtPtr& program);
 
   // Compiles `body` as a child proto of the chunk being built and returns its
   // index in `bc_.children`. The parent compiler state is saved and restored.
