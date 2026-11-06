@@ -1628,6 +1628,8 @@ A dotted path `a.b.c` maps to the file `a/b/c.jolt`, looked up in this order:
 | `std.*` | the standard library directory (`std/math.jolt`). `std.` is reserved: a user module under that prefix is a compile error. |
 | anything else | the project directory (the directory of the file being compiled), then the installed packages (`$JOLT_PACKAGES`, or `$HOME/.jolt/packages`). |
 
+The standard library directory is found by looking in the working directory, then walking up from the running executable's directory (so `std/` is found whether `jolt` sits in the source tree, in `build/`, or in an install prefix), then `../share/jolt/std` next to the binary. `$JOLT_STDLIB` overrides the search. `cmake --install` ships `std/` to `share/jolt/std`, so an installed `jolt` resolves `import std.math` from any working directory.
+
 A path that resolves nowhere is a compile error: `module 'X' not found`.
 
 Nested imports (a module that imports another module) resolve from the same project root. A module that imports itself, directly or through a chain (`a -> b -> a`), is a compile error: `cyclic import detected: a -> b -> a`.

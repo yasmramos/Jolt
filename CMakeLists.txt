@@ -48,6 +48,12 @@ target_compile_options(jolt PRIVATE ${JOLT_WARNINGS})
 
 install(TARGETS jolt RUNTIME DESTINATION bin)
 
+# The standard library ships next to the binary: `standardLibraryDir` looks for
+# `../share/jolt/std` relative to the executable, so `import std.math` resolves
+# after `make install` and not only when running from the source tree.
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/std" DESTINATION share/jolt
+  FILES_MATCHING PATTERN "*.jolt")
+
 # --------------------------------------------------------------------------- tests
 include(CTest)
 
@@ -105,6 +111,14 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
       -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_compiler_boundary.cmake")
+
+  # --- Installed layout: `std/` ships with the binary and resolves ---
+  add_test(NAME install_stdlib
+    COMMAND ${CMAKE_COMMAND}
+      "-DJOLT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DJOLT_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DJOLT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/21_std_math.jolt"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_stdlib.cmake")
 
   # --- .jolt script tests (auto-detected) ---
   file(GLOB jolt_tests CONFIGURE_DEPENDS

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -9,6 +10,8 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "ast.h"
@@ -46,6 +49,44 @@ std::string joinPath(const std::string &dir, const std::string &relative) {
   return dir + "/" + relative;
 }
 
+// Absolute path of the running executable, so `standardLibraryDir` can locate
+// the shipped `std/` even when `jolt` was invoked through `PATH` and `argv[0]`
+// has no directory part. Falls back to `argv0` when it cannot be determined.
+std::string executablePath(const std::string &argv0) {
+  if (argv0.find('/') != std::string::npos ||
+      argv0.find('\\') != std::string::npos) {
+    return argv0;
+  }
+#ifdef _WIN32
+  char buffer[MAX_PATH];
+  DWORD n = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+  if (n > 0 && n < MAX_PATH) return std::string(buffer, n);
+#elif defined(__linux__)
+  char buffer[4096];
+  ssize_t n = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+  if (n > 0) return std::string(buffer, static_cast<size_t>(n));
+#endif
+  // Last resort: search `PATH` for the bare name.
+  if (const char *path = std::getenv("PATH")) {
+    std::string dirs(path);
+    size_t start = 0;
+    while (start <= dirs.size()) {
+      size_t end = dirs.find(':', start);
+      std::string dir = dirs.substr(start, end == std::string::npos
+                                               ? std::string::npos
+                                               : end - start);
+      if (!dir.empty()) {
+        std::string candidate = joinPath(dir, argv0);
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) return candidate;
+      }
+      if (end == std::string::npos) break;
+      start = end + 1;
+    }
+  }
+  return argv0;
+}
+
 // Directory of the standard library shipped with the toolchain. `std.*`
 // imports resolve here (see AGENT.md §18: `std.` is reserved).
 //
@@ -66,14 +107,14 @@ std::string standardLibraryDir(const std::string &argv0) {
 
   if (hasStd("std")) return "std";
 
-  std::string dir = directoryOf(argv0);
+  std::string dir = directoryOf(executablePath(argv0));
   for (int depth = 0; depth < 4; ++depth) {
     std::string candidate = joinPath(dir, "std");
     if (hasStd(candidate)) return candidate;
     dir = joinPath(dir, "..");
   }
 
-  std::string installed = joinPath(directoryOf(argv0), "../share/jolt/std");
+  std::string installed = joinPath(directoryOf(executablePath(argv0)), "../share/jolt/std");
   if (hasStd(installed)) return installed;
 
   return "std";  // Nothing found: imports report "module not found".
