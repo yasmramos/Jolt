@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A safe member access (`a?.b`) is read-only and cannot be an assignment target.
+let m: map? = {a: 1};
+m?.a = 2;

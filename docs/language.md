@@ -323,8 +323,39 @@ let maybe: string? = nil;   // ok
 let name: string = nil;     // compile error
 ```
 
-Nullability in expressions (`?.`, `??`, `!!`) is not implemented yet; see
-[Known limitations](#16-known-limitations).
+**Null-safe expressions.** Three operators work on nullable values:
+
+| Operator | Form | Result |
+| --- | --- | --- |
+| Null coalescing | `a ?? b` | `a` unless it is `nil`, in which case `b` |
+| Safe access | `a?.b` | `nil` when `a` is `nil`, otherwise `a.b` |
+| Non-null assertion | `a!!` | `a`, or a runtime error when `a` is `nil` |
+
+```jolt
+let a: string? = nil;
+print(a ?? "default");   // "default"
+let b: string? = "hi";
+print(b ?? "default");   // "hi"
+
+let m: map? = nil;
+print(m?.length);        // nil
+let m2: map? = {k: 1};
+print(m2?.k);            // 1
+
+let s: string? = "ok";
+print(s!!);              // "ok"
+let t: string? = nil;
+print(t!!);              // runtime error
+```
+
+Only `nil` triggers the `??` fallback and the `?.` guard: `0`, `false` and `""`
+are kept, so this is not truthiness. `??` short-circuits, so its right-hand side
+is evaluated only when the left is `nil`. `a?.b` is read-only and cannot be an
+assignment target.
+
+These operators add no opcode: `??` and `?.` lower to `EQ`/`JMP_IF_*`/`GETTABLE`
+and `!!` to a call to a hidden helper, so the bytecode budget is unchanged
+(AGENT.md §3).
 
 ---
 
@@ -336,7 +367,7 @@ From highest to lowest precedence:
 
 | Precedence | Operators | Associativity |
 | --- | --- | --- |
-| 1 | `()` `[]` `.` | left |
+| 1 | `()` `[]` `.` `?.` `!!` | left |
 | 2 | `**` | right |
 | 3 | `!` `-` `+` `~` (unary) | right |
 | 4 | `*` `/` `%` | left |
@@ -350,8 +381,9 @@ From highest to lowest precedence:
 | 12 | `\|` | left |
 | 13 | `&&` | left |
 | 14 | `\|\|` | left |
-| 15 | `?:` | right |
-| 16 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
+| 15 | `??` | left |
+| 16 | `?:` | right |
+| 17 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
 
 Notes:
 
@@ -359,6 +391,9 @@ Notes:
 - Unary minus has lower precedence than `**`: `-2 ** 2` is `-(2 ** 2) = -4`.
 - Ranges have higher precedence than shifts and comparisons: `2 in 1..5` is equivalent to `2 in (1..5)`.
 - Comparisons do not chain: `1 < 2 < 3` tries to compare a boolean with an integer and produces an error.
+- `??` binds looser than `||`: `a || b ?? c` groups as `(a || b) ?? c`.
+- `!!` is postfix and binds tightest, next to member access: `a?.b!!` asserts on the result of the access.
+- Because `!!` is a single token, prefix double negation is not available; write `!(!x)` where a double negation is needed.
 
 ### 5.2 Arithmetic
 
@@ -474,6 +509,32 @@ Only the chosen branch is evaluated. It can be nested:
 ```jolt
 let size = n > 100 ? "large" : n > 10 ? "medium" : "small";
 ```
+
+### 5.8.1 Null-safe operators
+
+| Operator | Form | Result |
+| --- | --- | --- |
+| Null coalescing | `a ?? b` | `a` unless it is `nil`, in which case `b` |
+| Safe access | `a?.b` | `nil` when `a` is `nil`, otherwise `a.b` |
+| Non-null assertion | `a!!` | `a`, or a runtime error when `a` is `nil` |
+
+```jolt
+let name: string? = nil;
+print(name ?? "anonymous");   // "anonymous"
+
+let m: map? = {k: 1};
+print(m?.k);                  // 1
+let empty: map? = nil;
+print(empty?.k);              // nil
+
+let s: string? = "ok";
+print(s!!);                   // "ok"
+```
+
+Only `nil` triggers the fallback and the guard, so `0`, `false` and `""` are
+kept: these operators are not truthiness. `??` short-circuits (its right-hand
+side is evaluated only when the left is `nil`), and `a?.b` is read-only. See
+[4.6 Type annotations](#46-type-annotations) for the full rules.
 
 ### 5.9 Assignment
 
@@ -1301,7 +1362,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require` and no lazy/cyclic-import handling; a module is loaded once, eagerly, when the program is compiled.
 - No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
-- Optional types and nullability are partially implemented (PHASE 6.5). Type annotations (`let x: int = 5`), local inference and the nullable `T?` annotation are checked at compile time. Nullability in expressions (`?.`, `??`, `!!`) is not implemented yet.
+- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` and `native fn` are still pending for PHASE 6.5.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).

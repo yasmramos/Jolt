@@ -149,6 +149,16 @@ struct IndexExpr {
 struct MemberExpr {
   ExprPtr object;
   std::string name;
+  // `a?.b` (safe navigation, PHASE 6.5): when `object` is nil the whole
+  // expression yields nil instead of raising "has no member". Plain `a.b`
+  // leaves this false.
+  bool safe = false;
+};
+
+// `a!!` (PHASE 6.5): asserts the operand is not nil and yields it unchanged.
+// A nil operand raises a runtime error at the position of the operator.
+struct NonNullExpr {
+  ExprPtr operand;
 };
 
 struct RangeExpr {
@@ -175,7 +185,7 @@ struct LambdaExpr {
 using ExprNode =
     std::variant<LiteralExpr, InterpExpr, VariableExpr, ArrayExpr, MapExpr, UnaryExpr,
                  BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr, MemberExpr,
-                 RangeExpr, LambdaExpr>;
+                 NonNullExpr, RangeExpr, LambdaExpr>;
 
 struct Expr {
   // Position convention: every Expr/Stmt carries the line/col of the token
