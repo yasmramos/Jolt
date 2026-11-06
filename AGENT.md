@@ -55,7 +55,7 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
 | `native/elf.cpp` | ELF structures | ELF bytes | ⬜ PHASE 7c |
-| `native/lower.cpp` | bytecode | x86-64 (via AsmJIT) | ⬜ PHASE 7b |
+| `native/lower.cpp` | bytecode | x86-64 | 🔶 PHASE 7b |
 
 ### Toolchain binaries and the compiler boundary
 
@@ -429,10 +429,18 @@ previous one.
 - Subslices:
   - **7a** — "hello world" spike: hand-written `_start` + `write` syscall →
     static freestanding ELF → `./hello` runs, no libc.
-  - **7b** — lowering of opcodes that need no runtime (int/float arithmetic,
-    jumps, comparisons).
+  - **7b** — lowering of the opcodes that need no runtime, integer-only:
+    `LOADK` (int/bool), `MOVE`, `ADD`/`SUB`/`MUL`, `BAND`/`BOR`/`BXOR`,
+    `UNOP`, `EQ`–`GTE`, `JMP`, `JMP_IF_FALSE`, `JMP_IF_TRUE` and `HALT`.
+    R0–R11 map to x86-64 registers (r15 is the scratch); comparisons and
+    `!x` take three instructions (`cmp`/`test` + `setcc` + `movzx`) because
+    x86-64 cannot materialize a full-width 0/1 in one instruction — the
+    documented exception to the 1:1/1:2 budget. Floats need value tags and
+    move to 7c; `SHL`/`SHR` need `cl` (R1) and would clobber the window;
+    `DIV`/`MOD`/`POW` need the error path and libm.
   - **7c** — freestanding embedded runtime calls (strings, the `print`
-    builtin, collections on top of the custom allocator).
+    builtin, collections on top of the custom allocator) and the boxed
+    `Value` representation that unlocks floats and the rest of the opcodes.
   - **7d** — `jolt build` wired into the CLI.
 - Deferred: per-instruction type annotations for fast paths without dynamic
   dispatch (bridge toward the speculative work in
@@ -442,11 +450,14 @@ previous one.
 - **In the tree now**: the `Target` descriptor (`include/native/target.h`) and
   the x86-64 instruction emitter (`include/native/codegen.h`,
   `src/native/codegen.cpp`): labels with backpatching, `mov`/`lea`, integer
-  ALU, shifts, compares, `jmp`/`jcc`, SSE2 float ops, `push`/`pop`, `call
-  rel32`, `syscall` and `ret`, covered by the byte-exact tests in
-  `tests/codegen_test.cpp` (the mmap/execution checks run on Linux x86-64
-  only). Still missing: opcode→emitter lowering, the ELF/freestanding emitter,
-  `_start`, the arena allocator, the `Platform` layer and `jolt build`.
+  ALU, shifts, compares, `setcc`/`movzx`, `jmp`/`jcc`, SSE2 float ops,
+  `push`/`pop`, `call rel32`, `syscall` and `ret`, covered by the byte-exact
+  tests in `tests/codegen_test.cpp` (the mmap/execution checks run on Linux
+  x86-64 only). The 7b lowering (`include/native/lower.h`,
+  `src/native/lower.cpp`) turns the runtime-free, integer-only opcodes into
+  machine code, tested byte-exactly and by execution in `tests/lower_test.cpp`.
+  Still missing: the ELF/freestanding emitter, `_start`, the arena allocator,
+  the `Platform` layer, the boxed `Value` runtime (7c) and `jolt build`.
 
 ### Post-1.0 — UI library
 
@@ -482,7 +493,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module)
 Phase 6.6: ⬜ pending (FFI with C)
-Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
+Phase 7: 🔶 in progress (7a and 7b done; 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
