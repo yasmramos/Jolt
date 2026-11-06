@@ -356,7 +356,9 @@ previous one.
   rejected. See `docs/language.md` §6.11 and `tests/15_defer.jolt`.
 - **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
   `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
-  conflict detection for `.*` and a reserved `std.` prefix. `require`
+  conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
+  once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
+  compile error rather than a stack overflow. `require`
   (Lua-style) is not used.
 - **`struct`** (data only, no methods).
 - `switch` simple (literals and ranges) — **done**: no fallthrough, labels are

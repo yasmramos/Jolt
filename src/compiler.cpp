@@ -444,6 +444,7 @@ void Compiler::resetChunk(const std::string& name) {
   namespaces_.clear();
   boundImports_.clear();
   wildcardBindings_.clear();
+  loadingStack_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
@@ -894,11 +895,39 @@ const ImportedModule& Compiler::loadModule(const std::string& path, int line, in
   auto cached = loadedModules_.find(path);
   if (cached != loadedModules_.end()) return cached->second;
 
+  // A path already being loaded is a cycle (`a -> b -> a`). Report it instead
+  // of recursing forever: without this guard the loader would keep re-entering
+  // itself until the stack overflows. The message lists the chain so the cycle
+  // is visible at a glance.
+  if (std::find(loadingStack_.begin(), loadingStack_.end(), path) != loadingStack_.end()) {
+    std::string chain;
+    bool started = false;
+    for (const std::string& active : loadingStack_) {
+      if (!started && active != path) continue;
+      started = true;
+      chain += active;
+      chain += " -> ";
+    }
+    chain += path;
+    fail("cyclic import detected: " + chain, line, col);
+  }
+
   if (!importLoader_) {
     fail("module '" + path + "' not found", line, col);
   }
   StmtPtr program = importLoader_(path, line, col);
-  ImportedModule module = importModule(program, path);
+  loadingStack_.push_back(path);
+  ImportedModule module;
+  {
+    // Pop the path on scope exit, including when compiling the module body
+    // throws, so a failed import cannot leave the stack dirty for the next
+    // compile (the REPL reuses one Compiler across entries).
+    struct PopGuard {
+      std::vector<std::string>& stack;
+      ~PopGuard() { stack.pop_back(); }
+    } guard{loadingStack_};
+    module = importModule(program, path);
+  }
   auto inserted = loadedModules_.emplace(path, std::move(module));
   return inserted.first->second;
 }

@@ -36,7 +36,7 @@ A Jolt program is a UTF-8 text file (extension `.jolt`). The pipeline is:
 3. **Compiler**: translates the AST to bytecode (40 opcodes, register-based).
 4. **VM**: executes the bytecode.
 
-The AST interpreter is kept only as a **test oracle** (differential testing). It is not part of the product. The `jolt` executable currently runs programs by walking the AST (PHASE 4 pending: VM as the dev engine). The bytecode compiler and the VM cover functions, closures, control flow, and collections (PHASE 6a, 6b done; 6c, 6d pending).
+The AST is never executed: the `jolt` executable compiles source to bytecode and runs it on the register-based VM, and the compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 
 The program runs from top to bottom in the global scope. Simple statements end with `;`. Statements with a block (`if`, `while`, `for`, `fn`) close with `}` and optionally accept a `;` after it.
 
@@ -1356,11 +1356,11 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 
 ## 16. Known limitations
 
-- Dynamic typing. The `jolt` executable currently runs programs by walking the AST (PHASE 4 pending: VM as the dev engine). The bytecode compiler and the VM cover functions, closures, control flow, and collections (PHASE 6a, 6b done; 6c, 6d pending).
+- Dynamic typing. The `jolt` executable compiles source to bytecode and runs it on the register-based VM; the AST is never executed. The compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 - No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
 - No classes, structs, interfaces or inheritance yet. `struct` (data only, no methods) is planned for PHASE 6.5 (1.0). There are no classes or inheritance (and there never will be — maps + closures replace them).
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
-- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require` and no lazy/cyclic-import handling; a module is loaded once, eagerly, when the program is compiled.
+- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require`; a module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` and `native fn` are still pending for PHASE 6.5.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
@@ -1474,7 +1474,7 @@ A dotted path `a.b.c` maps to the file `a/b/c.jolt`, looked up in this order:
 
 A path that resolves nowhere is a compile error: `module 'X' not found`.
 
-Nested imports (a module that imports another module) resolve from the same project root.
+Nested imports (a module that imports another module) resolve from the same project root. A module that imports itself, directly or through a chain (`a -> b -> a`), is a compile error: `cyclic import detected: a -> b -> a`.
 
 ### 18.5 Example
 

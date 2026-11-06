@@ -858,6 +858,47 @@ void testNonNullBytecode() {
   expectCompiles("let s: string? = \"x\";\nlet t = s!!;\n");
 }
 
+void testCyclicImportIsRejected() {
+  // A cycle (a -> b -> a) must be reported as a compile error instead of
+  // recursing until the compiler overflows the stack. The loader maps dotted
+  // paths to fixed sources, so the cycle is exercised without touching disk.
+  auto parseModule = [](const std::string& source) {
+    return Parser(lex(source), "<module>").parseProgram();
+  };
+
+  Compiler compiler;
+  compiler.setImportLoader([&](const std::string& path, int, int) -> StmtPtr {
+    if (path == "cyclic.a") return parseModule("import cyclic.b;\nfn a() { return 1; }\n");
+    if (path == "cyclic.b") return parseModule("import cyclic.a;\nfn b() { return 2; }\n");
+    throw CompileError{"module '" + path + "' not found", 1, 1};
+  });
+
+  bool threw = false;
+  try {
+    compiler.compile(parseModule("import cyclic.a;\n"));
+  } catch (const CompileError& error) {
+    threw = true;
+    assert(error.message.find("cyclic import detected") != std::string::npos &&
+           "the cycle must be named in the message");
+  }
+  assert(threw && "a cyclic import must raise a CompileError");
+
+  // A self-import is the shortest cycle and must be caught too.
+  Compiler selfCompiler;
+  selfCompiler.setImportLoader([&](const std::string& path, int, int) -> StmtPtr {
+    if (path == "cyclic.self") return parseModule("import cyclic.self;\n");
+    throw CompileError{"module '" + path + "' not found", 1, 1};
+  });
+  bool selfThrew = false;
+  try {
+    selfCompiler.compile(parseModule("import cyclic.self;\n"));
+  } catch (const CompileError& error) {
+    selfThrew = true;
+    assert(error.message.find("cyclic import detected") != std::string::npos);
+  }
+  assert(selfThrew && "a self-import must raise a CompileError");
+}
+
 }  // namespace
 
 int main() {
@@ -912,6 +953,7 @@ int main() {
   testNullCoalesceBytecode();
   testSafeMemberBytecode();
   testNonNullBytecode();
+  testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");
   return 0;

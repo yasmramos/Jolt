@@ -343,6 +343,11 @@ class Compiler {
 
   ImportLoader importLoader_;
   std::map<std::string, ImportedModule> loadedModules_;
+  // Module paths currently being loaded, outermost first. A path that is
+  // already on the stack when it is requested again closes a cycle
+  // (`a -> b -> a`), which is reported as a compile error instead of
+  // recursing until the compiler overflows the stack.
+  std::vector<std::string> loadingStack_;
   // Set while compiling a module body: its top-level declarations become
   // frame locals and are exported instead of becoming globals.
   bool moduleBody_ = false;
