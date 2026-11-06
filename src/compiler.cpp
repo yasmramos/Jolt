@@ -336,6 +336,7 @@ void Compiler::resetChunk(const std::string& name) {
   maxLocal_ = 0;
   scopes_.clear();
   loops_.clear();
+  deferStack_.clear();
   funcStack_.clear();
   currentUpvalueNames_.clear();
   globalConsts_.clear();
@@ -553,6 +554,8 @@ void Compiler::compileScopedBlock(const Stmt& stmt) {
   }
   pushScope();
   compileBlockBody(*block);
+  // Normal fall-through leaves the scope, so its deferred blocks run now.
+  emitDeferredBlocks(scopes_.size());
   popScope();
 }
 
@@ -570,6 +573,8 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const BlockStmt& s) {
             pushScope();
             compileBlockBody(s);
+            // A standalone block is a scope: its deferred blocks run on exit.
+            emitDeferredBlocks(scopes_.size());
             popScope();
           },
           [&](const ReturnStmt& s) { compileReturn(s); },
@@ -580,6 +585,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const SwitchStmt& s) { compileSwitch(s); },
           [&](const BreakStmt&) { compileBreak(stmt); },
           [&](const ContinueStmt&) { compileContinue(stmt); },
+          [&](const DeferStmt& s) { compileDefer(s); },
           [&](const ImportStmt& s) { compileImport(s, stmt.line, stmt.col); },
           [&](const auto&) {
             fail("this statement is not supported by the bytecode compiler yet (Phase 6)",
@@ -943,6 +949,13 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
 
 void Compiler::compileReturn(const ReturnStmt& stmt) {
   if (!inFunction_) fail("'return' outside of a function", currentLine_, currentCol_);
+  // A `return` inside a `defer` block is rejected: the block is inlined at the
+  // scope exit, so returning from it would re-enter the teardown and could
+  // recurse forever. A nested function inside the deferred body clears
+  // `deferStack_`, so its own `return` is still allowed.
+  if (!deferStack_.empty()) {
+    fail("'return' is not allowed inside a 'defer' block", currentLine_, currentCol_);
+  }
 
   int reg;
   if (stmt.value) {
@@ -951,6 +964,11 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
     reg = allocReg();
     emit(OpCode::LOADK, reg, addConstant(Value()));
   }
+  // Leaving the function exits every scope in it, so every deferred block runs
+  // (LIFO) before the RETURN. The value stays live in `reg` while they run, so
+  // the deferred blocks cannot change what the function returns. This is also
+  // why `defer` needs no opcode and no VM support: the blocks are inlined here.
+  emitDeferredBlocks(1);
   // A `return` at the top level of a function body is followed by the
   // implicit epilogue emitted in `compileFunctionProto`. Skipping the second
   // RETURN when the last instruction already returns keeps the frame stack
@@ -975,6 +993,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   const int parentMaxLocal = maxLocal_;
   std::vector<Scope> parentScopes = std::move(scopes_);
   std::vector<Loop> parentLoops = std::move(loops_);
+  std::vector<DeferCtx> parentDeferStack = std::move(deferStack_);
   const int parentLine = currentLine_;
   const int parentCol = currentCol_;
   const bool parentInFunction = inFunction_;
@@ -989,6 +1008,9 @@ int Compiler::compileFunctionProto(const std::string& name,
   maxLocal_ = 0;
   scopes_.clear();
   loops_.clear();
+  // A function body is a fresh `defer` boundary: a `return` inside it belongs
+  // to this function, so any outer `defer` context must not reject it.
+  deferStack_.clear();
   inFunction_ = true;
 
   // The child frame keeps the parent's state alive so nested closures can
@@ -998,6 +1020,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   saved.bc = std::move(parent);
   saved.scopes = std::move(parentScopes);
   saved.loops = std::move(parentLoops);
+  saved.deferStack = std::move(parentDeferStack);
   saved.nextReg = parentNextReg;
   saved.maxReg = parentMaxReg;
   saved.nextLocal = parentNextLocal;
@@ -1030,6 +1053,11 @@ int Compiler::compileFunctionProto(const std::string& name,
     compileStmt(*body);
   }
 
+  // Falling off the end exits the function body's scope, so its deferred
+  // blocks run before the implicit nil return (an explicit `return` already
+  // emitted them on its own path).
+  emitDeferredBlocks(1);
+
   // Falling off the end of a function returns nil, like the interpreter.
   int nilReg = allocReg();
   emit(OpCode::LOADK, nilReg, addConstant(Value()));
@@ -1051,6 +1079,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   maxLocal_ = savedParent.maxLocal;
   scopes_ = std::move(savedParent.scopes);
   loops_ = std::move(savedParent.loops);
+  deferStack_ = std::move(savedParent.deferStack);
   currentLine_ = savedParent.line;
   currentCol_ = savedParent.col;
   inFunction_ = savedParent.inFunction;
@@ -1099,6 +1128,10 @@ void Compiler::compileWhile(const WhileStmt& s) {
   freeReg();
 
   loops_.push_back(Loop{});
+  // `while` has no scope of its own; the body's scope (pushed by
+  // `compileScopedBlock`) is one deeper. A `break`/`continue` unwinds down to
+  // it, so a `defer` in the body runs even when the loop is left early.
+  loops_.back().deferMinDepth = scopes_.size() + 1;
   compileScopedBlock(*s.body);
   Loop loop = std::move(loops_.back());
   loops_.pop_back();
@@ -1126,6 +1159,9 @@ void Compiler::compileFor(const ForStmt& s) {
   }
 
   loops_.push_back(Loop{});
+  // Unwind down to the body's scope (one deeper than the `for` scope) so a
+  // `defer` in the body runs on `break`/`continue`.
+  loops_.back().deferMinDepth = scopes_.size() + 1;
   compileScopedBlock(*s.body);
   Loop loop = std::move(loops_.back());
   loops_.pop_back();
@@ -1174,11 +1210,16 @@ void Compiler::compileForIn(const ForInStmt& s) {
   emit(OpCode::DECLLOCAL, item, slot);
 
   loops_.push_back(Loop{});
+  // `for-in` compiles the body inline in the loop-variable scope, so that
+  // scope (the current one) is the depth `break`/`continue` unwind to.
+  loops_.back().deferMinDepth = scopes_.size();
   if (const auto* block = std::get_if<BlockStmt>(&s.body->node)) {
     compileBlockBody(*block);
   } else {
     compileStmt(*s.body);
   }
+  // End of a normal iteration: the body's deferred blocks run before looping.
+  emitDeferredBlocks(scopes_.size());
   Loop loop = std::move(loops_.back());
   loops_.pop_back();
 
@@ -1249,14 +1290,61 @@ void Compiler::compileSwitch(const SwitchStmt& s) {
 
 void Compiler::compileBreak(const Stmt& stmt) {
   if (loops_.empty()) fail("'break' outside of a loop", stmt.line, stmt.col);
+  // A `break` that would leave a `defer` body is rejected: the deferred block
+  // is inlined at the scope exit, so jumping out of it mid-teardown would make
+  // the order in which deferred blocks run ambiguous (and could re-enter the
+  // same block while it is being emitted). A loop declared inside the deferred
+  // body raises `loops_.size()` past the recorded depth and is still allowed.
+  if (!deferStack_.empty() && deferStack_.back().loopDepth >= loops_.size()) {
+    fail("'break' is not allowed inside a 'defer' block", stmt.line, stmt.col);
+  }
+  emitDeferredBlocks(loops_.back().deferMinDepth);
   int jump = emitJump(OpCode::JMP);
   loops_.back().breaks.push_back(jump);
 }
 
 void Compiler::compileContinue(const Stmt& stmt) {
   if (loops_.empty()) fail("'continue' outside of a loop", stmt.line, stmt.col);
+  if (!deferStack_.empty() && deferStack_.back().loopDepth >= loops_.size()) {
+    fail("'continue' is not allowed inside a 'defer' block", stmt.line, stmt.col);
+  }
+  emitDeferredBlocks(loops_.back().deferMinDepth);
   int jump = emitJump(OpCode::JMP);
   loops_.back().continues.push_back(jump);
+}
+
+void Compiler::compileDefer(const DeferStmt& stmt) {
+  if (!inFunction_) {
+    fail("'defer' outside of a function", currentLine_, currentCol_);
+  }
+  if (!stmt.body) {
+    fail("internal compiler error: defer body is missing", currentLine_, currentCol_);
+  }
+  // The block is not emitted where it appears: it is queued on the enclosing
+  // scope and emitted (LIFO) at every point where that scope exits. Registering
+  // it here, rather than emitting, is what lets the same source block run on
+  // fall-through, `return` and `break`/`continue` alike.
+  scopes_.back().defers.push_back(stmt.body);
+}
+
+void Compiler::emitDeferredBlocks(size_t minDepth) {
+  if (minDepth == 0) minDepth = 1;
+  // Snapshot the depth: compiling a deferred body pushes and pops its own
+  // scope, so `scopes_` changes size during the loop below.
+  const size_t topDepth = scopes_.size();
+  for (size_t depth = topDepth; depth >= minDepth; --depth) {
+    // Copy the list: compiling a deferred body may append to (and reallocate)
+    // `scopes_`, which would invalidate a reference into the scope.
+    std::vector<StmtPtr> defers = scopes_[depth - 1].defers;
+    for (auto it = defers.rbegin(); it != defers.rend(); ++it) {
+      // Mark the boundary so a `return`/`break`/`continue` that would leave
+      // this body is rejected while it is compiled.
+      deferStack_.push_back(DeferCtx{loops_.size()});
+      compileScopedBlock(**it);
+      deferStack_.pop_back();
+    }
+    if (depth == minDepth) break;  // size_t: stop before it wraps around
+  }
 }
 
 // ---------------------------------------------------------------- expressions

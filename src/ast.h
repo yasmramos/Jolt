@@ -220,6 +220,18 @@ struct ReturnStmt {
   ExprPtr value;  // may be null
 };
 
+// `defer { ... }`: registers a block to run when the enclosing scope exits,
+// whether it exits normally (falling off the end), through `return`, or
+// through `break`/`continue` that leave the scope. Deferred blocks run in
+// LIFO order (the last one declared runs first), like Go's `defer`.
+//
+// The body is always a BlockStmt, so it creates its own scope and its own
+// nested defers. A `defer` may only appear inside a function body: at the
+// program top level there is no scope exit to attach it to.
+struct DeferStmt {
+  StmtPtr body;  // BlockStmt
+};
+
 // `import std.math;` / `import std.math.*;` / `import std.math as m;` /
 // `import { sqrt, pow } from std.math;`.
 //
@@ -258,7 +270,7 @@ struct SwitchStmt {
 
 using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, BlockStmt, IfStmt, WhileStmt,
                               ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
-                              ImportStmt, SwitchStmt>;
+                              ImportStmt, SwitchStmt, DeferStmt>;
 
 struct Stmt {
   StmtNode node;

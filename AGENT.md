@@ -335,7 +335,11 @@ previous one.
 - Optional types: `let x: int = 5`.
 - Local type inference: `let x = 5` (x: int).
 - Nullability: `string?`, `?.`, `??`, `!!`.
-- `defer`.
+- `defer { ... }` — **done**: the deferred block is inlined at every exit from
+  its scope (fall-through, `return`, `break`/`continue`), LIFO order, no new
+  opcode and no VM support. `defer` is rejected outside a function, and a
+  `return`/`break`/`continue` that would leave the deferred block itself is
+  rejected. See `docs/language.md` §6.11 and `tests/15_defer.jolt`.
 - **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
   `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
   conflict detection for `.*` and a reserved `std.` prefix. `require`
@@ -432,7 +436,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: 🔶 in progress (Java-style `import` and `switch` done; types, nullability, `struct`, `native fn` pending)
+Phase 6.5: 🔶 in progress (Java-style `import`, `switch` and `defer` done; types, nullability, `struct`, `native fn` pending)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

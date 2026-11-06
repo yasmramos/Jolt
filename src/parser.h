@@ -78,6 +78,7 @@ class Parser {
   StmtPtr parseWhile();
   StmtPtr parseFor();
   StmtPtr parseReturn();
+  StmtPtr parseDefer();
   StmtPtr parseImport();
   StmtPtr parseSwitch();
   std::string parseImportPath();

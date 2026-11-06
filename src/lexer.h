@@ -29,6 +29,7 @@ enum class Tok {
   Switch,
   Case,
   Default,
+  Defer,
   True,
   False,
   Nil,
