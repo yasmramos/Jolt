@@ -1,0 +1,71 @@
+// PHASE 6.5: `struct` declarations and literals.
+//
+// A struct is a data-only type: no methods, no inheritance. It is compile-time
+// metadata, so the declaration emits no bytecode and a `Point { ... }` literal
+// lowers to a plain map (the same NEWTABLE/SETTABLE sequence as a map literal).
+// The compiler checks the field names (no missing or unknown field) and the
+// optional field types before lowering.
+
+// Declaration and literal; the value is a map at runtime.
+struct Point {
+  x: int;
+  y: int;
+}
+let p = Point { x: 1, y: 2 };
+assertEq(p.x, 1);
+assertEq(p.y, 2);
+assertEq(p, {x: 1, y: 2});
+assertEq(type(p), "map");
+
+// Field order in the literal does not matter.
+let q = Point { y: 20, x: 10 };
+assertEq(q.x, 10);
+assertEq(q.y, 20);
+
+// A field annotation is optional; an untyped field accepts anything.
+struct Pair { first; second; }
+let pr = Pair { first: 1, second: "two" };
+assertEq(pr.first, 1);
+assertEq(pr.second, "two");
+
+// The annotated type is checked: int widens to float.
+struct Vec { x: float; y: float; }
+let v = Vec { x: 1, y: 2.5 };
+assertEq(v.x, 1.0);
+assertEq(v.y, 2.5);
+
+// A struct name is a valid type annotation.
+let typed: Point = Point { x: 3, y: 4 };
+assertEq(typed.x, 3);
+
+// A struct declared later in the file is visible earlier (like a hoisted `fn`).
+fn origin() {
+  return Later { n: 7 };
+}
+struct Later { n: int; }
+assertEq(origin().n, 7);
+
+// Structs work as plain maps: `in`, `len`, `for-in` and member access.
+assert("x" in p);
+assertEq(len(p), 2);
+let keys = [];
+for k in p { keys.push(k); }
+assertEq(len(keys), 2);
+
+// Two structs with the same field names are distinct declarations but their
+// values are equal maps (structural equality).
+struct A { v: int; }
+struct B { v: int; }
+assertEq(A { v: 1 }, B { v: 1 });
+
+// A struct value can be stored in a collection and nested.
+let points = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];
+assertEq(points[1].y, 4);
+
+// A struct can be used as a field type, and a literal nests.
+struct Line { a: Point; b: Point; }
+let line = Line { a: Point { x: 0, y: 0 }, b: Point { x: 1, y: 1 } };
+assertEq(line.a.x, 0);
+assertEq(line.b.y, 1);
+
+print("structs ok");

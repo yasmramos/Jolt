@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A struct name may be declared only once.
+struct Point { x: int; }
+struct Point { y: int; }

@@ -1,0 +1,6 @@
+// expect-exit: 65
+// Like `import`, a struct is module-level metadata: it cannot be declared
+// inside a function body or a nested block.
+fn f() {
+  struct Local { x: int; }
+}

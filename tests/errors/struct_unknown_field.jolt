@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A field that is not in the declaration is a typo, not a silent extra key.
+struct Point { x: int; y: int; }
+let p = Point { x: 1, z: 2 };
