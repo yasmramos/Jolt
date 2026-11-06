@@ -37,6 +37,10 @@ struct TypeRef {
 struct Param {
   std::string name;
   TypeRef type;
+  // `rest...` (PHASE 6.5): a variadic parameter. It must be the last one, and
+  // its `type` describes the *elements*, not the array; at run time `name`
+  // binds an array holding every extra argument. A function has at most one.
+  bool variadic = false;
 };
 
 // The primitive type names accepted in an annotation. `any` opts out of

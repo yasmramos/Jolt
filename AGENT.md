@@ -379,6 +379,13 @@ previous one.
   feeds inference. A parameter with no annotation (or `any`) turns the check
   off for that argument. See `docs/language.md` §7.6 and
   `tests/19_native_fn.jolt`.
+- **Variadic parameters** — **done**: a trailing `rest...` parameter
+  (`fn sum(first, rest...)`) binds an array holding every extra argument; the
+  `...` follows the optional element type (`rest...` or `parts: int...`) and
+  must be the last parameter. A variadic function accepts `n - 1` or more
+  arguments; the VM packs the extras into an array, so no opcode is added and
+  the bytecode count stays 39/40. The same rule applies to `native fn`
+  signatures. See `docs/language.md` §7.1 and `tests/20_variadic.jolt`.
 
 ### PHASE 6.6 — FFI with C (1.0)
 

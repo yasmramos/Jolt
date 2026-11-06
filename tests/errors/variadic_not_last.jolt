@@ -1,0 +1,7 @@
+// expect-exit: 65
+// A variadic parameter must be the last one.
+
+fn bad(rest..., last) {
+  return rest;
+}
+print(bad(1, 2));

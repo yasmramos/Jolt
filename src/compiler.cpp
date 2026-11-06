@@ -386,14 +386,23 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
 // argument is not checked, so a native with a loose signature still compiles.
 void Compiler::checkNativeCall(const std::string& name, const NativeSig& sig,
                                const CallExpr& call, int line, int col) {
-  if (call.args.size() != sig.params.size()) {
-    fail("'" + name + "' expects " + std::to_string(sig.params.size()) + " argument" +
-             (sig.params.size() == 1 ? "" : "s") + ", got " + std::to_string(call.args.size()),
+  const bool variadic = !sig.params.empty() && sig.params.back().variadic;
+  // A variadic native accepts `params.size() - 1` or more arguments; the extras
+  // are checked against the variadic parameter's element type.
+  const size_t required = sig.params.size() - (variadic ? 1 : 0);
+  const bool arityOk =
+      variadic ? call.args.size() >= required : call.args.size() == required;
+  if (!arityOk) {
+    fail("'" + name + "' expects " + std::to_string(required) + " argument" +
+             (required == 1 ? "" : "s") + (variadic ? " or more" : "") + ", got " +
+             std::to_string(call.args.size()),
          line, col);
   }
   for (size_t i = 0; i < call.args.size(); ++i) {
-    if (!sig.params[i].type.isPresent()) continue;
-    checkAssignable(inferExprType(*call.args[i]), sig.params[i].type,
+    // Arguments past the fixed parameters all bind the variadic element type.
+    const size_t slot = i < required ? i : sig.params.size() - 1;
+    if (!sig.params[slot].type.isPresent()) continue;
+    checkAssignable(inferExprType(*call.args[i]), sig.params[slot].type,
                     "argument " + std::to_string(i + 1) + " of '" + name + "'",
                     call.args[i]->line, call.args[i]->col);
   }
@@ -1303,6 +1312,10 @@ int Compiler::compileFunctionProto(const std::string& name,
   bc_ = Bytecode{};
   bc_.name = name;
   bc_.numParams = static_cast<int>(params.size());
+  // A trailing `rest...` parameter makes the function variadic: the frame takes
+  // `numParams - 1` or more arguments and the VM binds the last slot to an
+  // array of the extras (PHASE 6.5). The parser guarantees it is the last one.
+  bc_.variadic = !params.empty() && params.back().variadic;
   currentUpvalueNames_.clear();
   nextReg_ = 0;
   maxReg_ = 0;
@@ -1336,7 +1349,12 @@ int Compiler::compileFunctionProto(const std::string& name,
 
   // The function body lives in the parameter scope; it is not a nested block.
   pushScope();
-  for (const Param& param : params) declareLocal(param.name, false, param.type);
+  for (const Param& param : params) {
+    // A variadic parameter binds an array of the extra arguments, so its
+    // annotation describes the elements and its binding type is `array`.
+    TypeRef bindingType = param.variadic ? TypeRef{"array", false} : param.type;
+    declareLocal(param.name, false, bindingType);
+  }
   currentReturnType_ = returnType;
 
   // Incoming arguments already sit in R0 .. R(n-1), so the prologue only has

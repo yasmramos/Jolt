@@ -476,6 +476,7 @@ class Lexer {
       case '~':
         return make(Tok::Tilde, 1);
       case '.':
+        if (c1 == '.' && c2 == '.') return make(Tok::Ellipsis, 3);
         if (c1 == '.' && c2 == '=') return make(Tok::DotDotEq, 3);
         if (c1 == '.') return make(Tok::DotDot, 2);
         return make(Tok::Dot, 1);

@@ -46,6 +46,7 @@ enum class Tok {
   Dot,
   DotDot,
   DotDotEq,
+  Ellipsis,
   Colon,
   Semicolon,
   Question,

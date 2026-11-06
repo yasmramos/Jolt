@@ -646,6 +646,11 @@ bool Parser::atLambda() const {
       ++i;
       if (peek(i).type == Tok::Question) ++i;
     }
+    // A trailing `...` marks a variadic parameter; it must end the list.
+    if (peek(i).type == Tok::Ellipsis) {
+      ++i;
+      break;
+    }
     if (peek(i).type != Tok::Comma) break;
     ++i;
   }
@@ -677,8 +682,22 @@ std::vector<Param> Parser::parseParams() {
       const Token& param = consume(Tok::Ident, "expected a parameter name");
       Param parsed;
       parsed.name = param.lexeme;
-      parsed.type = parseTypeAnnotation();
+      // `rest...` collects the extra arguments into an array. The `...` comes
+      // after the optional type annotation (`rest...` or `parts: string...`)
+      // and must be the last parameter, so anything after it is rejected.
+      if (match(Tok::Ellipsis)) {
+        parsed.variadic = true;
+      } else {
+        parsed.type = parseTypeAnnotation();
+        if (match(Tok::Ellipsis)) parsed.variadic = true;
+      }
       params.push_back(std::move(parsed));
+      if (parsed.variadic) {
+        if (!check(Tok::RParen)) {
+          error(peek(), "a variadic parameter must be the last one");
+        }
+        break;
+      }
       if (!match(Tok::Comma)) break;
     }
   }

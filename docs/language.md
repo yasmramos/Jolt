@@ -873,7 +873,28 @@ fn square(x) => x * x;
 print(square(4)); // 16
 ```
 
-The number of arguments must match the number of parameters exactly. There are no default parameters or variadic arguments in user functions (native functions such as `print` are variadic).
+The number of arguments must match the number of parameters exactly, unless the
+last parameter is **variadic**. A parameter written `rest...` collects every
+extra argument into an array; the `...` follows the optional type annotation
+(`rest...` or `parts: int...`), which describes the elements, not the array.
+A variadic parameter must be the last one, and a function may have at most one.
+
+```jolt
+fn sum(first, rest...) {
+  var total = first;
+  for x in rest {
+    total += x;
+  }
+  return total;
+}
+
+print(sum(1));          // 1
+print(sum(1, 2, 3));    // 6
+print(sum(1, 2, 3, 4)); // 10
+```
+
+`rest` is an ordinary array inside the body, so `len(rest)`, indexing and
+`for ... in rest` all work. There are no default parameters.
 
 Parameters are local. Arrays and maps are passed by reference; reassigning the parameter inside the function does not change the caller's variable.
 
@@ -982,13 +1003,17 @@ print(sqrt(16));    // 4  (int widens to float)
 ```
 
 The signature is checked at compile time: a call must pass the exact number of
-arguments, and each argument must be assignable to its parameter type. The
-return type is used for inference, so `let y: float = sqrt(4.0)` is checked like
-any other annotated binding. An unannotated parameter (or `any`) turns the check
-off for that argument, which is how a builtin with a loose signature is declared:
+arguments, and each argument must be assignable to its parameter type. A
+trailing `rest...` parameter makes the native variadic: the call must pass the
+fixed parameters plus zero or more extras, and each extra is checked against the
+variadic parameter's element type. The return type is used for inference, so
+`let y: float = sqrt(4.0)` is checked like any other annotated binding. An
+unannotated parameter (or `any`) turns the check off for that argument, which is
+how a builtin with a loose signature is declared:
 
 ```jolt
 native fn str(v: any): string;
+native fn min(first: float, rest: float...): float;   // variadic
 native fn len(v);                 // fully untyped parameter
 
 assertEq(str(42), "42");
@@ -1469,7 +1494,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require`; a module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
-- No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
+- No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
