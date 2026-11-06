@@ -1,0 +1,49 @@
+// PHASE 6.5: the `std.math` standard-library module.
+//
+// The primitives that need C++ are `native fn` re-exports of host builtins;
+// `abs`, `min`, `max` and `clamp` are plain Jolt (min/max are variadic), and
+// `PI`/`E` are constants. `_helper` is private and must not be exported.
+
+import std.math;
+import std.math.*;
+
+assertEq(std.math.abs(-7), 7);
+assertEq(std.math.abs(3), 3);
+assertEq(std.math.abs(-2.5), 2.5);
+assertEq(abs(-4), 4);
+
+assertEq(min(3, 1, 2), 1);
+assertEq(max(3, 1, 2), 3);
+assertEq(min(5), 5);
+assertEq(max(5), 5);
+assertEq(min(4, 4), 4);
+
+assertEq(clamp(15, 0, 10), 10);
+assertEq(clamp(-5, 0, 10), 0);
+assertEq(clamp(5, 0, 10), 5);
+
+assertEq(sqrt(81), 9.0);
+assertEq(pow(2, 5), 32.0);
+assertEq(floor(3.7), 3.0);
+assertEq(ceil(3.2), 4.0);
+assertEq(round(2.5), 3.0);
+
+assertEq(sin(0), 0.0);
+assertEq(cos(0), 1.0);
+assertEq(abs(log(E) - 1) < 0.0000001, true);
+assertEq(abs(exp(0) - 1) < 0.0000001, true);
+assertEq(abs(tan(0)) < 0.0000001, true);
+
+assertEq(PI > 3.14 && PI < 3.15, true);
+assertEq(E > 2.71 && E < 2.72, true);
+
+// The private `_helper` is not part of the module's public surface.
+assertEq(std.math._helper, nil);
+
+// Qualified, aliased and selective access reach the same functions.
+import std.math as m;
+assertEq(m.sqrt(16), 4.0);
+import { pow } from std.math;
+assertEq(pow(3, 3), 27.0);
+
+print("std.math ok");

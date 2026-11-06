@@ -34,13 +34,6 @@ void need(Runtime& in, const std::string& fn, Args args, size_t expected) {
   if (args.size() != expected) arityError(in, fn, expected, args);
 }
 
-void needAtLeast(Runtime& in, const std::string& fn, Args args, size_t least) {
-  if (args.size() < least) {
-    in.fail(fn + "() expects at least " + std::to_string(least) + " argument" +
-            (least == 1 ? "" : "s") + ", got " + std::to_string(args.size()));
-  }
-}
-
 void needBetween(Runtime& in, const std::string& fn, Args args, size_t least, size_t most) {
   if (args.size() < least || args.size() > most) {
     in.fail(fn + "() expects between " + std::to_string(least) + " and " + std::to_string(most) +
@@ -1025,16 +1018,6 @@ void registerBuiltins(Runtime& in) {
     return Value(static_cast<int64_t>(decodeFirstCodePoint(chars[0])));
   });
 
-  in.addNative("abs", [](Runtime& in, Args args) -> Value {
-    need(in, "abs", args, 1);
-    if (args[0].isInt()) {
-      int64_t value = args[0].asInt();
-      return Value(value < 0 ? static_cast<int64_t>(0ULL - static_cast<uint64_t>(value)) : value);
-    }
-    if (args[0].isFloat()) return Value(std::fabs(args[0].asFloat()));
-    in.fail("abs() expects a number");
-  });
-
   in.addNative("floor", [](Runtime& in, Args args) -> Value {
     need(in, "floor", args, 1);
     if (args[0].isInt()) return args[0];
@@ -1067,29 +1050,31 @@ void registerBuiltins(Runtime& in) {
     return Value(std::pow(base, exponent));
   });
 
-  in.addNative("min", [](Runtime& in, Args args) -> Value {
-    needAtLeast(in, "min", args, 1);
-    Value best = args[0];
-    for (size_t i = 1; i < args.size(); ++i) {
-      if (in.lessThan(args[i], best, in.currentLine, in.currentCol)) best = args[i];
-    }
-    return best;
+  in.addNative("sin", [](Runtime& in, Args args) -> Value {
+    need(in, "sin", args, 1);
+    return Value(std::sin(wantNumber(in, "sin", args[0])));
   });
 
-  in.addNative("max", [](Runtime& in, Args args) -> Value {
-    needAtLeast(in, "max", args, 1);
-    Value best = args[0];
-    for (size_t i = 1; i < args.size(); ++i) {
-      if (in.lessThan(best, args[i], in.currentLine, in.currentCol)) best = args[i];
-    }
-    return best;
+  in.addNative("cos", [](Runtime& in, Args args) -> Value {
+    need(in, "cos", args, 1);
+    return Value(std::cos(wantNumber(in, "cos", args[0])));
   });
 
-  in.addNative("clamp", [](Runtime& in, Args args) -> Value {
-    need(in, "clamp", args, 3);
-    if (in.lessThan(args[0], args[1], in.currentLine, in.currentCol)) return args[1];
-    if (in.lessThan(args[2], args[0], in.currentLine, in.currentCol)) return args[2];
-    return args[0];
+  in.addNative("tan", [](Runtime& in, Args args) -> Value {
+    need(in, "tan", args, 1);
+    return Value(std::tan(wantNumber(in, "tan", args[0])));
+  });
+
+  in.addNative("log", [](Runtime& in, Args args) -> Value {
+    need(in, "log", args, 1);
+    double value = wantNumber(in, "log", args[0]);
+    if (value <= 0) in.fail("log() of a non-positive number");
+    return Value(std::log(value));
+  });
+
+  in.addNative("exp", [](Runtime& in, Args args) -> Value {
+    need(in, "exp", args, 1);
+    return Value(std::exp(wantNumber(in, "exp", args[0])));
   });
 
   in.addNative("random", [](Runtime& in, Args args) -> Value {

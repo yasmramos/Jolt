@@ -386,6 +386,13 @@ previous one.
   arguments; the VM packs the extras into an array, so no opcode is added and
   the bytecode count stays 39/40. The same rule applies to `native fn`
   signatures. See `docs/language.md` §7.1 and `tests/20_variadic.jolt`.
+- **Standard library: `std.math`** — **done**: the primitives that need C++
+  (`sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`, `floor`, `ceil`, `round`)
+  are declared `native fn` in `std/math.jolt` and bind to the host builtins of
+  the same name; `abs`, `min`, `max` (variadic) and `clamp` are plain Jolt, and
+  `PI`/`E` are constants. Moving the four C++ builtins out keeps the host
+  registry small while the standard library stays mostly Jolt. See
+  `docs/language.md` §12.3/§18 and `tests/21_std_math.jolt`.
 
 ### PHASE 6.6 — FFI with C (1.0)
 

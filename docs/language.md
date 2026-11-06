@@ -1320,19 +1320,42 @@ assertEq(repr("a"), "\"a\"");
 
 ### 12.3 Math
 
+Some math functions are host builtins (always in scope); `abs`, `min`, `max`
+and `clamp` live in the `std.math` module and are imported. See §18.
+
+Host builtins:
+
 | Function | Description |
 | --- | --- |
-| `abs(n)` | Absolute value. |
 | `floor(n)` | Rounds down. |
 | `ceil(n)` | Rounds up. |
 | `round(n)` | Rounds to the nearest integer (halves away from zero). |
 | `sqrt(n)` | Square root; error if `n < 0`. |
 | `pow(base, exp)` | Power as `float`. |
+| `sin(n)`, `cos(n)`, `tan(n)` | Trigonometric functions (radians). |
+| `log(n)` | Natural logarithm; error if `n <= 0`. |
+| `exp(n)` | `e ** n`. |
+
+`std.math` (import it first):
+
+| Function | Description |
+| --- | --- |
+| `abs(n)` | Absolute value. |
 | `min(a, ...)` | Minimum of at least one argument. |
 | `max(a, ...)` | Maximum of at least one argument. |
 | `clamp(n, minimum, maximum)` | Limits `n` to the interval. |
+| `PI`, `E` | Constants. |
 
 `floor`, `ceil` and `round` return the same `int` if they receive an `int`, and a `float` if they receive a `float`.
+
+```jolt
+import std.math.*;
+
+assertEq(abs(-7), 7);
+assertEq(min(3, 1, 2), 1);
+assertEq(clamp(15, 0, 10), 10);
+assertEq(sqrt(81), 9.0);
+```
 
 ### 12.4 Randomness and time
 

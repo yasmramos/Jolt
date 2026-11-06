@@ -40,10 +40,10 @@ assertEq(len([1, 2, 3]), 3);
 // check does not apply to it. `str` is declared with one parameter above, but
 // the local `str` below is called with two.
 fn shadowTest() {
-  let str = max;
+  let str = pow;
   return str(3, 4);
 }
-assertEq(shadowTest(), 4);
+assertEq(shadowTest(), 81.0);
 
 // A `native fn` declared in a module is bound in the module's frame and
 // exported like any other public name; a call inside the module is checked
