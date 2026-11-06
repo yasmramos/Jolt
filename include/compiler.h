@@ -88,6 +88,9 @@ class Compiler {
     std::string name;
     int slot = 0;
     bool isImmutable = false;
+    // Declared or inferred type (PHASE 6.5). Empty means "unknown"/any. It is
+    // compile-time metadata only: it never reaches the bytecode.
+    TypeRef type;
   };
 
   struct Scope {
@@ -191,6 +194,18 @@ class Compiler {
   std::deque<FuncState> funcStack_;
   std::unordered_set<std::string> globalConsts_;
 
+  // Type of every global binding, for annotation checks (PHASE 6.5). Kept
+  // parallel to `globalConsts_`; both are reset per chunk.
+  std::unordered_map<std::string, TypeRef> globalTypes_;
+  // Declared return type of the function currently being compiled, checked
+  // against every `return` value. Empty means "unannotated".
+  TypeRef currentReturnType_;
+
+  // Infers the static type of an expression when it is evident from its shape
+  // (a literal, or a variable whose type is known). Returns an empty TypeRef
+  // when the type cannot be determined, which means "no check".
+  TypeRef inferExprType(const Expr& expr) const;
+
   // Capture list of the frame currently being compiled, keyed by variable
   // name and parallel to `bc_.upvalues`.
   std::unordered_map<std::string, int> currentUpvalueNames_;
@@ -223,9 +238,20 @@ class Compiler {
   void pushScope();
   void popScope();
   int allocLocalSlot();
-  int declareLocal(const std::string& name, bool isImmutable);
+  int declareLocal(const std::string& name, bool isImmutable, const TypeRef& type = TypeRef{});
   bool resolveLocal(const std::string& name, LocalVar& out) const;
   void declareGlobal(const std::string& name, bool isImmutable);
+
+  // Type annotations (PHASE 6.5). Types are compile-time metadata: they are
+  // inferred from literals, checked against annotations, and then erased, so
+  // the bytecode is identical with or without them.
+  void declareGlobalType(const std::string& name, const TypeRef& type);
+  bool lookupGlobalType(const std::string& name, TypeRef& out) const;
+  // Checks that a value of type `from` may be stored in a slot of type `to`,
+  // reporting a compile error at `line`/`col` when it may not. `context`
+  // names the target for the message.
+  void checkAssignable(const TypeRef& from, const TypeRef& to, const std::string& context,
+                       int line, int col);
 
   // Upvalue resolution (PHASE 6b). Returns the index of `name` in the current
   // proto's capture list, adding the entry (and, transitively, the re-export
@@ -275,8 +301,11 @@ class Compiler {
 
   // Compiles `body` as a child proto of the chunk being built and returns its
   // index in `bc_.children`. The parent compiler state is saved and restored.
-  int compileFunctionProto(const std::string& name, const std::vector<std::string>& params,
-                           const StmtPtr& body, int line, int col);
+  // `returnType` is the declared return annotation, checked against every
+  // `return` (PHASE 6.5); an empty TypeRef means "unannotated".
+  int compileFunctionProto(const std::string& name, const std::vector<Param>& params,
+                           const StmtPtr& body, int line, int col,
+                           const TypeRef& returnType);
 
   // Compiles a module's top-level statements into `bc_` (bindings stay
   // frame-local) and returns its public surface as a table. Called by

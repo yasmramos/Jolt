@@ -1218,4 +1218,12 @@ void registerBuiltins(Runtime& in) {
     }
     return Value(makeRange(args[0].asInt(), args[1].asInt(), args[2].truthy()));
   });
+
+  // Private helper for `a!!` (PHASE 6.5). Raises when the operand is nil and
+  // returns it unchanged otherwise, so a non-null assertion is one call.
+  in.addNative("$nonNull", [](Runtime& in, Args args) -> Value {
+    need(in, "$nonNull", args, 1);
+    if (args[0].isNil()) in.fail("unexpected nil (non-null assertion '!!' failed)");
+    return args[0];
+  });
 }

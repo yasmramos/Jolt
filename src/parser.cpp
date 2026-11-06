@@ -183,9 +183,12 @@ bool isAssignOp(Tok type) {
 }
 
 bool isAssignable(const ExprPtr& expr) {
+  if (const auto* member = std::get_if<MemberExpr>(&expr->node)) {
+    // `a?.b` is a read-only safe access; it cannot be an assignment target.
+    return !member->safe;
+  }
   return std::holds_alternative<VariableExpr>(expr->node) ||
-         std::holds_alternative<IndexExpr>(expr->node) ||
-         std::holds_alternative<MemberExpr>(expr->node);
+         std::holds_alternative<IndexExpr>(expr->node);
 }
 
 Parser::Parser(std::vector<Token> tokens, std::string where)
@@ -287,6 +290,7 @@ StmtPtr Parser::parseVarDecl() {
   // need to honor immutability.
   const bool isImmutable = keyword.type != Tok::Var;
   const Token& name = consume(Tok::Ident, "expected a variable name");
+  TypeRef type = parseTypeAnnotation();
   ExprPtr init;
   if (match(Tok::Eq)) {
     init = parseExpression();
@@ -307,8 +311,23 @@ StmtPtr Parser::parseVarDecl() {
     error(peek(), "'" + keyword.lexeme + "' declaration requires a value (use 'var' for a mutable binding)");
   }
   consume(Tok::Semicolon, "expected ';' after variable declaration");
-  LetStmt stmt{name.lexeme, std::move(init), keyword.type};
+  LetStmt stmt{name.lexeme, std::move(type), std::move(init), keyword.type};
   return makeStmt(std::move(stmt), keyword.line, keyword.col);
+}
+
+// Parses an optional `: <type>` annotation. The type name is an identifier,
+// optionally followed by `?` (nullability, used by PHASE 6.5). Unknown type
+// names are rejected here so the compiler only ever sees valid ones.
+TypeRef Parser::parseTypeAnnotation() {
+  if (!match(Tok::Colon)) return TypeRef{};
+  const Token& typeName = consume(Tok::Ident, "expected a type name after ':'");
+  TypeRef type;
+  type.name = typeName.lexeme;
+  if (!isKnownTypeName(type.name)) {
+    error(typeName, "unknown type name");
+  }
+  if (match(Tok::Question)) type.nullable = true;
+  return type;
 }
 
 // Compile-time constant folding for `const` initializers. Supported:
@@ -369,6 +388,14 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
         if (!foldConstant(*b.lhs, left, reason)) return false;
         const bool takeRight = (b.op == Tok::AmpAmp) ? left.truthy() : !left.truthy();
         if (!takeRight) { out = left; return true; }
+        return foldConstant(*b.rhs, out, reason);
+      }
+      // `a ?? b`: `a` unless it is nil. Only nil triggers the fallback, so a
+      // falsy-but-non-nil left side (0, false, "") is folded as-is.
+      if (b.op == Tok::QuestionQuestion) {
+        Value left;
+        if (!foldConstant(*b.lhs, left, reason)) return false;
+        if (!left.isNil()) { out = left; return true; }
         return foldConstant(*b.rhs, out, reason);
       }
       Value left;
@@ -485,6 +512,7 @@ StmtPtr Parser::parseFnDecl() {
   }
   const Token& name = consume(Tok::Ident, "expected a function name");
   auto params = parseParams();
+  TypeRef returnType = parseTypeAnnotation();
   StmtPtr body;
   if (check(Tok::Arrow)) {
     const Token& arrow = advance();
@@ -500,8 +528,9 @@ StmtPtr Parser::parseFnDecl() {
     body = parseBlock();
     match(Tok::Semicolon);
   }
-  return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(body)}, keyword.line,
-                  keyword.col);
+  return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(returnType),
+                             std::move(body)},
+                  keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseFunctionBody(const Token& arrow) {
@@ -515,11 +544,19 @@ StmtPtr Parser::parseFunctionBody(const Token& arrow) {
 bool Parser::atLambda() const {
   if (check(Tok::Ident)) return peek(1).type == Tok::Arrow;
   if (!check(Tok::LParen)) return false;
-  // `(` [ident {, ident} [,]] `)` `=>`. Parameters are plain identifiers, so
-  // this cannot be confused with a parenthesized expression.
+  // `(` [ident [':' type] {, ident [':' type]} [,]] `)` `=>`. Parameters are
+  // plain identifiers (with an optional type annotation), so this cannot be
+  // confused with a parenthesized expression.
   size_t i = 1;
   while (peek(i).type == Tok::Ident) {
     ++i;
+    if (peek(i).type == Tok::Colon) {
+      // Skip `: type` (and its optional trailing `?`).
+      ++i;
+      if (peek(i).type != Tok::Ident) return false;
+      ++i;
+      if (peek(i).type == Tok::Question) ++i;
+    }
     if (peek(i).type != Tok::Comma) break;
     ++i;
   }
@@ -528,9 +565,12 @@ bool Parser::atLambda() const {
 
 ExprPtr Parser::parseLambda() {
   const Token& first = peek();
-  std::vector<std::string> params;
+  std::vector<Param> params;
   if (check(Tok::Ident)) {
-    params.push_back(advance().lexeme);
+    Param param;
+    param.name = advance().lexeme;
+    param.type = parseTypeAnnotation();
+    params.push_back(std::move(param));
   } else {
     params = parseParams();
   }
@@ -539,14 +579,17 @@ ExprPtr Parser::parseLambda() {
   return makeExpr(LambdaExpr{std::move(params), std::move(body)}, first.line, first.col);
 }
 
-std::vector<std::string> Parser::parseParams() {
+std::vector<Param> Parser::parseParams() {
   consume(Tok::LParen, "expected '(' to start the parameter list");
-  std::vector<std::string> params;
+  std::vector<Param> params;
   if (!check(Tok::RParen)) {
     while (true) {
       if (check(Tok::RParen)) break;
       const Token& param = consume(Tok::Ident, "expected a parameter name");
-      params.push_back(param.lexeme);
+      Param parsed;
+      parsed.name = param.lexeme;
+      parsed.type = parseTypeAnnotation();
+      params.push_back(std::move(parsed));
       if (!match(Tok::Comma)) break;
     }
   }
@@ -824,7 +867,7 @@ ExprPtr Parser::parseAssignment() {
 
 ExprPtr Parser::parseTernary() {
   const Token& start = peek();
-  auto condition = parseOr();
+  auto condition = parseNullCoalesce();
   if (match(Tok::Question)) {
     auto thenExpr = parseAssignment();
     consume(Tok::Colon, "expected ':' in ternary expression");
@@ -833,6 +876,21 @@ ExprPtr Parser::parseTernary() {
                     start.line, start.col);
   }
   return condition;
+}
+
+// `??` (null coalescing, PHASE 6.5). Binds looser than `||` so `a || b ?? c`
+// groups as `(a || b) ?? c`, and left-associatively so `a ?? b ?? c` is
+// `(a ?? b) ?? c`. It is compiled as a short-circuiting binary, exactly like
+// `&&`/`||`, so the right-hand side is evaluated only when the left is nil.
+ExprPtr Parser::parseNullCoalesce() {
+  auto lhs = parseOr();
+  while (match(Tok::QuestionQuestion)) {
+    const Token& op = previous();
+    auto rhs = parseOr();
+    lhs = makeExpr(BinaryExpr{std::move(lhs), op.type, std::move(rhs), op.line, op.col}, op.line,
+                   op.col);
+  }
+  return lhs;
 }
 
 ExprPtr Parser::parseOr() {
@@ -1005,6 +1063,15 @@ ExprPtr Parser::parsePostfix() {
       const Token& dot = previous();
       const Token& name = consume(Tok::Ident, "expected a member name after '.'");
       expr = makeExpr(MemberExpr{std::move(expr), name.lexeme}, dot.line, dot.col);
+    } else if (match(Tok::QuestionDot)) {
+      // `a?.b` (PHASE 6.5): safe member access; yields nil when `a` is nil.
+      const Token& dot = previous();
+      const Token& name = consume(Tok::Ident, "expected a member name after '?.'");
+      expr = makeExpr(MemberExpr{std::move(expr), name.lexeme, true}, dot.line, dot.col);
+    } else if (match(Tok::BangBang)) {
+      // `a!!` (PHASE 6.5): non-null assertion; raises at runtime if `a` is nil.
+      const Token& op = previous();
+      expr = makeExpr(NonNullExpr{std::move(expr)}, op.line, op.col);
     } else {
       break;
     }

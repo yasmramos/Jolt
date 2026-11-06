@@ -1,0 +1,4 @@
+// expect-exit: 70
+// `!!` on nil raises a runtime error.
+let s: string? = nil;
+print(s!!);

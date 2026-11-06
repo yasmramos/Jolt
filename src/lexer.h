@@ -47,6 +47,8 @@ enum class Tok {
   Colon,
   Semicolon,
   Question,
+  QuestionDot,
+  QuestionQuestion,
   Arrow,
   // operators
   Plus,
@@ -59,6 +61,7 @@ enum class Tok {
   EqEq,
   Bang,
   BangEq,
+  BangBang,
   Lt,
   LtEq,
   Gt,

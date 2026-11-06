@@ -1,0 +1,93 @@
+// PHASE 6.5: optional type annotations and local type inference.
+//
+// Types are compile-time metadata only: the compiler checks them and then
+// erases them, so the bytecode is identical with or without an annotation.
+// This test exercises the accepted forms and the inference rules.
+
+// Annotations on every primitive type.
+let a: int = 5;
+let b: float = 2.5;
+let c: string = "hi";
+let d: bool = true;
+let e: array = [1, 2, 3];
+let f: map = {k: 1};
+let g: range = 0..3;
+assertEq(a, 5);
+assertEq(b, 2.5);
+assertEq(c, "hi");
+assertEq(d, true);
+assertEq(e, [1, 2, 3]);
+assertEq(f, {k: 1});
+assertEq(len(g), 3);
+
+// int widens to float, but not the reverse.
+let asFloat: float = 3;
+assertEq(asFloat, 3.0);
+assertEq(asFloat == 3, true);
+
+// Inference from the initializer: a later assignment must keep the type.
+var counter = 0;
+counter = counter + 1;
+assertEq(counter, 1);
+
+// `nil` does not pin a type, so a nil-initialized var stays untyped.
+var loose = nil;
+loose = 5;
+loose = "text";
+assertEq(loose, "text");
+
+// `any` opts out of checking entirely.
+var anything: any = 1;
+anything = "now a string";
+anything = [1, 2];
+assertEq(anything, [1, 2]);
+
+// Nullability: a `?` annotation accepts nil.
+let maybe: string? = nil;
+assertEq(maybe, nil);
+var slot: int? = nil;
+slot = 7;
+assertEq(slot, 7);
+
+// Parameters and return types are checked.
+fn add(x: int, y: int): int {
+  return x + y;
+}
+assertEq(add(2, 3), 5);
+
+fn widen(x: int): float {
+  return x;
+}
+assertEq(widen(4), 4.0);
+
+fn maybeText(flag: bool): string? {
+  if (flag) { return "yes"; }
+  return nil;
+}
+assertEq(maybeText(true), "yes");
+assertEq(maybeText(false), nil);
+
+// Lambdas may annotate their parameters too.
+let inc = (x: int) => x + 1;
+let shout = (s: string) => s + "!";
+assertEq(inc(1), 2);
+assertEq(shout("hi"), "hi!");
+
+// A typed parameter is mutable unless declared with `let` semantics; the
+// annotation constrains the value, not the mutability.
+fn bump(x: int): int {
+  x = x + 1;
+  return x;
+}
+assertEq(bump(10), 11);
+
+// Annotated locals inside blocks, including a hoisted function that captures
+// a typed binding declared later.
+fn scoped(): int {
+  fn read() { return value; }
+  let value: int = 42;
+  return read();
+}
+assertEq(scoped(), 42);
+
+print("types ok");

@@ -88,6 +88,7 @@ class Parser {
   ExprPtr parseExpression();
   ExprPtr parseAssignment();
   ExprPtr parseTernary();
+  ExprPtr parseNullCoalesce();
   ExprPtr parseOr();
   ExprPtr parseAnd();
   ExprPtr parseBitOr();
@@ -108,5 +109,9 @@ class Parser {
   ExprPtr parseLambda();
 
   ExprPtr buildString(const Token& token);
-  std::vector<std::string> parseParams();
+  std::vector<Param> parseParams();
+  // Parses an optional `: <type>` annotation after a name (variable, parameter
+  // or return type). Returns an empty TypeRef when no `:` is present. Rejects
+  // unknown type names at parse time.
+  TypeRef parseTypeAnnotation();
 };

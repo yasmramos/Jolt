@@ -753,6 +753,111 @@ void testNestedFunctionDeclarationsAreSupported() {
   expectCompiles("let f = x => x;\n");
 }
 
+void testTypeAnnotationsAreErased() {
+  // PHASE 6.5: type annotations are compile-time metadata. A declaration with
+  // an annotation must produce exactly the same bytecode as the same
+  // declaration without it, so the register VM and the AOT backend never see
+  // types (AGENT.md §3).
+  Bytecode annotated = compileSource("let x: int = 5;\n");
+  Bytecode plain = compileSource("let x = 5;\n");
+  assert(annotated.code.size() == plain.code.size());
+  for (size_t i = 0; i < plain.code.size(); ++i) {
+    assert(annotated.code[i].op == plain.code[i].op);
+    assert(annotated.code[i].a == plain.code[i].a);
+    assert(annotated.code[i].b == plain.code[i].b);
+    assert(annotated.code[i].c == plain.code[i].c);
+  }
+  assert(annotated.numRegisters == plain.numRegisters);
+  assert(annotated.numLocals == plain.numLocals);
+
+  // The same holds for a typed parameter and return annotation.
+  Bytecode typedFn = compileSource("fn f(a: int): int { return a; }\n");
+  Bytecode plainFn = compileSource("fn f(a) { return a; }\n");
+  const Bytecode& typedChild = *typedFn.children[0];
+  const Bytecode& plainChild = *plainFn.children[0];
+  assert(typedChild.code.size() == plainChild.code.size());
+  assert(typedChild.numParams == plainChild.numParams);
+}
+
+void testTypeAnnotationsAccepted() {
+  expectCompiles("let x: int = 5;\n");
+  expectCompiles("let x: float = 5;\n");       // int widens to float
+  expectCompiles("let x: string? = nil;\n");   // nil fits a nullable target
+  expectCompiles("var x: any = 1;\nvar y: any = \"s\";\n");
+  expectCompiles("fn f(a: int, b: string): bool { return true; }\n");
+  expectCompiles("let f = (x: int) => x;\n");
+  expectCompiles("var x: int?;\nx = 3;\n");
+}
+
+void testTypeMismatchErrors() {
+  expectCompileError("let x: int = \"s\";\n", "string into int");
+  expectCompileError("let x: int = 1.5;\n", "float into int");
+  expectCompileError("let x: int = nil;\n", "nil into non-nullable");
+  expectCompileError("var x = 0;\nx = \"s\";\n", "inferred type mismatch");
+  expectCompileError("fn f(): int { return \"s\"; }\n", "return type mismatch");
+  expectCompileError("fn f(): int { return; }\n", "bare return in typed function");
+  expectCompileError("let x: integer = 1;\n", "unknown type name");
+}
+
+void testNullCoalesceBytecode() {
+  // PHASE 6.5: `a ?? b` lowers to existing opcodes only (no new opcode).
+  // LOADK a; LOADK nil; EQ isNil, a, nil; JMP_IF_FALSE isNil -> end;
+  // <b>; MOVE a, b; end: ...  The right-hand side is skipped when `a` != nil.
+  Bytecode bc = compileSource("let x = a ?? b;\n");
+
+  bool sawEq = false;
+  bool sawJmpIfFalse = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::EQ) sawEq = true;
+    if (instruction.op == OpCode::JMP_IF_FALSE) sawJmpIfFalse = true;
+  }
+  assert(sawEq && "?? must compare against nil with EQ");
+  assert(sawJmpIfFalse && "?? must short-circuit with JMP_IF_FALSE");
+
+  expectCompiles("let x = nil ?? 1 ?? 2;\n");
+}
+
+void testSafeMemberBytecode() {
+  // `a?.b` lowers to EQ nil + JMP_IF_TRUE + GETTABLE, all existing opcodes.
+  Bytecode bc = compileSource("let x = a?.b;\n");
+  bool sawEq = false;
+  bool sawJmpIfTrue = false;
+  bool sawGetTable = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::EQ) sawEq = true;
+    if (instruction.op == OpCode::JMP_IF_TRUE) sawJmpIfTrue = true;
+    if (instruction.op == OpCode::GETTABLE) sawGetTable = true;
+  }
+  assert(sawEq && "?. must compare the receiver against nil");
+  assert(sawJmpIfTrue && "?. must skip the lookup when the receiver is nil");
+  assert(sawGetTable && "?. must still perform the member lookup otherwise");
+
+  // A plain member access must not add the nil guard.
+  Bytecode plain = compileSource("let x = a.b;\n");
+  bool plainHasEq = false;
+  for (const Instruction& instruction : plain.code) {
+    if (instruction.op == OpCode::EQ) plainHasEq = true;
+  }
+  assert(!plainHasEq && "plain `.` must not emit a nil guard");
+
+  // A safe member access is not an assignment target.
+  expectCompileError("a?.b = 1;\n", "safe member assignment");
+}
+
+void testNonNullBytecode() {
+  // `a!!` lowers to a call to the hidden `$nonNull` helper (no new opcode).
+  Bytecode bc = compileSource("let x = a!!;\n");
+  bool sawGetGlobalNonNull = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::GETGLOBAL) {
+      const Value& name = bc.constants[static_cast<size_t>(instruction.b)];
+      if (name.isStr() && name.asStr() == "$nonNull") sawGetGlobalNonNull = true;
+    }
+  }
+  assert(sawGetGlobalNonNull && "!! must call the $nonNull helper");
+  expectCompiles("let s: string? = \"x\";\nlet t = s!!;\n");
+}
+
 }  // namespace
 
 int main() {
@@ -801,6 +906,12 @@ int main() {
   testUnsupportedConstructs();
   testPhase6ConstructsCompile();
   testNestedFunctionDeclarationsAreSupported();
+  testTypeAnnotationsAreErased();
+  testTypeAnnotationsAccepted();
+  testTypeMismatchErrors();
+  testNullCoalesceBytecode();
+  testSafeMemberBytecode();
+  testNonNullBytecode();
 
   std::puts("compiler tests passed");
   return 0;

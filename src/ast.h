@@ -14,6 +14,47 @@ struct Stmt;
 using ExprPtr = std::shared_ptr<Expr>;
 using StmtPtr = std::shared_ptr<Stmt>;
 
+// ------------------------------------------------------------- type annotations
+
+// An optional type annotation (`int`, `string`, ...). An empty `name` means
+// "no annotation", so the same struct models both "typed" and "untyped"
+// without a separate flag. `nullable` is the trailing `?` of `string?`
+// (PHASE 6.5 nullability).
+//
+// Types are a compile-time-only concept: they are validated and checked by the
+// parser and compiler, then erased. They never reach the bytecode, so the
+// register VM and the AOT backend see exactly the same instructions with or
+// without an annotation (AGENT.md §3: the bytecode must stay low level).
+struct TypeRef {
+  std::string name;
+  bool nullable = false;
+
+  bool isPresent() const { return !name.empty(); }
+};
+
+// One function parameter: a name plus an optional type annotation
+// (`fn f(a: int, b) {}`).
+struct Param {
+  std::string name;
+  TypeRef type;
+};
+
+// The primitive type names accepted in an annotation. `any` opts out of
+// checking. `float` also accepts an int (numeric widening). These names match
+// `Value::typeName()` so a runtime value and its annotation speak the same
+// vocabulary.
+inline bool isKnownTypeName(const std::string& name) {
+  return name == "nil" || name == "bool" || name == "int" || name == "float" ||
+         name == "string" || name == "array" || name == "map" || name == "function" ||
+         name == "range" || name == "any";
+}
+
+// Human-readable form of a type for diagnostics: `int`, `string?`, `any`.
+inline std::string describeType(const TypeRef& type) {
+  if (!type.isPresent()) return "any";
+  return type.nullable ? type.name + "?" : type.name;
+}
+
 // ---------------------------------------------------------------- expressions
 
 struct LiteralExpr {
@@ -108,6 +149,16 @@ struct IndexExpr {
 struct MemberExpr {
   ExprPtr object;
   std::string name;
+  // `a?.b` (safe navigation, PHASE 6.5): when `object` is nil the whole
+  // expression yields nil instead of raising "has no member". Plain `a.b`
+  // leaves this false.
+  bool safe = false;
+};
+
+// `a!!` (PHASE 6.5): asserts the operand is not nil and yields it unchanged.
+// A nil operand raises a runtime error at the position of the operator.
+struct NonNullExpr {
+  ExprPtr operand;
 };
 
 struct RangeExpr {
@@ -127,14 +178,14 @@ struct LambdaExpr {
   // desugared by the parser into a BlockStmt containing a single ReturnStmt,
   // so evaluators only ever see statement bodies and an implicit "no return"
   // yields nil. Named functions are declared with FnDeclStmt (`fn name() {}`).
-  std::vector<std::string> params;
+  std::vector<Param> params;
   StmtPtr body;
 };
 
 using ExprNode =
     std::variant<LiteralExpr, InterpExpr, VariableExpr, ArrayExpr, MapExpr, UnaryExpr,
                  BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr, MemberExpr,
-                 RangeExpr, LambdaExpr>;
+                 NonNullExpr, RangeExpr, LambdaExpr>;
 
 struct Expr {
   // Position convention: every Expr/Stmt carries the line/col of the token
@@ -163,6 +214,7 @@ struct LetStmt {
   // The parser enforces every rule above, so the interpreter/compiler only
   // need to honor `kind != Tok::Var` for immutability.
   std::string name;
+  TypeRef type;               // optional annotation, e.g. `let x: int = 5`
   ExprPtr init;               // may be null only when kind == Tok::Var
   Tok kind = Tok::Var;        // Var | Let | Const
 };
@@ -173,7 +225,8 @@ struct FnDeclStmt {
   // implicitly evaluates to nil; the interpreter handles that, so an explicit
   // returnsValue flag would be redundant here.
   std::string name;
-  std::vector<std::string> params;
+  std::vector<Param> params;
+  TypeRef returnType;  // optional, e.g. `fn f(): int`
   StmtPtr body;  // BlockStmt
 };
 
