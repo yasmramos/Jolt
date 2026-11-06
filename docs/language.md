@@ -15,6 +15,7 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 5. [Operators](#5-operators)
 6. [Statements](#6-statements)
 7. [Functions and closures](#7-functions-and-closures)
+   - [7.6 `native fn`](#76-native-fn)
 8. [Arrays](#8-arrays)
 9. [Strings](#9-strings)
 10. [Maps](#10-maps)
@@ -74,7 +75,7 @@ Reserved words:
 
 ```text
 break  case   const  continue  default  defer  else  false  fn  for  if  import
-in     let    nil    return    switch   true  var    while
+in     let    native nil      return   struct switch true  var    while
 ```
 
 They cannot be used as names of variables, parameters or unquoted map keys.
@@ -965,6 +966,46 @@ fn factorial(n) {
 }
 ```
 
+### 7.6 `native fn`
+
+A `native fn` declares a function whose body is **not** written in Jolt: the
+name binds to a function the host (the VM or the future AOT runtime) already
+provides, such as a standard-library builtin. The declaration is bodyless and
+carries only a signature, so it emits no bytecode and adds no opcode — the name
+is bound with a plain `GETGLOBAL` of the host function.
+
+```jolt
+native fn sqrt(x: float): float;
+
+print(sqrt(9.0));   // 3
+print(sqrt(16));    // 4  (int widens to float)
+```
+
+The signature is checked at compile time: a call must pass the exact number of
+arguments, and each argument must be assignable to its parameter type. The
+return type is used for inference, so `let y: float = sqrt(4.0)` is checked like
+any other annotated binding. An unannotated parameter (or `any`) turns the check
+off for that argument, which is how a builtin with a loose signature is declared:
+
+```jolt
+native fn str(v: any): string;
+native fn len(v);                 // fully untyped parameter
+
+assertEq(str(42), "42");
+assertEq(len([1, 2, 3]), 3);
+```
+
+Like `struct`, a `native fn` is **module-level metadata**: it may only be
+declared at the top level of a file. Its parameter and return types must be
+type names the compiler knows (or `any`).
+
+A `native fn` binds the name at run time to whatever the host registered under
+that name. If the host provides nothing, using the name reports
+`undefined variable '<name>'`, so a typo or a missing host function is a clear
+runtime error rather than a silent failure. Builtins such as `print`, `len` and
+`str` are host functions, so a `native fn` declaration is the typed way to
+expose one to the checker.
+
 ---
 
 ## 8. Arrays
@@ -1429,7 +1470,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require`; a module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
-- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7); `native fn` is still pending for PHASE 6.5.
+- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).

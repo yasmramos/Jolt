@@ -371,7 +371,14 @@ previous one.
 - `switch` simple (literals and ranges) — **done**: no fallthrough, labels are
   literals or integer ranges, optional single `default`; compiles to the
   existing `EQ`/`IN`/`JMP` opcodes (no new opcode). See `docs/language.md` §6.10.
-- **`native fn`** for internal FFI (stdlib in Jolt).
+- **`native fn`** for internal FFI (stdlib in Jolt) — **done**: a bodyless,
+  module-level declaration (`native fn sqrt(x: float): float;`) that binds a
+  name to a function the host provides. It emits no bytecode and adds no
+  opcode (the binding is a `GETGLOBAL` of the host function); the signature is
+  checked at call sites (arity and argument types) and the declared return type
+  feeds inference. A parameter with no annotation (or `any`) turns the check
+  off for that argument. See `docs/language.md` §7.6 and
+  `tests/19_native_fn.jolt`.
 
 ### PHASE 6.6 — FFI with C (1.0)
 
@@ -459,7 +466,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: 🔶 in progress (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, and `struct` done; `native fn` pending)
+Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct` and `native fn`)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

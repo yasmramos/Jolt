@@ -1,0 +1,8 @@
+// Fixture for the native_fn_in_module error test: a call inside the module
+// passes a string where the native's signature wants a float.
+
+native fn sqrt(x: float): float;
+
+fn bad(): float {
+  return sqrt("no");
+}

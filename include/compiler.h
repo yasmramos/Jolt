@@ -91,6 +91,10 @@ class Compiler {
     // Declared or inferred type (PHASE 6.5). Empty means "unknown"/any. It is
     // compile-time metadata only: it never reaches the bytecode.
     TypeRef type;
+    // True when this binding is a `native fn` declaration. A call to the name
+    // is checked against the native's signature; a plain local that shadows
+    // the name is a different function, so the check is skipped for it.
+    bool isNative = false;
   };
 
   struct Scope {
@@ -204,6 +208,16 @@ class Compiler {
   // before it is lowered to a plain map. Reset per chunk.
   std::unordered_map<std::string, std::vector<StructField>> structDefs_;
 
+  // Signature of every `native fn` declared so far (PHASE 6.5), keyed by name.
+  // A native declaration emits no call to the compiler: it only records the
+  // signature so a call can be checked (arity and argument types) and so the
+  // return type can be inferred. Reset per chunk.
+  struct NativeSig {
+    std::vector<Param> params;
+    TypeRef returnType;
+  };
+  std::unordered_map<std::string, NativeSig> nativeSigs_;
+
   // Declared return type of the function currently being compiled, checked
   // against every `return` value. Empty means "unannotated".
   TypeRef currentReturnType_;
@@ -260,6 +274,20 @@ class Compiler {
   void checkAssignable(const TypeRef& from, const TypeRef& to, const std::string& context,
                        int line, int col);
 
+  // Checks a call to a declared `native fn` against its recorded signature
+  // (PHASE 6.5): the arity must match and every argument must be assignable to
+  // its parameter type. An unannotated parameter (or `any`) skips the type
+  // check for that argument.
+  void checkNativeCall(const std::string& name, const NativeSig& sig, const CallExpr& call,
+                       int line, int col);
+
+  // Returns the signature of the `native fn` that `name` refers to, or null
+  // when it is not a native binding. The name is resolved like a variable
+  // read: a local or an upvalue that shadows a native name is a different
+  // function and yields null. A name that resolves to nothing is a global, so
+  // it matches when it is a declared native. Types are metadata only.
+  const NativeSig* nativeSigFor(const std::string& name) const;
+
   // Upvalue resolution (PHASE 6b). Returns the index of `name` in the current
   // proto's capture list, adding the entry (and, transitively, the re-export
   // entries in every function in between) when it is not there yet. Returns -1
@@ -295,6 +323,10 @@ class Compiler {
   // the shape even when the declaration appears later in the file.
   void registerStructDecls(const BlockStmt& block);
   void compileStructDecl(const StructDeclStmt& decl, int line, int col);
+  // Registers every `native fn` declared directly in `block` before anything
+  // else in it is compiled, so a hoisted function that calls one is checked
+  // against its signature.
+  void registerNativeDecls(const BlockStmt& block);
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);

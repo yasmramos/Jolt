@@ -250,7 +250,12 @@ struct FnDeclStmt {
   std::string name;
   std::vector<Param> params;
   TypeRef returnType;  // optional, e.g. `fn f(): int`
-  StmtPtr body;  // BlockStmt
+  StmtPtr body;  // BlockStmt; null for a `native fn` (no body)
+  // `native fn name(params): ret;` (PHASE 6.5): a bodyless declaration that
+  // binds `name` to a native function the host registered (see
+  // `registerBuiltins`). The parser rejects a body on a native declaration, so
+  // `body` is null exactly when this is true.
+  bool isNative = false;
 };
 
 // `struct Point { x: int; y: int; }` (PHASE 6.5). A data-only type: no

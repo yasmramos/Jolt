@@ -82,6 +82,9 @@ class Parser {
   StmtPtr parseStatement();
   StmtPtr parseVarDecl();
   StmtPtr parseFnDecl();
+  // `native fn name(params): ret;` (PHASE 6.5): a bodyless declaration that
+  // binds a name to a host-registered native function.
+  StmtPtr parseNativeDecl();
   // `struct Name { field: T; ... }` (PHASE 6.5). A data-only declaration.
   StmtPtr parseStructDecl();
   // Body that follows a `=>`: a `{ ... }` block, or a single expression that
