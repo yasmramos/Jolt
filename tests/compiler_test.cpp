@@ -753,6 +753,52 @@ void testNestedFunctionDeclarationsAreSupported() {
   expectCompiles("let f = x => x;\n");
 }
 
+void testTypeAnnotationsAreErased() {
+  // PHASE 6.5: type annotations are compile-time metadata. A declaration with
+  // an annotation must produce exactly the same bytecode as the same
+  // declaration without it, so the register VM and the AOT backend never see
+  // types (AGENT.md §3).
+  Bytecode annotated = compileSource("let x: int = 5;\n");
+  Bytecode plain = compileSource("let x = 5;\n");
+  assert(annotated.code.size() == plain.code.size());
+  for (size_t i = 0; i < plain.code.size(); ++i) {
+    assert(annotated.code[i].op == plain.code[i].op);
+    assert(annotated.code[i].a == plain.code[i].a);
+    assert(annotated.code[i].b == plain.code[i].b);
+    assert(annotated.code[i].c == plain.code[i].c);
+  }
+  assert(annotated.numRegisters == plain.numRegisters);
+  assert(annotated.numLocals == plain.numLocals);
+
+  // The same holds for a typed parameter and return annotation.
+  Bytecode typedFn = compileSource("fn f(a: int): int { return a; }\n");
+  Bytecode plainFn = compileSource("fn f(a) { return a; }\n");
+  const Bytecode& typedChild = *typedFn.children[0];
+  const Bytecode& plainChild = *plainFn.children[0];
+  assert(typedChild.code.size() == plainChild.code.size());
+  assert(typedChild.numParams == plainChild.numParams);
+}
+
+void testTypeAnnotationsAccepted() {
+  expectCompiles("let x: int = 5;\n");
+  expectCompiles("let x: float = 5;\n");       // int widens to float
+  expectCompiles("let x: string? = nil;\n");   // nil fits a nullable target
+  expectCompiles("var x: any = 1;\nvar y: any = \"s\";\n");
+  expectCompiles("fn f(a: int, b: string): bool { return true; }\n");
+  expectCompiles("let f = (x: int) => x;\n");
+  expectCompiles("var x: int?;\nx = 3;\n");
+}
+
+void testTypeMismatchErrors() {
+  expectCompileError("let x: int = \"s\";\n", "string into int");
+  expectCompileError("let x: int = 1.5;\n", "float into int");
+  expectCompileError("let x: int = nil;\n", "nil into non-nullable");
+  expectCompileError("var x = 0;\nx = \"s\";\n", "inferred type mismatch");
+  expectCompileError("fn f(): int { return \"s\"; }\n", "return type mismatch");
+  expectCompileError("fn f(): int { return; }\n", "bare return in typed function");
+  expectCompileError("let x: integer = 1;\n", "unknown type name");
+}
+
 }  // namespace
 
 int main() {
@@ -801,6 +847,9 @@ int main() {
   testUnsupportedConstructs();
   testPhase6ConstructsCompile();
   testNestedFunctionDeclarationsAreSupported();
+  testTypeAnnotationsAreErased();
+  testTypeAnnotationsAccepted();
+  testTypeMismatchErrors();
 
   std::puts("compiler tests passed");
   return 0;

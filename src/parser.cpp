@@ -287,6 +287,7 @@ StmtPtr Parser::parseVarDecl() {
   // need to honor immutability.
   const bool isImmutable = keyword.type != Tok::Var;
   const Token& name = consume(Tok::Ident, "expected a variable name");
+  TypeRef type = parseTypeAnnotation();
   ExprPtr init;
   if (match(Tok::Eq)) {
     init = parseExpression();
@@ -307,8 +308,23 @@ StmtPtr Parser::parseVarDecl() {
     error(peek(), "'" + keyword.lexeme + "' declaration requires a value (use 'var' for a mutable binding)");
   }
   consume(Tok::Semicolon, "expected ';' after variable declaration");
-  LetStmt stmt{name.lexeme, std::move(init), keyword.type};
+  LetStmt stmt{name.lexeme, std::move(type), std::move(init), keyword.type};
   return makeStmt(std::move(stmt), keyword.line, keyword.col);
+}
+
+// Parses an optional `: <type>` annotation. The type name is an identifier,
+// optionally followed by `?` (nullability, used by PHASE 6.5). Unknown type
+// names are rejected here so the compiler only ever sees valid ones.
+TypeRef Parser::parseTypeAnnotation() {
+  if (!match(Tok::Colon)) return TypeRef{};
+  const Token& typeName = consume(Tok::Ident, "expected a type name after ':'");
+  TypeRef type;
+  type.name = typeName.lexeme;
+  if (!isKnownTypeName(type.name)) {
+    error(typeName, "unknown type name");
+  }
+  if (match(Tok::Question)) type.nullable = true;
+  return type;
 }
 
 // Compile-time constant folding for `const` initializers. Supported:
@@ -485,6 +501,7 @@ StmtPtr Parser::parseFnDecl() {
   }
   const Token& name = consume(Tok::Ident, "expected a function name");
   auto params = parseParams();
+  TypeRef returnType = parseTypeAnnotation();
   StmtPtr body;
   if (check(Tok::Arrow)) {
     const Token& arrow = advance();
@@ -500,8 +517,9 @@ StmtPtr Parser::parseFnDecl() {
     body = parseBlock();
     match(Tok::Semicolon);
   }
-  return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(body)}, keyword.line,
-                  keyword.col);
+  return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(returnType),
+                             std::move(body)},
+                  keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseFunctionBody(const Token& arrow) {
@@ -515,11 +533,19 @@ StmtPtr Parser::parseFunctionBody(const Token& arrow) {
 bool Parser::atLambda() const {
   if (check(Tok::Ident)) return peek(1).type == Tok::Arrow;
   if (!check(Tok::LParen)) return false;
-  // `(` [ident {, ident} [,]] `)` `=>`. Parameters are plain identifiers, so
-  // this cannot be confused with a parenthesized expression.
+  // `(` [ident [':' type] {, ident [':' type]} [,]] `)` `=>`. Parameters are
+  // plain identifiers (with an optional type annotation), so this cannot be
+  // confused with a parenthesized expression.
   size_t i = 1;
   while (peek(i).type == Tok::Ident) {
     ++i;
+    if (peek(i).type == Tok::Colon) {
+      // Skip `: type` (and its optional trailing `?`).
+      ++i;
+      if (peek(i).type != Tok::Ident) return false;
+      ++i;
+      if (peek(i).type == Tok::Question) ++i;
+    }
     if (peek(i).type != Tok::Comma) break;
     ++i;
   }
@@ -528,9 +554,12 @@ bool Parser::atLambda() const {
 
 ExprPtr Parser::parseLambda() {
   const Token& first = peek();
-  std::vector<std::string> params;
+  std::vector<Param> params;
   if (check(Tok::Ident)) {
-    params.push_back(advance().lexeme);
+    Param param;
+    param.name = advance().lexeme;
+    param.type = parseTypeAnnotation();
+    params.push_back(std::move(param));
   } else {
     params = parseParams();
   }
@@ -539,14 +568,17 @@ ExprPtr Parser::parseLambda() {
   return makeExpr(LambdaExpr{std::move(params), std::move(body)}, first.line, first.col);
 }
 
-std::vector<std::string> Parser::parseParams() {
+std::vector<Param> Parser::parseParams() {
   consume(Tok::LParen, "expected '(' to start the parameter list");
-  std::vector<std::string> params;
+  std::vector<Param> params;
   if (!check(Tok::RParen)) {
     while (true) {
       if (check(Tok::RParen)) break;
       const Token& param = consume(Tok::Ident, "expected a parameter name");
-      params.push_back(param.lexeme);
+      Param parsed;
+      parsed.name = param.lexeme;
+      parsed.type = parseTypeAnnotation();
+      params.push_back(std::move(parsed));
       if (!match(Tok::Comma)) break;
     }
   }

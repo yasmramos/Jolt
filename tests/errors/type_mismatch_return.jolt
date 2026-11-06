@@ -1,0 +1,5 @@
+// expect-exit: 65
+// The returned value must match the declared return type.
+fn f(): int {
+  return "not an int";
+}

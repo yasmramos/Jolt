@@ -332,9 +332,18 @@ previous one.
 
 ### PHASE 6.5 — Types and nullability (1.0)
 
-- Optional types: `let x: int = 5`.
-- Local type inference: `let x = 5` (x: int).
-- Nullability: `string?`, `?.`, `??`, `!!`.
+- Optional types: `let x: int = 5` — **done**: annotations on declarations,
+  parameters and return types, checked at compile time and then **erased**
+  (identical bytecode with or without the annotation, so the VM and the AOT
+  backend never see a type). Accepted names are the `type()` primitives plus
+  `any`; `int` widens to `float`. See `docs/language.md` §4.6 and
+  `tests/16_types.jolt`.
+- Local type inference: `let x = 5` (x: int) — **done**: the type is inferred
+  from literal initializers and from other typed bindings, and later
+  assignments are checked. A `nil` initializer stays untyped; an expression
+  whose type is not evident is left unchecked.
+- Nullability: `string?` — **done** as an annotation (a `?` type accepts
+  `nil`). The expression forms `?.`, `??`, `!!` are still pending.
 - `defer { ... }` — **done**: the deferred block is inlined at every exit from
   its scope (fall-through, `return`, `break`/`continue`), LIFO order, no new
   opcode and no VM support. `defer` is rejected outside a function, and a
@@ -436,7 +445,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: 🔶 in progress (Java-style `import`, `switch` and `defer` done; types, nullability, `struct`, `native fn` pending)
+Phase 6.5: 🔶 in progress (Java-style `import`, `switch`, `defer` and type annotations/inference/nullable `T?` done; nullability expressions `?.`/`??`/`!!`, `struct` and `native fn` pending)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

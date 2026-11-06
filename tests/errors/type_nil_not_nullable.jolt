@@ -1,0 +1,3 @@
+// expect-exit: 65
+// nil requires a nullable annotation.
+let x: int = nil;

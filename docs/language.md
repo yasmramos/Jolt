@@ -10,6 +10,7 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 2. [Lexical structure](#2-lexical-structure)
 3. [Data types](#3-data-types)
 4. [Variables and scope](#4-variables-and-scope)
+   - [4.6 Type annotations](#46-type-annotations)
 5. [Operators](#5-operators)
 6. [Statements](#6-statements)
 7. [Functions and closures](#7-functions-and-closures)
@@ -223,6 +224,9 @@ const MAX = 10 * 2;    // immutable binding folded at compile time
 | `let` | no | yes | runtime |
 | `const` | no | yes | compile time |
 
+An optional **type annotation** may follow the name: `let x: int = 5`. See
+[Type annotations](#46-type-annotations) below.
+
 `var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected (at runtime in the interpreter, at compile time in the bytecode compiler). Use `let` by default for values that never change, and `var` only when reassignment is needed.
 
 `const` is also immutable, but its value must be a compile-time constant expression: literals, arithmetic (`+ - * / %`), unary minus, comparisons and boolean operators over other constants, and references to other top-level `const` names (including forward references, which the parser resolves to a fixed point). The parser folds each `const` initializer to a literal before the program runs, so uses of the name cost nothing at runtime. If an initializer cannot be folded (for example it calls a function or reads a `var`), the parser reports an error instead of silently falling back to runtime evaluation. Nested blocks fold their `const`s eagerly as well.
@@ -261,6 +265,66 @@ y = 3; // error: undefined variable 'y'
 `fn name(...) { ... }` declarations are hoisted within their block, so they can be called before the line where they appear. This allows recursion and mutual recursion.
 
 `var` and `let` declarations are **not** hoisted: using a variable before its declaration produces an error.
+
+---
+
+### 4.6 Type annotations
+
+Jolt is dynamically typed, but a declaration, a parameter or a return value may
+carry an optional type annotation. Annotations are **compile-time metadata**:
+the compiler checks them and then erases them, so the bytecode is identical
+with or without them and the VM never sees a type.
+
+```jolt
+let count: int = 5;
+let ratio: float = 0.5;
+let title: string = "Jolt";
+let ok: bool = true;
+let items: array = [1, 2, 3];
+let table: map = {a: 1};
+let span: range = 0..10;
+
+fn add(a: int, b: int): int {
+  return a + b;
+}
+```
+
+The accepted type names are the primitives reported by `type()`: `nil`, `bool`,
+`int`, `float`, `string`, `array`, `map`, `function` and `range`, plus `any`.
+A name that is not one of these is a compile error.
+
+**Local inference.** With no annotation, the compiler infers the type from the
+initializer when it is a literal or another typed binding, and then checks
+later assignments against it:
+
+```jolt
+var n = 0;
+n = 1;        // ok
+n = "text";   // compile error: cannot assign 'string' to 'int' in 'n'
+```
+
+A `nil` initializer does **not** pin a type (`var x = nil;` stays untyped), and
+an expression whose type is not evident is left unchecked, so inference never
+rejects a program that would have run.
+
+**Widening.** An `int` value may be stored in a `float` slot; the reverse is not
+implicit.
+
+```jolt
+let x: float = 3;    // ok: int widens to float
+let y: int = 1.5;    // compile error
+```
+
+**Nullability.** A trailing `?` marks a type that also accepts `nil`. Without
+it, `nil` is rejected.
+
+```jolt
+let maybe: string? = nil;   // ok
+let name: string = nil;     // compile error
+```
+
+Nullability in expressions (`?.`, `??`, `!!`) is not implemented yet; see
+[Known limitations](#16-known-limitations).
 
 ---
 
@@ -1237,7 +1301,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require` and no lazy/cyclic-import handling; a module is loaded once, eagerly, when the program is compiled.
 - No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
-- No optional types or nullability yet. `let x: int = 5`, `string?`, `?.`, `??`, `!!` are planned for PHASE 6.5 (1.0).
+- Optional types and nullability are partially implemented (PHASE 6.5). Type annotations (`let x: int = 5`), local inference and the nullable `T?` annotation are checked at compile time. Nullability in expressions (`?.`, `??`, `!!`) is not implemented yet.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).

@@ -1,0 +1,3 @@
+// expect-exit: 65
+// Only the built-in primitive type names are valid annotations.
+let x: integer = 1;

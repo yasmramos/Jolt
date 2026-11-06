@@ -1,0 +1,4 @@
+// expect-exit: 65
+// Assigning a different type to an inferred variable is a compile error.
+var n = 0;
+n = "text";
