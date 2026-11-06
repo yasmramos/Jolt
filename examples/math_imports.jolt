@@ -1,0 +1,46 @@
+// The `std.math` standard library, reached through every import form.
+//
+// `std.math` mixes two kinds of binding: the primitives that need C++
+// (`sqrt`, `pow`, `sin`, ...) are `native fn` re-exports of host builtins,
+// while `abs`, `min`, `max` (variadic) and `clamp` are plain Jolt.
+
+// 1. Qualified: the module is bound under its path.
+import std.math;
+print("sqrt(2) = ${std.math.sqrt(2)}");
+print("PI     = ${std.math.PI}");
+
+// 2. Wildcard: every public name enters the scope unqualified. This is the
+//    convenient form when a file is all math, and conflicts are caught at
+//    compile time.
+import std.math.*;
+print("abs(-7) = ${abs(-7)}");
+print("E       = ${E}");
+
+// `min` and `max` are variadic: pass as many arguments as you like.
+print("min(3, 1, 2) = ${min(3, 1, 2)}");
+print("max(3, 1, 2) = ${max(3, 1, 2)}");
+print("clamp(15, 0, 10) = ${clamp(15, 0, 10)}");
+
+// 3. Alias: bound under a shorter name.
+import std.math as m;
+print("m.round(2.5) = ${m.round(2.5)}");
+
+// 4. Selective: only the listed names enter the scope.
+import { sin, cos, log } from std.math;
+print("sin(0) = ${sin(0)}");
+print("cos(0) = ${cos(0)}");
+
+// A small computation that mixes the primitives and the Jolt helpers: the
+// distance between two points, and the cosine of the angle between a vector
+// and the x-axis.
+fn distance(x1, y1, x2, y2) {
+  return sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+}
+
+fn cosineWithXAxis(x, y) {
+  return x / distance(0, 0, x, y);
+}
+
+print("distance((0,0),(3,4)) = ${distance(0, 0, 3, 4)}");
+print("cosineWithXAxis(1,0) = ${cosineWithXAxis(1, 0)}");
+print("log(E) = ${log(E)}");

@@ -358,8 +358,8 @@ previous one.
   `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
   conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
   once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
-  compile error rather than a stack overflow. `require`
-  (Lua-style) is not used.
+  compile error rather than a stack overflow. `require` (Lua-style) is
+  **dropped**: `import` is the only module form.
 - **`struct`** (data only, no methods) — **done**: a named, module-level map
   shape with optional field types. The declaration emits no bytecode and adds
   no opcode; a `Point { x: 1, y: 2 }` literal is checked against the
@@ -480,7 +480,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct` and `native fn`)
+Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
