@@ -1,0 +1,6 @@
+// Fixture: a module under a nested namespace (ns.deep), so a 3-segment
+// dotted import exercises the namespace walk.
+
+fn leaf() {
+  return 123;
+}

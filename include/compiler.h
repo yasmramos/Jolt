@@ -198,6 +198,13 @@ class Compiler {
   std::deque<FuncState> funcStack_;
   std::unordered_set<std::string> globalConsts_;
 
+  // Names the importing module declares itself (`let`/`var`/`fn`) in its global
+  // scope. A wildcard or selective import must not silently overwrite one of
+  // them: the local binding wins, whatever the order of the declarations. Kept
+  // separate from `globalConsts_`, which is about immutability (const folding),
+  // not about shadowing. Reset per chunk.
+  std::unordered_set<std::string> userGlobals_;
+
   // Type of every global binding, for annotation checks (PHASE 6.5). Kept
   // parallel to `globalConsts_`; both are reset per chunk.
   std::unordered_map<std::string, TypeRef> globalTypes_;

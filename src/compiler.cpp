@@ -489,6 +489,7 @@ void Compiler::resetChunk(const std::string& name) {
   funcStack_.clear();
   currentUpvalueNames_.clear();
   globalConsts_.clear();
+  userGlobals_.clear();
   globalTypes_.clear();
   structDefs_.clear();
   nativeSigs_.clear();
@@ -807,6 +808,7 @@ void Compiler::compileLet(const LetStmt& s) {
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.kind != Tok::Var);
     declareGlobalType(s.name, declared);
+    userGlobals_.insert(s.name);
     // A global binding replaces a `native fn` of the same name, so its
     // signature no longer applies to calls of the name.
     nativeSigs_.erase(s.name);
@@ -869,6 +871,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedLetSlots = std::move(predeclaredLetSlots_);
   auto savedFnSlots = std::move(predeclaredFnSlots_);
   auto savedGlobalConsts = std::move(globalConsts_);
+  auto savedUserGlobals = std::move(userGlobals_);
   auto savedGlobalTypes = std::move(globalTypes_);
   auto savedStructDefs = std::move(structDefs_);
   auto savedNativeSigs = std::move(nativeSigs_);
@@ -889,6 +892,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
   globalConsts_.clear();
+  userGlobals_.clear();
   globalTypes_.clear();
   structDefs_.clear();
   nativeSigs_.clear();
@@ -935,6 +939,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredLetSlots_ = std::move(savedLetSlots);
   predeclaredFnSlots_ = std::move(savedFnSlots);
   globalConsts_ = std::move(savedGlobalConsts);
+  userGlobals_ = std::move(savedUserGlobals);
   globalTypes_ = std::move(savedGlobalTypes);
   structDefs_ = std::move(savedStructDefs);
   nativeSigs_ = std::move(savedNativeSigs);
@@ -1068,52 +1073,59 @@ int Compiler::ensureNamespace(const std::string& prefix, int line, int col) {
   (void)col;
   std::vector<std::string> segments = splitDotted(prefix);
 
-  // Walk the path from the root. Each missing segment becomes a fresh map; an
-  // existing one is reused so a second module in the same namespace does not
-  // replace the table the first module already filled.
+  // Walk the path from the root, materializing every missing segment as a
+  // table member of its parent. Only the root is a global: a nested namespace
+  // such as `a.b` lives inside `a`, so re-visiting it must read it through the
+  // parent (`GETTABLE`), never with `GETGLOBAL` (there is no `a.b` global).
+  // `current` always holds the table for the deepest segment, so the walk can
+  // continue and the caller receives the innermost namespace to attach the
+  // module to. Registers for outer segments are left allocated; the caller
+  // frees the whole span when it is done.
   int current = -1;
   std::string path;
   for (const std::string& segment : segments) {
     path = path.empty() ? segment : path + "." + segment;
-    if (namespaces_.find(path) != namespaces_.end()) {
-      int next = allocReg();
+    const bool exists = namespaces_.find(path) != namespaces_.end();
+    int next = allocReg();
+    if (!exists) {
+      emit(OpCode::NEWTABLE, next, 0, 1);
+      if (current < 0) {
+        // Root: the namespace table is a top-level global.
+        emit(OpCode::SETGLOBAL, next, addString(path));
+        declareGlobal(path, false);
+      } else {
+        // Intermediate: attach the new table to its parent.
+        emit(OpCode::SETTABLE, next, current, -addString(segment) - 1);
+      }
+      namespaces_.insert(path);
+    } else if (current < 0) {
       emit(OpCode::GETGLOBAL, next, addString(path));
-      if (current >= 0) freeReg();
-      current = next;
-      continue;
-    }
-    if (current < 0) {
-      // Root: create the top-level namespace global.
-      current = allocReg();
-      emit(OpCode::NEWTABLE, current, 0, 1);
-      emit(OpCode::SETGLOBAL, current, addString(path));
-      declareGlobal(path, false);
     } else {
-      // Intermediate segment: create a map, attach it to its parent, then
-      // reuse the same register to walk deeper.
-      int fresh = allocReg();
-      emit(OpCode::NEWTABLE, fresh, 0, 1);
-      emit(OpCode::SETTABLE, fresh, current, -addString(segment) - 1);
-      freeReg();
+      emit(OpCode::GETTABLE, next, current, -addString(segment) - 1);
     }
-    namespaces_.insert(path);
+    current = next;
   }
   return current;
 }
 
 void Compiler::compileQualifiedImport(const ImportedModule& module, const std::string& boundName,
                                       int line, int col) {
+  std::vector<std::string> segments = splitDotted(boundName);
+  // The module body runs on import even when the binding below is skipped, so
+  // its side effects match the wildcard form.
+  materializeModule(module, line, col);
+  // A simple bound name (the alias form) must not silently rebind a name the
+  // module declares itself: the local binding wins, as for a wildcard import.
+  if (segments.size() == 1 && userGlobals_.find(boundName) != userGlobals_.end()) return;
   if (boundImports_.find(boundName) != boundImports_.end()) return;
   boundImports_.insert(boundName);
 
-  materializeModule(module, line, col);
   int table = allocReg();
   emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
 
   // Bind the module table at the visible name. A dotted path becomes a real
   // namespace tree of maps (`std.math.sqrt` is the ordinary member chain); a
   // bare alias binds the table directly.
-  std::vector<std::string> segments = splitDotted(boundName);
   if (segments.size() == 1) {
     emit(OpCode::SETGLOBAL, table, addString(boundName));
     declareGlobal(boundName, false);
@@ -1130,6 +1142,12 @@ void Compiler::compileNameImport(const ImportedModule& module,
   materializeModule(module, line, col);
 
   for (const std::string& name : names) {
+    // A name the importing module declares itself wins over the import: the
+    // import must not silently shadow a local `let`, `var` or `fn`, whatever
+    // the order of the declarations. Such a name is not a wildcard binding, so
+    // it never triggers an ambiguity either.
+    if (userGlobals_.find(name) != userGlobals_.end()) continue;
+
     // Conflict detection: a name already introduced by another wildcard is
     // ambiguous unless this import is the very same module. This is the
     // compile-time guarantee that makes `.*` safe (no silent shadowing).
@@ -1141,7 +1159,6 @@ void Compiler::compileNameImport(const ImportedModule& module,
            line, col);
     }
     wildcardBindings_[name] = module.path;
-    if (globalConsts_.find(name) != globalConsts_.end()) continue;
 
     int table = allocReg();
     emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
@@ -1175,6 +1192,7 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     emit(OpCode::SETGLOBAL, reg, addString(fn.name));
     declareGlobal(fn.name, false);
     declareGlobalType(fn.name, TypeRef{"function", false});
+    userGlobals_.insert(fn.name);
     // Keep the signature table in step with the binding that actually wins: a
     // native keeps its signature, any other global of the same name drops it.
     if (fn.isNative) {
