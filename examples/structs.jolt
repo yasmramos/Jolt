@@ -1,0 +1,36 @@
+// `struct`: a named, data-only map shape checked at compile time.
+
+struct Point {
+  x: int;
+  y: int;
+}
+
+// A struct value is a map at runtime: member access, `in`, `len`, `for-in`
+// and structural equality all work, and `type` reports "map".
+let p = Point { x: 1, y: 2 };
+print(p.x, p.y);
+print(p);
+print(type(p));
+
+// Field order does not matter; untyped fields accept any value.
+struct Pair { first; second; }
+let pair = Pair { second: "two", first: 1 };
+print(pair.first, pair.second);
+
+// An int widens to a float field, like every other annotation.
+struct Vec { x: float; y: float; }
+let v = Vec { x: 1, y: 2.5 };
+print(v.x, v.y);
+
+// A struct name is a valid annotation, and a struct declared later in the file
+// is visible earlier (like a hoisted `fn`).
+fn origin(): Point {
+  return Point { x: 0, y: 0 };
+}
+print(origin());
+
+// Structs compose with collections.
+let path = [Point { x: 0, y: 0 }, Point { x: 1, y: 1 }];
+for point in path {
+  print(point.x, point.y);
+}

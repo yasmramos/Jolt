@@ -111,6 +111,16 @@ Parser::TopLevelScope::~TopLevelScope() { flag_ = previous_; }
 
 StmtPtr Parser::parseProgram() {
   TopLevelScope topLevel(atTopLevel_);
+  // A `struct` name is visible to the whole module, like a hoisted `fn`, so a
+  // literal or an annotation may appear before the declaration. `struct` is a
+  // keyword, so the only `struct Name` sequence is a declaration; a name that
+  // is never declared this way stays out of the set, keeping `name { ... }` a
+  // variable followed by a block.
+  for (size_t i = 0; i + 1 < tokens_.size(); ++i) {
+    if (tokens_[i].type == Tok::Struct && tokens_[i + 1].type == Tok::Ident) {
+      structNames_.insert(tokens_[i + 1].lexeme);
+    }
+  }
   std::vector<StmtPtr> statements;
   int line = peek().line;
   int col = peek().col;
@@ -256,6 +266,7 @@ StmtPtr Parser::parseStatement() {
 
   if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
   if (match(Tok::Fn)) return parseFnDecl();
+  if (match(Tok::Struct)) return parseStructDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
   if (match(Tok::For)) return parseFor();
@@ -323,7 +334,8 @@ TypeRef Parser::parseTypeAnnotation() {
   const Token& typeName = consume(Tok::Ident, "expected a type name after ':'");
   TypeRef type;
   type.name = typeName.lexeme;
-  if (!isKnownTypeName(type.name)) {
+  // A struct name is a valid annotation too (PHASE 6.5): `let p: Point = ...`.
+  if (!isKnownTypeName(type.name) && structNames_.count(type.name) == 0) {
     error(typeName, "unknown type name");
   }
   if (match(Tok::Question)) type.nullable = true;
@@ -531,6 +543,54 @@ StmtPtr Parser::parseFnDecl() {
   return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(returnType),
                              std::move(body)},
                   keyword.line, keyword.col);
+}
+
+// `struct Name { field: T; other; ... }` (PHASE 6.5). A data-only type: fields
+// are separated (and optionally terminated) by ';', and the type annotation is
+// optional (`struct P { x: int; y; }`). Declaring a name twice in the same
+// struct is an error. The declaration is registered so later annotations and
+// literals can refer to it.
+StmtPtr Parser::parseStructDecl() {
+  const Token& keyword = previous();
+  if (nestingDepth_ > 0) {
+    // Like `import`, a struct is module-level metadata: declaring it inside a
+    // block or a function body is rejected, so its shape is the same for every
+    // literal in the module.
+    throw CompileError{"'struct' is only allowed at the top level of a module", keyword.line,
+                       keyword.col};
+  }
+  const Token& name = consume(Tok::Ident, "expected a struct name");
+  if (declaredStructs_.count(name.lexeme) != 0) {
+    throw CompileError{"struct '" + name.lexeme + "' is already declared", name.line, name.col};
+  }
+  consume(Tok::LBrace, "expected '{' to start the struct body");
+
+  StructDeclStmt decl;
+  decl.name = name.lexeme;
+  std::unordered_set<std::string> seen;
+  while (!check(Tok::RBrace)) {
+    if (check(Tok::Eof)) error(peek(), "expected '}' to close the struct body");
+    if (match(Tok::Semicolon)) continue;  // stray separators are harmless
+    const Token& field = consume(Tok::Ident, "expected a field name");
+    if (!seen.insert(field.lexeme).second) {
+      throw CompileError{
+          "duplicate field '" + field.lexeme + "' in struct '" + decl.name + "'", field.line,
+          field.col};
+    }
+    StructField entry;
+    entry.name = field.lexeme;
+    entry.type = parseTypeAnnotation();
+    decl.fields.push_back(std::move(entry));
+    if (!match(Tok::Semicolon) && !check(Tok::RBrace)) {
+      error(peek(), "expected ';' or '}' after the struct field");
+    }
+  }
+  consume(Tok::RBrace, "expected '}' to close the struct body");
+  match(Tok::Semicolon);
+
+  structNames_.insert(decl.name);
+  declaredStructs_.insert(decl.name);
+  return makeStmt(std::move(decl), keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseFunctionBody(const Token& arrow) {
@@ -1094,6 +1154,13 @@ ExprPtr Parser::parsePrimary() {
   if (match(Tok::Nil)) return makeExpr(LiteralExpr{Value()}, token.line, token.col);
   if (atLambda()) return parseLambda();
   if (match(Tok::Ident)) {
+    // `Point { x: 1, y: 2 }` (PHASE 6.5): an identifier that names a declared
+    // struct, immediately followed by `{`, is a struct literal. Gating on the
+    // declared name keeps `for x in name { ... }` unambiguous: `name` is not a
+    // struct, so it stays a plain variable and the `{` opens the loop body.
+    if (structNames_.count(token.lexeme) != 0 && check(Tok::LBrace)) {
+      return parseStructLiteralBody(token.lexeme, token.line, token.col);
+    }
     return makeExpr(VariableExpr{token.lexeme}, token.line, token.col);
   }
   if (match(Tok::LParen)) {
@@ -1165,6 +1232,31 @@ ExprPtr Parser::parsePrimary() {
   }
 
   error(token, "expected an expression");
+}
+
+// Body of a struct literal, the `{ ... }` after a struct type name (the name
+// is already consumed). Field values are full expressions; keys must be
+// identifiers (the field names). Duplicate keys are rejected here so the
+// compiler can rely on them being unique.
+ExprPtr Parser::parseStructLiteralBody(const std::string& typeName, int line, int col) {
+  consume(Tok::LBrace, "expected '{' after the struct name");
+  std::vector<StructLitEntry> entries;
+  std::unordered_set<std::string> seen;
+  if (!check(Tok::RBrace)) {
+    while (true) {
+      if (check(Tok::RBrace)) break;
+      const Token& field = consume(Tok::Ident, "expected a field name in the struct literal");
+      if (!seen.insert(field.lexeme).second) {
+        throw CompileError{"duplicate field '" + field.lexeme + "' in the struct literal",
+                           field.line, field.col};
+      }
+      consume(Tok::Colon, "expected ':' after the field name");
+      entries.push_back(StructLitEntry{field.lexeme, parseExpression()});
+      if (!match(Tok::Comma)) break;
+    }
+  }
+  consume(Tok::RBrace, "expected '}' to close the struct literal");
+  return makeExpr(StructLitExpr{typeName, std::move(entries)}, line, col);
 }
 
 ExprPtr Parser::buildString(const Token& token) {

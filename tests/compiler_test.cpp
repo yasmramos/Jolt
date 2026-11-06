@@ -858,6 +858,55 @@ void testNonNullBytecode() {
   expectCompiles("let s: string? = \"x\";\nlet t = s!!;\n");
 }
 
+void testStructDeclEmitsNoBytecode() {
+  // PHASE 6.5: a `struct` declaration is pure compile-time metadata. It must
+  // emit no bytecode, so a program with the declaration has the same code as
+  // the same program without it (only the literal lowers, to a map).
+  Bytecode withDecl =
+      compileSource("struct Point { x: int; y: int; }\nlet p = Point { x: 1, y: 2 };\n");
+  Bytecode withoutDecl = compileSource("let p = {x: 1, y: 2};\n");
+  assert(withDecl.code.size() == withoutDecl.code.size());
+  for (size_t i = 0; i < withoutDecl.code.size(); ++i) {
+    assert(withDecl.code[i].op == withoutDecl.code[i].op);
+    assert(withDecl.code[i].a == withoutDecl.code[i].a);
+    assert(withDecl.code[i].b == withoutDecl.code[i].b);
+    assert(withDecl.code[i].c == withoutDecl.code[i].c);
+  }
+  assert(withDecl.numRegisters == withoutDecl.numRegisters);
+}
+
+void testStructLiteralLowersToTable() {
+  // The literal is a NEWTABLE followed by one SETTABLE per field; no new
+  // opcode is introduced (AGENT.md §3.3).
+  Bytecode bc = compileSource("struct Point { x: int; y: int; }\nlet p = Point { x: 1, y: 2 };\n");
+  bool sawNewTable = false;
+  int setTables = 0;
+  for (const Instruction& ins : bc.code) {
+    if (ins.op == OpCode::NEWTABLE) sawNewTable = true;
+    if (ins.op == OpCode::SETTABLE) ++setTables;
+  }
+  assert(sawNewTable && "a struct literal must build a table");
+  assert(setTables == 2 && "one SETTABLE per field");
+}
+
+void testStructErrors() {
+  // A literal must match the declaration exactly.
+  expectCompileError("struct P { x: int; y: int; }\nlet p = P { x: 1 };\n", "a missing field");
+  expectCompileError("struct P { x: int; }\nlet p = P { x: 1, z: 2 };\n", "an unknown field");
+  expectCompileError("struct P { x: int; }\nlet p = P { x: \"no\" };\n", "a wrong field type");
+  // The declaration itself.
+  expectCompileError("struct P { x: int; x: int; }\n", "a duplicate field");
+  expectCompileError("struct P { x: int; }\nstruct P { y: int; }\n", "a duplicate struct");
+  expectCompileError("fn f() { struct P { x: int; } }\n", "a nested struct declaration");
+}
+
+void testStructNamesAreUsableAsTypes() {
+  // A struct name is a valid annotation, and a struct declared later in the
+  // file is visible earlier, like a hoisted `fn`.
+  expectCompiles("struct P { x: int; }\nlet p: P = P { x: 1 };\n");
+  expectCompiles("fn make() { return P { x: 1 }; }\nstruct P { x: int; }\n");
+}
+
 void testCyclicImportIsRejected() {
   // A cycle (a -> b -> a) must be reported as a compile error instead of
   // recursing until the compiler overflows the stack. The loader maps dotted
@@ -953,6 +1002,10 @@ int main() {
   testNullCoalesceBytecode();
   testSafeMemberBytecode();
   testNonNullBytecode();
+  testStructDeclEmitsNoBytecode();
+  testStructLiteralLowersToTable();
+  testStructErrors();
+  testStructNamesAreUsableAsTypes();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

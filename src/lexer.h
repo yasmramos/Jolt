@@ -30,6 +30,7 @@ enum class Tok {
   Case,
   Default,
   Defer,
+  Struct,
   True,
   False,
   Nil,

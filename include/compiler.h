@@ -197,6 +197,13 @@ class Compiler {
   // Type of every global binding, for annotation checks (PHASE 6.5). Kept
   // parallel to `globalConsts_`; both are reset per chunk.
   std::unordered_map<std::string, TypeRef> globalTypes_;
+
+  // Field shapes of the `struct` types declared so far (PHASE 6.5), keyed by
+  // type name. A struct is compile-time metadata: the declaration emits no
+  // bytecode, and a `Point { ... }` literal is checked against this table
+  // before it is lowered to a plain map. Reset per chunk.
+  std::unordered_map<std::string, std::vector<StructField>> structDefs_;
+
   // Declared return type of the function currently being compiled, checked
   // against every `return` value. Empty means "unannotated".
   TypeRef currentReturnType_;
@@ -268,6 +275,7 @@ class Compiler {
   int compileCall(const CallExpr& call, int line, int col);
   int compileArray(const ArrayExpr& array);
   int compileMap(const MapExpr& map);
+  int compileStructLiteral(const StructLitExpr& literal, int line, int col);
   int compileRange(const RangeExpr& range, int line, int col);
   int compileInterpolation(const InterpExpr& interpolation, int line, int col);
   // Converts `source` to a string through the compiler's private runtime
@@ -282,6 +290,11 @@ class Compiler {
   void compileScopedBlock(const Stmt& stmt);
   void compileLet(const LetStmt& stmt);
   void compileFnDecl(const FnDeclStmt& fn, int line, int col);
+  // Registers every `struct` declared directly in `block` before anything else
+  // in it is compiled, so a hoisted function that builds a struct literal sees
+  // the shape even when the declaration appears later in the file.
+  void registerStructDecls(const BlockStmt& block);
+  void compileStructDecl(const StructDeclStmt& decl, int line, int col);
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);
