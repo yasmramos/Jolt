@@ -1619,6 +1619,8 @@ Wildcard imports are safe because conflicts are caught at compile time. If two `
 
 Importing the same module twice is not a conflict.
 
+A name the importing module declares itself (`let`, `var` or `fn`) wins over an imported one, whatever the order of the declarations: a wildcard or selective import never silently shadows a local binding. The two cases are distinct — a local binding is deliberate and wins; two imports colliding is a mistake and is reported.
+
 ### 18.4 Module resolution
 
 A dotted path `a.b.c` maps to the file `a/b/c.jolt`, looked up in this order:
