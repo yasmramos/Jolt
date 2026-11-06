@@ -86,6 +86,7 @@ class CodeGen {
 
   // Arithmetic/logical on registers (64-bit unless noted).
   void addReg(X64Reg dst, X64Reg src);
+  void addImm32(X64Reg dst, std::int32_t value);  // add r/m64, imm32
   void subReg(X64Reg dst, X64Reg src);
   void subRegImm32(X64Reg dst, std::int32_t value);  // sub r/m64, imm32
   void imulReg(X64Reg dst, X64Reg src);
@@ -114,9 +115,15 @@ class CodeGen {
   // Comparisons and control flow.
   void cmpReg(X64Reg lhs, X64Reg rhs);
   void testReg(X64Reg reg);
+  void setcc(Jcc cc, X64Reg dst);          // setcc r/m8: dst low byte = 0/1
+  void movzx(X64Reg dst, X64Reg src);      // movzx r64, r/m8 (zero-extend)
   void jmp(Label label);
   void jcc(Jcc cc, Label label);
   void callRel(std::int32_t offsetBytes);  // call rel32 (caller resolves the target)
+  // call rel32 to a label in the same buffer. `callRel` cannot express this
+  // because the target's offset is not known when the call is emitted; the
+  // displacement is patched by `finalize()`, exactly like a jump.
+  void callLabel(Label label);
 
   // Stack.
   void push(X64Reg reg);
