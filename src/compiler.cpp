@@ -262,10 +262,10 @@ int Compiler::allocLocalSlot() {
   return slot;
 }
 
-int Compiler::declareLocal(const std::string& name, bool isImmutable) {
+int Compiler::declareLocal(const std::string& name, bool isImmutable, const TypeRef& type) {
   int slot = allocLocalSlot();
   Scope& scope = scopes_.back();
-  scope.vars[name] = LocalVar{name, slot, isImmutable};
+  scope.vars[name] = LocalVar{name, slot, isImmutable, type};
   return slot;
 }
 
@@ -325,6 +325,77 @@ void Compiler::declareGlobal(const std::string& name, bool isImmutable) {
   }
 }
 
+// --------------------------------------------------------------- type checks
+
+void Compiler::declareGlobalType(const std::string& name, const TypeRef& type) {
+  if (type.isPresent()) {
+    globalTypes_[name] = type;
+  } else {
+    globalTypes_.erase(name);
+  }
+}
+
+bool Compiler::lookupGlobalType(const std::string& name, TypeRef& out) const {
+  auto found = globalTypes_.find(name);
+  if (found == globalTypes_.end()) return false;
+  out = found->second;
+  return true;
+}
+
+// A value of type `from` may be stored in a slot of type `to` when either side
+// is unknown/`any`, when the types match, or when `from` is `int` widening to
+// `float`. `nil` only fits a nullable target. This is the single place the
+// assignment rule lives, shared by declarations, plain assignments and
+// parameters.
+void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
+                               const std::string& context, int line, int col) {
+  if (!to.isPresent() || !from.isPresent()) return;  // any / unknown
+  if (to.name == "any" || from.name == "any") return;
+
+  // `nil` fits any nullable target, whatever its type.
+  if (from.name == "nil") {
+    if (to.nullable) return;
+    fail("cannot assign 'nil' to '" + describeType(to) + "' in " + context +
+             ": a nullable value is not allowed here (use '" + to.name + "?')",
+         line, col);
+  }
+
+  if (from.name == to.name) {
+    // Same type; a nullable value does not fit a non-nullable slot unless the
+    // value is provably non-nil (which `from.nullable` already encodes).
+    if (from.nullable && !to.nullable) {
+      fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
+               context + ": a nullable value is not allowed here (use '" + to.name + "?')",
+           line, col);
+    }
+    return;
+  }
+
+  // Numeric widening: int fits float. The reverse is not implicit.
+  if (from.name == "int" && to.name == "float") return;
+
+  fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
+           context,
+       line, col);
+}
+
+TypeRef Compiler::inferExprType(const Expr& expr) const {
+  if (const auto* literal = std::get_if<LiteralExpr>(&expr.node)) {
+    TypeRef type;
+    type.name = literal->value.typeName();  // "nil" for a nil literal
+    type.nullable = literal->value.isNil();
+    return type;
+  }
+  if (const auto* variable = std::get_if<VariableExpr>(&expr.node)) {
+    LocalVar local;
+    if (resolveLocal(variable->name, local)) return local.type;
+    TypeRef global;
+    if (lookupGlobalType(variable->name, global)) return global;
+    return TypeRef{};
+  }
+  return TypeRef{};  // any other shape: unknown, so no check
+}
+
 // -------------------------------------------------------------------- program
 
 void Compiler::resetChunk(const std::string& name) {
@@ -340,6 +411,8 @@ void Compiler::resetChunk(const std::string& name) {
   funcStack_.clear();
   currentUpvalueNames_.clear();
   globalConsts_.clear();
+  globalTypes_.clear();
+  currentReturnType_ = TypeRef{};
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
   inFunction_ = false;
@@ -461,6 +534,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
 
   if (!inGlobalScope() && hasHoistedFunction) {
     std::unordered_map<std::string, int> blockSlots;
+    std::unordered_map<std::string, TypeRef> blockTypes;
     for (const auto& [name, local] : scopes_.back().vars) blockSlots[name] = local.slot;
 
     int nilReg = -1;
@@ -473,10 +547,15 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
 
     // Reserve slots in source order. A `var` reuses a binding already present
     // in this scope; `let`/`const` always create a fresh cell, like
-    // `Env::define` overwriting an existing name.
+    // `Env::define` overwriting an existing name. The binding's type (PHASE
+    // 6.5) is recorded here too, so a hoisted closure sees the annotated or
+    // inferred type of a binding declared later.
     for (const auto& child : block.stmts) {
       if (!child) continue;
       if (const auto* let = std::get_if<LetStmt>(&child->node)) {
+        TypeRef type = let->type;
+        if (!type.isPresent() && let->init) type = inferExprType(*let->init);
+        blockTypes[let->name] = type;
         auto found = blockSlots.find(let->name);
         if (let->kind == Tok::Var && found != blockSlots.end()) {
           predeclaredLetSlots_[let] = found->second;
@@ -491,6 +570,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
           emit(OpCode::DECLLOCAL, nilReg, slot);
         }
       } else if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        blockTypes[fn->name] = TypeRef{"function", false};
         auto found = blockSlots.find(fn->name);
         int slot;
         if (found != blockSlots.end()) {
@@ -510,7 +590,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
     // bodies capture the right cells even when the declaration appears later.
     std::unordered_map<std::string, LocalVar> beforeHoisting = scopes_.back().vars;
     for (const auto& [name, slot] : blockSlots) {
-      scopes_.back().vars[name] = LocalVar{name, slot, false};
+      scopes_.back().vars[name] = LocalVar{name, slot, false, blockTypes[name]};
     }
     for (const auto& child : block.stmts) {
       if (!child) continue;
@@ -526,7 +606,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         int slot = predeclaredFnSlots_[fn];
-        scopes_.back().vars[fn->name] = LocalVar{fn->name, slot, false};
+        scopes_.back().vars[fn->name] = LocalVar{fn->name, slot, false, TypeRef{"function", false}};
       }
     }
   } else if (hasHoistedFunction) {
@@ -604,10 +684,30 @@ void Compiler::compileLet(const LetStmt& s) {
     emit(OpCode::LOADK, reg, addConstant(Value()));
   }
 
+  // Type handling (PHASE 6.5). An explicit annotation wins and is checked
+  // against the initializer; without one, the type is inferred from the
+  // initializer when it is evident. Types are metadata only, so the emitted
+  // code below is the same either way.
+  TypeRef declared = s.type;
+  if (s.init) {
+    TypeRef inferred = inferExprType(*s.init);
+    if (declared.isPresent()) {
+      checkAssignable(inferred, declared, "'" + s.name + "'", s.init->line, s.init->col);
+    } else if (inferred.isPresent() && inferred.name != "nil") {
+      // `let x = nil` stays untyped, so a later `x = 5` is allowed.
+      declared = inferred;
+    }
+  } else if (declared.isPresent()) {
+    // `var x: int;` binds nil, which only a nullable target accepts.
+    checkAssignable(TypeRef{"nil", true}, declared, "'" + s.name + "'", currentLine_,
+                    currentCol_);
+  }
+
   if (inGlobalScope()) {
     // Top level: global variable (persists in the REPL).
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.kind != Tok::Var);
+    declareGlobalType(s.name, declared);
   } else {
     // `compileBlockBody` reserved a slot (and created its cell) for every
     // direct declaration of the block. Fill that cell instead of allocating a
@@ -616,7 +716,7 @@ void Compiler::compileLet(const LetStmt& s) {
     if (predeclared != predeclaredLetSlots_.end()) {
       int slot = predeclared->second;
       emit(OpCode::SETLOCAL, reg, slot);
-      scopes_.back().vars[s.name] = LocalVar{s.name, slot, s.kind != Tok::Var};
+      scopes_.back().vars[s.name] = LocalVar{s.name, slot, s.kind != Tok::Var, declared};
     } else if (s.kind == Tok::Var) {
       // `var` redeclares a binding only when it already exists in the *current*
       // scope. A declaration in a nested block shadows an enclosing binding by
@@ -624,14 +724,15 @@ void Compiler::compileLet(const LetStmt& s) {
       auto existing = scopes_.back().vars.find(s.name);
       if (existing != scopes_.back().vars.end()) {
         emit(OpCode::SETLOCAL, reg, existing->second.slot);
+        existing->second.type = declared;
       } else {
-        int slot = declareLocal(s.name, false);
+        int slot = declareLocal(s.name, false, declared);
         emit(OpCode::DECLLOCAL, reg, slot);
       }
     } else {
       // Nested block: frame-local variable. The declaration happens after the
       // initializer is compiled, exactly like `Env::define`.
-      int slot = declareLocal(s.name, s.kind != Tok::Var);
+      int slot = declareLocal(s.name, s.kind != Tok::Var, declared);
       emit(OpCode::DECLLOCAL, reg, slot);
     }
   }
@@ -666,6 +767,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedLetSlots = std::move(predeclaredLetSlots_);
   auto savedFnSlots = std::move(predeclaredFnSlots_);
   auto savedGlobalConsts = std::move(globalConsts_);
+  auto savedGlobalTypes = std::move(globalTypes_);
   std::deque<FuncState> savedFuncStack = std::move(funcStack_);
 
   bc_ = Bytecode{};
@@ -683,6 +785,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
   globalConsts_.clear();
+  globalTypes_.clear();
 
   std::vector<std::string> symbols;
   const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
@@ -726,6 +829,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredLetSlots_ = std::move(savedLetSlots);
   predeclaredFnSlots_ = std::move(savedFnSlots);
   globalConsts_ = std::move(savedGlobalConsts);
+  globalTypes_ = std::move(savedGlobalTypes);
   funcStack_ = std::move(savedFuncStack);
   return module;
 }
@@ -916,7 +1020,7 @@ void Compiler::compileNameImport(const ImportedModule& module,
 void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
   currentLine_ = line;
   currentCol_ = col;
-  int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col);
+  int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col, fn.returnType);
   int reg = allocReg();
   emit(OpCode::CLOSURE, reg, child);
 
@@ -925,6 +1029,7 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     // scope, where they persist across REPL entries.
     emit(OpCode::SETGLOBAL, reg, addString(fn.name));
     declareGlobal(fn.name, false);
+    declareGlobalType(fn.name, TypeRef{"function", false});
   } else {
     // Local declaration: a frame slot holding the closure value (PHASE 6b).
     // `compileBlockBody` reserves the slot so mutual recursion resolves and a
@@ -933,13 +1038,13 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     if (predeclared != predeclaredFnSlots_.end()) {
       int slot = predeclared->second;
       emit(OpCode::SETLOCAL, reg, slot);
-      scopes_.back().vars[fn.name] = LocalVar{fn.name, slot, false};
+      scopes_.back().vars[fn.name] = LocalVar{fn.name, slot, false, TypeRef{"function", false}};
     } else {
       auto existing = scopes_.back().vars.find(fn.name);
       if (existing != scopes_.back().vars.end()) {
         emit(OpCode::SETLOCAL, reg, existing->second.slot);
       } else {
-        int slot = declareLocal(fn.name, false);
+        int slot = declareLocal(fn.name, false, TypeRef{"function", false});
         emit(OpCode::DECLLOCAL, reg, slot);
       }
     }
@@ -959,8 +1064,22 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
 
   int reg;
   if (stmt.value) {
+    // Check the returned value against the declared return type (PHASE 6.5),
+    // when both are known. Types are metadata only: the check never changes
+    // the emitted code.
+    if (currentReturnType_.isPresent()) {
+      TypeRef valueType = inferExprType(*stmt.value);
+      checkAssignable(valueType, currentReturnType_, "the return type", stmt.value->line,
+                      stmt.value->col);
+    }
     reg = compileExpr(*stmt.value);
   } else {
+    if (currentReturnType_.isPresent() && currentReturnType_.name != "any" &&
+        !currentReturnType_.nullable) {
+      fail("cannot return 'nil' from a function declared to return '" +
+               describeType(currentReturnType_) + "' (use '" + currentReturnType_.name + "?')",
+           currentLine_, currentCol_);
+    }
     reg = allocReg();
     emit(OpCode::LOADK, reg, addConstant(Value()));
   }
@@ -981,8 +1100,8 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
 }
 
 int Compiler::compileFunctionProto(const std::string& name,
-                                   const std::vector<std::string>& params, const StmtPtr& body,
-                                   int line, int col) {
+                                   const std::vector<Param>& params, const StmtPtr& body,
+                                   int line, int col, const TypeRef& returnType) {
   // Save the parent chunk and its compilation state. Functions are compiled
   // into their own proto with fresh registers, locals, scopes and loops.
   Bytecode parent = std::move(bc_);
@@ -997,6 +1116,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   const int parentLine = currentLine_;
   const int parentCol = currentCol_;
   const bool parentInFunction = inFunction_;
+  const TypeRef parentReturnType = currentReturnType_;
 
   bc_ = Bytecode{};
   bc_.name = name;
@@ -1034,7 +1154,8 @@ int Compiler::compileFunctionProto(const std::string& name,
 
   // The function body lives in the parameter scope; it is not a nested block.
   pushScope();
-  for (const std::string& param : params) declareLocal(param, false);
+  for (const Param& param : params) declareLocal(param.name, false, param.type);
+  currentReturnType_ = returnType;
 
   // Incoming arguments already sit in R0 .. R(n-1), so the prologue only has
   // to box each one into its cell. Afterwards the registers are reusable.
@@ -1083,6 +1204,7 @@ int Compiler::compileFunctionProto(const std::string& name,
   currentLine_ = savedParent.line;
   currentCol_ = savedParent.col;
   inFunction_ = savedParent.inFunction;
+  currentReturnType_ = parentReturnType;
 
   int index = static_cast<int>(bc_.children.size());
   bc_.children.push_back(std::make_shared<Bytecode>(std::move(proto)));
@@ -1095,7 +1217,8 @@ int Compiler::compileLambda(const LambdaExpr& lambda, int line, int col) {
   // without binding a name anywhere.
   currentLine_ = line;
   currentCol_ = col;
-  int child = compileFunctionProto("<anonymous>", lambda.params, lambda.body, line, col);
+  int child = compileFunctionProto("<anonymous>", lambda.params, lambda.body, line, col,
+                                   TypeRef{});
   int reg = allocReg();
   emit(OpCode::CLOSURE, reg, child);
   return reg;
@@ -1400,6 +1523,22 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     int upvalueSlot = isLocal ? -1 : resolveUpvalue(name);
     if (!isLocal && upvalueSlot < 0 && globalConsts_.find(name) != globalConsts_.end()) {
       fail("cannot assign to immutable variable '" + name + "'", line, col);
+    }
+
+    // Type check (PHASE 6.5): a plain assignment must respect the binding's
+    // declared or inferred type. Compound assignments (+=, ...) are left alone
+    // because their result type is not tracked statically.
+    if (assign.op == Tok::Eq) {
+      TypeRef targetType;
+      if (isLocal) {
+        targetType = local.type;
+      } else if (upvalueSlot < 0) {
+        lookupGlobalType(name, targetType);
+      }
+      if (targetType.isPresent()) {
+        checkAssignable(inferExprType(*assign.value), targetType, "'" + name + "'",
+                        assign.value->line, assign.value->col);
+      }
     }
 
     if (assign.op == Tok::Eq) {
