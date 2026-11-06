@@ -395,6 +395,11 @@ TypeRef Compiler::inferExprType(const Expr& expr) const {
     if (lookupGlobalType(variable->name, global)) return global;
     return TypeRef{};
   }
+  // A struct literal has the struct's own type, so `let p: Point = Point { ... }`
+  // is checked like any other annotated binding.
+  if (const auto* literal = std::get_if<StructLitExpr>(&expr.node)) {
+    return TypeRef{literal->typeName, false};
+  }
   // `a!!` narrows away the nullability of its operand (PHASE 6.5).
   if (const auto* assertion = std::get_if<NonNullExpr>(&expr.node)) {
     TypeRef inner = inferExprType(*assertion->operand);
@@ -433,6 +438,7 @@ void Compiler::resetChunk(const std::string& name) {
   currentUpvalueNames_.clear();
   globalConsts_.clear();
   globalTypes_.clear();
+  structDefs_.clear();
   currentReturnType_ = TypeRef{};
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
@@ -444,6 +450,7 @@ void Compiler::resetChunk(const std::string& name) {
   namespaces_.clear();
   boundImports_.clear();
   wildcardBindings_.clear();
+  loadingStack_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
@@ -455,6 +462,9 @@ Bytecode Compiler::compile(const StmtPtr& program) {
   // interpreter (and so the REPL keeps definitions between entries).
   scopes_.push_back(Scope{});
   if (const auto* block = std::get_if<BlockStmt>(&program->node)) {
+    // Register the struct shapes first so a hoisted function (compiled next)
+    // can already build a literal.
+    registerStructDecls(*block);
     // Top-level function declarations are hoisted, like `execBlock` does in
     // the interpreter, so a call can appear before the declaration.
     for (const auto& child : block->stmts) {
@@ -503,7 +513,8 @@ Bytecode Compiler::compileRepl(const StmtPtr& program) {
     compileStmt(*program);
     emit(OpCode::HALT);
   } else {
-    // Hoist top-level function declarations, then compile every statement.
+    // Register struct shapes first, then hoist top-level function declarations.
+    registerStructDecls(*block);
     for (const auto& child : block->stmts) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
@@ -539,6 +550,10 @@ Bytecode compileProgram(const StmtPtr& program) { return Compiler{}.compile(prog
 // ----------------------------------------------------------------- statements
 
 void Compiler::compileBlockBody(const BlockStmt& block) {
+  // A `struct` is compile-time metadata, so register the whole block's shapes
+  // before compiling anything: a hoisted function that builds a literal must
+  // already see them.
+  registerStructDecls(block);
   // Function declarations are hoisted within their block, so a call can appear
   // before the declaration and mutually recursive local functions can resolve
   // each other. Block-local `let`/`var` declarations also need their slots
@@ -671,6 +686,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           },
           [&](const LetStmt& s) { compileLet(s); },
           [&](const FnDeclStmt& s) { compileFnDecl(s, stmt.line, stmt.col); },
+          [&](const StructDeclStmt& s) { compileStructDecl(s, stmt.line, stmt.col); },
           [&](const BlockStmt& s) {
             pushScope();
             compileBlockBody(s);
@@ -789,6 +805,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedFnSlots = std::move(predeclaredFnSlots_);
   auto savedGlobalConsts = std::move(globalConsts_);
   auto savedGlobalTypes = std::move(globalTypes_);
+  auto savedStructDefs = std::move(structDefs_);
   std::deque<FuncState> savedFuncStack = std::move(funcStack_);
 
   bc_ = Bytecode{};
@@ -807,6 +824,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredFnSlots_.clear();
   globalConsts_.clear();
   globalTypes_.clear();
+  structDefs_.clear();
 
   std::vector<std::string> symbols;
   const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
@@ -851,6 +869,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredFnSlots_ = std::move(savedFnSlots);
   globalConsts_ = std::move(savedGlobalConsts);
   globalTypes_ = std::move(savedGlobalTypes);
+  structDefs_ = std::move(savedStructDefs);
   funcStack_ = std::move(savedFuncStack);
   return module;
 }
@@ -894,11 +913,39 @@ const ImportedModule& Compiler::loadModule(const std::string& path, int line, in
   auto cached = loadedModules_.find(path);
   if (cached != loadedModules_.end()) return cached->second;
 
+  // A path already being loaded is a cycle (`a -> b -> a`). Report it instead
+  // of recursing forever: without this guard the loader would keep re-entering
+  // itself until the stack overflows. The message lists the chain so the cycle
+  // is visible at a glance.
+  if (std::find(loadingStack_.begin(), loadingStack_.end(), path) != loadingStack_.end()) {
+    std::string chain;
+    bool started = false;
+    for (const std::string& active : loadingStack_) {
+      if (!started && active != path) continue;
+      started = true;
+      chain += active;
+      chain += " -> ";
+    }
+    chain += path;
+    fail("cyclic import detected: " + chain, line, col);
+  }
+
   if (!importLoader_) {
     fail("module '" + path + "' not found", line, col);
   }
   StmtPtr program = importLoader_(path, line, col);
-  ImportedModule module = importModule(program, path);
+  loadingStack_.push_back(path);
+  ImportedModule module;
+  {
+    // Pop the path on scope exit, including when compiling the module body
+    // throws, so a failed import cannot leave the stack dirty for the next
+    // compile (the REPL reuses one Compiler across entries).
+    struct PopGuard {
+      std::vector<std::string>& stack;
+      ~PopGuard() { stack.pop_back(); }
+    } guard{loadingStack_};
+    module = importModule(program, path);
+  }
   auto inserted = loadedModules_.emplace(path, std::move(module));
   return inserted.first->second;
 }
@@ -1071,6 +1118,30 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     }
   }
   freeReg();
+}
+
+// A `struct` declaration is pure compile-time metadata: it emits no bytecode.
+// It records the field names and their optional types so a later `Name { ... }`
+// literal can be checked against them. The declaration is module-level (the
+// parser rejects a nested one), so a plain insert is enough; a duplicate name
+// is already rejected by the parser.
+void Compiler::compileStructDecl(const StructDeclStmt& decl, int line, int col) {
+  (void)line;
+  (void)col;
+  structDefs_[decl.name] = decl.fields;
+}
+
+// Registers every `struct` declared directly in `block` before anything else in
+// it is compiled. Function declarations are hoisted and compiled first, so
+// without this pass a hoisted function that builds a struct literal would not
+// yet see the shape when its body is compiled.
+void Compiler::registerStructDecls(const BlockStmt& block) {
+  for (const auto& child : block.stmts) {
+    if (!child) continue;
+    if (const auto* decl = std::get_if<StructDeclStmt>(&child->node)) {
+      structDefs_[decl->name] = decl->fields;
+    }
+  }
 }
 
 void Compiler::compileReturn(const ReturnStmt& stmt) {
@@ -1715,6 +1786,64 @@ int Compiler::compileMap(const MapExpr& map) {
   return table;
 }
 
+// `Point { x: 1, y: 2 }` (PHASE 6.5). A struct value is a plain map at runtime,
+// so the literal lowers to the same NEWTABLE/SETTABLE sequence as a map literal
+// and adds no opcode. Before lowering, the fields are checked against the
+// declaration: an unknown field is a typo, and a missing field would leave the
+// map without a key the declaration promises. Field types are checked with the
+// same `checkAssignable` rule as every other annotation.
+int Compiler::compileStructLiteral(const StructLitExpr& literal, int line, int col) {
+  auto found = structDefs_.find(literal.typeName);
+  if (found == structDefs_.end()) {
+    fail("unknown struct '" + literal.typeName + "'", line, col);
+  }
+  const std::vector<StructField>& fields = found->second;
+
+  // Every declared field must appear exactly once in the literal. The parser
+  // already rejected duplicates, so this only has to catch missing and unknown
+  // names.
+  std::unordered_map<std::string, const StructLitEntry*> provided;
+  for (const StructLitEntry& entry : literal.entries) {
+    const StructField* declared = nullptr;
+    for (const StructField& field : fields) {
+      if (field.name == entry.name) {
+        declared = &field;
+        break;
+      }
+    }
+    if (declared == nullptr) {
+      fail("unknown field '" + entry.name + "' in struct '" + literal.typeName + "'", line, col);
+    }
+    provided[entry.name] = &entry;
+  }
+  for (const StructField& field : fields) {
+    if (provided.find(field.name) == provided.end()) {
+      fail("missing field '" + field.name + "' in struct '" + literal.typeName + "'", line, col);
+    }
+  }
+
+  // Lower to a map, in declaration order so the runtime table has a stable
+  // shape. Each value is checked against its field's annotation when it has
+  // one.
+  int table = allocReg();
+  emit(OpCode::NEWTABLE, table, 0, 1);
+  for (const StructField& field : fields) {
+    const StructLitEntry& entry = *provided[field.name];
+    // The key is interned before the value, matching `compileMap`, so a struct
+    // literal is byte-identical to the map literal it lowers to.
+    int key = -addString(field.name) - 1;
+    int value = compileExpr(*entry.value);
+    if (field.type.isPresent()) {
+      TypeRef valueType = inferExprType(*entry.value);
+      checkAssignable(valueType, field.type, "field '" + field.name + "'", entry.value->line,
+                      entry.value->col);
+    }
+    emit(OpCode::SETTABLE, value, table, key);
+    freeReg(nextReg_ - table - 1);
+  }
+  return table;
+}
+
 int Compiler::compileRange(const RangeExpr& range, int line, int col) {
   int start = compileExpr(*range.start);
   int end = compileExpr(*range.end);
@@ -1766,6 +1895,9 @@ int Compiler::compileExpr(const Expr& expr) {
           [&](const VariableExpr& variable) -> int { return compileVariable(variable.name); },
           [&](const ArrayExpr& array) -> int { return compileArray(array); },
           [&](const MapExpr& map) -> int { return compileMap(map); },
+          [&](const StructLitExpr& literal) -> int {
+            return compileStructLiteral(literal, expr.line, expr.col);
+          },
           [&](const UnaryExpr& unary) -> int {
             int operand = compileExpr(*unary.operand);
             if (unary.op == Tok::Plus) return operand;  // +x is x

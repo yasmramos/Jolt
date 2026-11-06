@@ -1,0 +1,6 @@
+// expect-exit: 65
+// A module that imports a module which imports it back forms a cycle. The
+// compiler must report it instead of recursing until the stack overflows.
+
+import cyclic.a;
+print(1);

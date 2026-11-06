@@ -356,9 +356,18 @@ previous one.
   rejected. See `docs/language.md` §6.11 and `tests/15_defer.jolt`.
 - **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
   `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
-  conflict detection for `.*` and a reserved `std.` prefix. `require`
+  conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
+  once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
+  compile error rather than a stack overflow. `require`
   (Lua-style) is not used.
-- **`struct`** (data only, no methods).
+- **`struct`** (data only, no methods) — **done**: a named, module-level map
+  shape with optional field types. The declaration emits no bytecode and adds
+  no opcode; a `Point { x: 1, y: 2 }` literal is checked against the
+  declaration (unknown, missing, duplicate or mistyped field is a compile
+  error) and then lowered to the same `NEWTABLE`/`SETTABLE` sequence as a map
+  literal, so a struct value is a plain map at runtime. A struct name is a
+  valid annotation and is visible to the whole file (like a hoisted `fn`). See
+  `docs/language.md` §4.7 and `tests/18_structs.jolt`.
 - `switch` simple (literals and ranges) — **done**: no fallthrough, labels are
   literals or integer ranges, optional single `default`; compiles to the
   existing `EQ`/`IN`/`JMP` opcodes (no new opcode). See `docs/language.md` §6.10.
@@ -450,7 +459,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: 🔶 in progress (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!` done; `struct` and `native fn` pending)
+Phase 6.5: 🔶 in progress (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, and `struct` done; `native fn` pending)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

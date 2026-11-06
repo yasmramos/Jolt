@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A literal must provide every field the struct declares.
+struct Point { x: int; y: int; }
+let p = Point { x: 1 };

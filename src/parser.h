@@ -2,6 +2,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ast.h"
@@ -48,6 +49,16 @@ class Parser {
   // Folded values of `const` declarations seen so far, used by the parser to
   // evaluate constant expressions at parse time (see foldConstant).
   std::unordered_map<std::string, Value> constValues_;
+  // Names of the `struct` types declared so far (PHASE 6.5). A struct name is
+  // accepted as a type annotation and lets `Name { ... }` be recognized as a
+  // struct literal instead of a variable followed by a block (which would
+  // otherwise be ambiguous in `for x in name { ... }`).
+  std::unordered_set<std::string> structNames_;
+  // Names of the `struct` types actually declared during this parse. Kept
+  // apart from `structNames_` (which also holds pre-scanned names) so a
+  // redeclaration in the same file is caught while a name merely made visible
+  // by the pre-scan is not mistaken for one.
+  std::unordered_set<std::string> declaredStructs_;
   // True while parseProgram is running at statement level: top-level consts
   // are folded later in resolveTopLevelConsts (after the whole program was
   // parsed), so nested blocks keep folding eagerly during parsing.
@@ -71,6 +82,8 @@ class Parser {
   StmtPtr parseStatement();
   StmtPtr parseVarDecl();
   StmtPtr parseFnDecl();
+  // `struct Name { field: T; ... }` (PHASE 6.5). A data-only declaration.
+  StmtPtr parseStructDecl();
   // Body that follows a `=>`: a `{ ... }` block, or a single expression that
   // is desugared into a block holding one `return`. `arrow` is the `=>` token.
   StmtPtr parseFunctionBody(const Token& arrow);
@@ -104,6 +117,10 @@ class Parser {
   ExprPtr parseUnary();
   ExprPtr parsePostfix();
   ExprPtr parsePrimary();
+  // Parses the `{ field: value, ... }` body of a struct literal whose type
+  // name has already been consumed. The parser only builds the node; checking
+  // the field names and types against the declaration is the compiler's job.
+  ExprPtr parseStructLiteralBody(const std::string& typeName, int line, int col);
   // True when the upcoming tokens start a lambda: `x =>` or `(a, b) =>`.
   bool atLambda() const;
   ExprPtr parseLambda();

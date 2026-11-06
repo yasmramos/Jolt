@@ -1,0 +1,5 @@
+// Fixture: part of a cyclic import (cyclic.a <-> cyclic.b).
+
+import cyclic.a;
+
+fn b() { return 2; }

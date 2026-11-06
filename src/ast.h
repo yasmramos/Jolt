@@ -103,6 +103,29 @@ struct MapExpr {
   std::vector<MapEntry> entries;
 };
 
+// One field of a `struct` declaration: a name plus an optional type annotation
+// (`struct Point { x: int; y: int; }`).
+struct StructField {
+  std::string name;
+  TypeRef type;
+};
+
+// One entry of a struct literal (`Point { x: 1, y: 2 }`). The field name is
+// always an identifier, so no computed key is possible.
+struct StructLitEntry {
+  std::string name;
+  ExprPtr value;
+};
+
+// `Point { x: 1, y: 2 }` (PHASE 6.5). A struct value is a map at runtime, so
+// the literal compiles to the same NEWTABLE/SETTABLE sequence as a map
+// literal; `typeName` is kept so the compiler can check the field names and
+// types against the declaration.
+struct StructLitExpr {
+  std::string typeName;
+  std::vector<StructLitEntry> entries;
+};
+
 struct UnaryExpr {
   Tok op = Tok::Nil;
   ExprPtr operand;
@@ -183,9 +206,9 @@ struct LambdaExpr {
 };
 
 using ExprNode =
-    std::variant<LiteralExpr, InterpExpr, VariableExpr, ArrayExpr, MapExpr, UnaryExpr,
-                 BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr, MemberExpr,
-                 NonNullExpr, RangeExpr, LambdaExpr>;
+    std::variant<LiteralExpr, InterpExpr, VariableExpr, ArrayExpr, MapExpr, StructLitExpr,
+                 UnaryExpr, BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr,
+                 MemberExpr, NonNullExpr, RangeExpr, LambdaExpr>;
 
 struct Expr {
   // Position convention: every Expr/Stmt carries the line/col of the token
@@ -228,6 +251,16 @@ struct FnDeclStmt {
   std::vector<Param> params;
   TypeRef returnType;  // optional, e.g. `fn f(): int`
   StmtPtr body;  // BlockStmt
+};
+
+// `struct Point { x: int; y: int; }` (PHASE 6.5). A data-only type: no
+// methods, no inheritance. It is compile-time metadata that tells the compiler
+// the field names and their optional types; a `Point { ... }` literal then
+// builds a plain map (see StructLitExpr), so the declaration itself emits no
+// bytecode and adds no opcode.
+struct StructDeclStmt {
+  std::string name;
+  std::vector<StructField> fields;
 };
 
 struct BlockStmt {
@@ -321,8 +354,8 @@ struct SwitchStmt {
   StmtPtr defaultBody;  // may be null
 };
 
-using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, BlockStmt, IfStmt, WhileStmt,
-                              ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
+using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, StructDeclStmt, BlockStmt, IfStmt,
+                              WhileStmt, ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
                               ImportStmt, SwitchStmt, DeferStmt>;
 
 struct Stmt {

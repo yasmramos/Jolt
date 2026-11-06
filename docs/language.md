@@ -11,6 +11,7 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 3. [Data types](#3-data-types)
 4. [Variables and scope](#4-variables-and-scope)
    - [4.6 Type annotations](#46-type-annotations)
+   - [4.7 `struct`](#47-struct)
 5. [Operators](#5-operators)
 6. [Statements](#6-statements)
 7. [Functions and closures](#7-functions-and-closures)
@@ -36,7 +37,7 @@ A Jolt program is a UTF-8 text file (extension `.jolt`). The pipeline is:
 3. **Compiler**: translates the AST to bytecode (40 opcodes, register-based).
 4. **VM**: executes the bytecode.
 
-The AST interpreter is kept only as a **test oracle** (differential testing). It is not part of the product. The `jolt` executable currently runs programs by walking the AST (PHASE 4 pending: VM as the dev engine). The bytecode compiler and the VM cover functions, closures, control flow, and collections (PHASE 6a, 6b done; 6c, 6d pending).
+The AST is never executed: the `jolt` executable compiles source to bytecode and runs it on the register-based VM, and the compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 
 The program runs from top to bottom in the global scope. Simple statements end with `;`. Statements with a block (`if`, `while`, `for`, `fn`) close with `}` and optionally accept a `;` after it.
 
@@ -356,6 +357,72 @@ assignment target.
 These operators add no opcode: `??` and `?.` lower to `EQ`/`JMP_IF_*`/`GETTABLE`
 and `!!` to a call to a hidden helper, so the bytecode budget is unchanged
 (AGENT.md §3).
+
+---
+
+### 4.7 `struct`
+
+A `struct` is a named, data-only shape: a fixed set of fields with optional
+type annotations. It has no methods and no inheritance (and there never will
+be — maps plus closures replace classes). Like `import`, a `struct` is
+**module-level metadata**: it may only be declared at the top level of a file,
+and the declaration itself emits no bytecode.
+
+```jolt
+struct Point {
+  x: int;
+  y: int;
+}
+
+let p = Point { x: 1, y: 2 };
+print(p.x, p.y);   // 1 2
+```
+
+A struct value **is a map at runtime**, so everything that works on a map works
+on a struct: member access, `in`, `len`, `for ... in`, indexing, and structural
+equality. `Point { x: 1, y: 2 }` lowers to the same `NEWTABLE`/`SETTABLE`
+sequence as `{x: 1, y: 2}`, so `struct` adds no opcode and the register VM and
+the future AOT backend never see a struct type. `type(p)` reports `"map"`.
+
+**Field order does not matter** in a literal, but every declared field must be
+present exactly once. The compiler rejects an unknown field (a typo), a missing
+field (a key the declaration promises), a duplicate field and a duplicate
+struct name. A field annotation is optional; when present, the value is checked
+with the same rules as every other annotation (including `int` → `float`
+widening).
+
+```jolt
+struct Pair { first; second; }          // untyped fields
+let a = Pair { first: 1, second: "x" }; // ok: any value fits
+
+struct Vec { x: float; y: float; }
+let v = Vec { x: 1, y: 2.5 };           // ok: int widens to float
+
+let bad1 = Vec { x: 1 };                // error: missing field 'y'
+let bad2 = Vec { x: 1, z: 2 };          // error: unknown field 'z'
+let bad3 = Vec { x: 1, y: "no" };       // error: cannot assign 'string' to 'float'
+```
+
+A struct name is a valid type annotation, and — like a hoisted `fn` — a struct
+declared later in the file is visible earlier:
+
+```jolt
+fn origin(): Point {
+  return Point { x: 0, y: 0 };
+}
+
+struct Point { x: int; y: int; }   // visible to `origin`, declared above
+```
+
+Because `struct` is a reserved word, the sequence `struct Name` is always a
+declaration, so `Name { ... }` is unambiguously a struct literal whenever
+`Name` is a struct declared in the file (the literal form takes precedence over
+reading `Name` as a variable).
+
+A struct is local to its file: its name is **not** exported by `import`. A
+module that builds a struct value exports the map, and the importing file sees
+a plain map (it cannot write `Point { ... }` unless it declares its own
+`struct Point`).
 
 ---
 
@@ -1356,13 +1423,13 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 
 ## 16. Known limitations
 
-- Dynamic typing. The `jolt` executable currently runs programs by walking the AST (PHASE 4 pending: VM as the dev engine). The bytecode compiler and the VM cover functions, closures, control flow, and collections (PHASE 6a, 6b done; 6c, 6d pending).
+- Dynamic typing. The `jolt` executable compiles source to bytecode and runs it on the register-based VM; the AST is never executed. The compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 - No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
-- No classes, structs, interfaces or inheritance yet. `struct` (data only, no methods) is planned for PHASE 6.5 (1.0). There are no classes or inheritance (and there never will be — maps + closures replace them).
+- No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
-- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require` and no lazy/cyclic-import handling; a module is loaded once, eagerly, when the program is compiled.
+- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require`; a module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--`, default parameters or variadic arguments. `switch` on literals and ranges is supported (see §6.10).
-- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` and `native fn` are still pending for PHASE 6.5.
+- Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7); `native fn` is still pending for PHASE 6.5.
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
@@ -1474,7 +1541,7 @@ A dotted path `a.b.c` maps to the file `a/b/c.jolt`, looked up in this order:
 
 A path that resolves nowhere is a compile error: `module 'X' not found`.
 
-Nested imports (a module that imports another module) resolve from the same project root.
+Nested imports (a module that imports another module) resolve from the same project root. A module that imports itself, directly or through a chain (`a -> b -> a`), is a compile error: `cyclic import detected: a -> b -> a`.
 
 ### 18.5 Example
 

@@ -256,10 +256,10 @@ The positive tests use `assert` and `assertEq`; a script exits with a non-zero c
 
 Current limitations:
 
-- Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. While PHASE 6 (functions, closures, collections) is being completed, the `jolt` executable still uses the AST interpreter as a temporary engine; the compiler and the VM already cover control flow and locals. There is no JIT.
+- Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. There is no JIT.
 - There are no classes, structs, interfaces or inheritance.
 - There is no `try`/`catch` or exceptions that can be caught from the language.
-- Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require` and no lazy/cyclic-import handling.
+- Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require`; modules are loaded eagerly and a cyclic import is a compile error.
 - There is no `do`/`while`, `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough.
 - `defer { ... }` runs a block when its scope exits, in LIFO order, on fall-through, `return` and `break`/`continue` alike; it compiles to no new opcode.
 - Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
@@ -271,7 +271,6 @@ Current limitations:
 
 Ideas for future versions:
 
-- Hook the bytecode compiler and the VM up to the CLI and the REPL.
 - `try`/`catch` and errors as values.
 - User-defined structs and methods.
 - String and array slicing.
