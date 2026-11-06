@@ -49,24 +49,33 @@ std::string joinPath(const std::string &dir, const std::string &relative) {
 // Directory of the standard library shipped with the toolchain. `std.*`
 // imports resolve here (see AGENT.md §18: `std.` is reserved).
 //
-// `$JOLT_STDLIB` overrides the search. Otherwise the candidates are the
-// working directory and the locations a built or installed binary keeps its
-// stdlib in (`<exeDir>/std`, `<exeDir>/../std`, `<exeDir>/../share/jolt/std`),
-// so an import resolves whether `jolt` is run from the source tree, from the
-// build directory (as under CTest) or from an install prefix.
+// `$JOLT_STDLIB` overrides the search. Otherwise the standard library is
+// looked for in the working directory and, walking up from the executable's
+// directory, in `<dir>/std`. The upward walk is what lets an import resolve
+// whether `jolt` sits in the source tree, in a single-config build
+// (`<root>/build`), in a multi-config build (`<root>/build/<config>`, MSVC) or
+// in an install prefix; the `share/jolt/std` location covers the install
+// layout explicitly.
 std::string standardLibraryDir(const std::string &argv0) {
   if (const char *env = std::getenv("JOLT_STDLIB")) return env;
-  std::string exeDir = directoryOf(argv0);
-  const std::string candidates[] = {
-      "std",
-      joinPath(exeDir, "std"),
-      joinPath(exeDir, "../std"),
-      joinPath(exeDir, "../share/jolt/std"),
-  };
-  for (const std::string &candidate : candidates) {
+
+  auto hasStd = [](const std::string &dir) {
     std::string ignored;
-    if (readSourceFile(joinPath(candidate, "math.jolt"), ignored)) return candidate;
+    return readSourceFile(joinPath(dir, "math.jolt"), ignored);
+  };
+
+  if (hasStd("std")) return "std";
+
+  std::string dir = directoryOf(argv0);
+  for (int depth = 0; depth < 4; ++depth) {
+    std::string candidate = joinPath(dir, "std");
+    if (hasStd(candidate)) return candidate;
+    dir = joinPath(dir, "..");
   }
+
+  std::string installed = joinPath(directoryOf(argv0), "../share/jolt/std");
+  if (hasStd(installed)) return installed;
+
   return "std";  // Nothing found: imports report "module not found".
 }
 

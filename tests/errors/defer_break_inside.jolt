@@ -1,0 +1,11 @@
+// expect-exit: 65
+// A `break` inside a `defer` block would leave the loop mid-teardown, making
+// the order in which deferred blocks run ambiguous.
+fn f() {
+  for i in 0..3 {
+    defer {
+      break;
+    }
+  }
+}
+f();

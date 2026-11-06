@@ -71,7 +71,7 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  case   const  continue  default  else  false  fn  for  if  import
+break  case   const  continue  default  defer  else  false  fn  for  if  import
 in     let    nil    return    switch   true  var    while
 ```
 
@@ -624,6 +624,37 @@ fn classify(n) {
     case 1..=9: { return "small"; }
     default: { return "big"; }
   }
+}
+```
+
+### 6.11 `defer`
+
+```jolt
+fn readConfig(path) {
+  let file = open(path);
+  defer {
+    file.close();
+  }
+  // ... use `file` ...
+  return parse(file.read());
+}
+```
+
+`defer` registers a block to run when the **enclosing scope exits**. The block does not run where it is written: the compiler inlines it at every exit from that scope, so it runs whether the scope is left normally (falling off the end), through `return`, or through the `break`/`continue` that leave it. This makes `defer` the idiomatic way to release a resource, mirroring Go's `defer`.
+
+Several deferred blocks in the same scope run in **LIFO order**: the last one declared runs first. A `defer` inside a loop body runs once per iteration, and once more on the iteration that leaves the loop early. A standalone block is a scope too, so its deferred blocks run when the block ends.
+
+The body must be a `{ ... }` block, and `defer` may only appear inside a function body (at the program top level there is no scope exit to attach it to). A deferred block cannot contain a `return`, `break` or `continue` that would leave the block itself: that would re-enter the teardown that is running it. A loop or a nested function declared *inside* the deferred block is a fresh boundary, so its own `break`/`return` is allowed.
+
+Because the deferred blocks are inlined at the scope exits, `defer` adds no opcode and no VM support.
+
+```jolt
+fn lifo() {
+  var log = [];
+  defer { log.push("first"); }
+  defer { log.push("second"); }
+  log.push("body");
+  return log; // ["body", "second", "first"]
 }
 ```
 
