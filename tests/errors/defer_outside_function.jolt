@@ -1,0 +1,6 @@
+// expect-exit: 65
+// A `defer` needs an enclosing function scope to attach to; at the program
+// top level there is no scope exit to run it at.
+defer {
+  print("nope");
+}

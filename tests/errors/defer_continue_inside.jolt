@@ -1,0 +1,11 @@
+// expect-exit: 65
+// Same as `break`: a `continue` inside a `defer` block would re-enter the loop
+// while the deferred block is still running.
+fn f() {
+  for i in 0..3 {
+    defer {
+      continue;
+    }
+  }
+}
+f();

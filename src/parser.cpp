@@ -257,6 +257,7 @@ StmtPtr Parser::parseStatement() {
   if (match(Tok::While)) return parseWhile();
   if (match(Tok::For)) return parseFor();
   if (match(Tok::Return)) return parseReturn();
+  if (match(Tok::Defer)) return parseDefer();
   if (match(Tok::Import)) return parseImport();
   if (match(Tok::Switch)) return parseSwitch();
   if (check(Tok::Case) || check(Tok::Default)) {
@@ -630,6 +631,20 @@ StmtPtr Parser::parseReturn() {
   }
   consume(Tok::Semicolon, "expected ';' after 'return'");
   return makeStmt(ReturnStmt{std::move(value)}, keyword.line, keyword.col);
+}
+
+// `defer <block>`. The body must be a `{ ... }` block: a bare expression would
+// be evaluated where it appears instead of at scope exit, which is not what
+// `defer` means. A trailing `;` after the block is accepted, like other
+// statement-position blocks.
+StmtPtr Parser::parseDefer() {
+  const Token& keyword = previous();
+  if (!check(Tok::LBrace)) {
+    error(peek(), "expected '{' after 'defer'");
+  }
+  StmtPtr body = parseBlock();
+  match(Tok::Semicolon);
+  return makeStmt(DeferStmt{std::move(body)}, keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseBlock() {

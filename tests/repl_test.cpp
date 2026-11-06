@@ -79,10 +79,31 @@ static void testSwitchReplChunk() {
         "switch at the REPL runs the matching case");
 }
 
+static void testDeferReplChunk() {
+  // A function with a `defer` entered at the REPL is compiled with
+  // `compileRepl`. The deferred block must run at the function's exit, and the
+  // ';' the REPL appends after the trailing '}' must not disturb it.
+  VM vm;
+  vm.run(compileReplSource(
+      "fn f() {\n"
+      "  var trail = [];\n"
+      "  defer { trail.push(\"cleanup\"); }\n"
+      "  trail.push(\"body\");\n"
+      "  return trail;\n"
+      "}\n"
+      "var result = f();\n"
+      ";\n"));
+  const Value* result = vm.findGlobal("result");
+  check(result != nullptr, "defer at the REPL defines 'result'");
+  check(result != nullptr && result->isArray() && result->arr().items.size() == 2,
+        "defer at the REPL runs the deferred block after the body");
+}
+
 int main() {
   testLoadPreservesGlobals();
   testClearForgetsGlobals();
   testSwitchReplChunk();
+  testDeferReplChunk();
   if (g_failures != 0) {
     std::printf("%d test(s) failed\n", g_failures);
     return 1;

@@ -93,11 +93,32 @@ class Compiler {
   struct Scope {
     std::unordered_map<std::string, LocalVar> vars;
     int baseSlot = 0;
+    // Deferred blocks (`defer { ... }`) declared directly in this scope, in
+    // source order. They are not emitted where they appear: the compiler runs
+    // them (in reverse order) at every point where the scope exits -- normal
+    // fall-through, `return`, or `break`/`continue` that leaves the scope.
+    std::vector<StmtPtr> defers;
   };
 
   struct Loop {
     std::vector<int> breaks;
     std::vector<int> continues;
+    // Deepest scope whose deferred blocks `break`/`continue` must run before
+    // jumping out: a 1-based scope count, so `emitDeferredBlocks(deferMinDepth)`
+    // runs every scope from the innermost down to and including it.
+    size_t deferMinDepth = 0;
+  };
+
+  // Marks that the deferred body currently being emitted is a `defer`
+  // boundary. A `break`/`continue` that would leave that boundary is rejected,
+  // because the deferred block runs at a scope exit and letting it jump out
+  // would make the execution order ambiguous. `loopDepth` is `loops_.size()`
+  // when the body started, so a loop declared *inside* the deferred body (which
+  // raises the count) may still be broken out of. `return` needs no field: the
+  // whole stack is cleared while compiling a nested function, so a `return`
+  // there always belongs to that function.
+  struct DeferCtx {
+    size_t loopDepth = 0;
   };
 
   // One entry of the proto stack. `compileFunctionProto` saves the current
@@ -110,6 +131,7 @@ class Compiler {
     Bytecode bc;
     std::vector<Scope> scopes;
     std::vector<Loop> loops;
+    std::vector<DeferCtx> deferStack;
     int nextReg = 0;
     int maxReg = 0;
     int nextLocal = 0;
@@ -150,6 +172,10 @@ class Compiler {
 
   std::vector<Scope> scopes_;
   std::vector<Loop> loops_;
+  // One entry per `defer` body currently being emitted (innermost last). A
+  // `break`/`continue` that would leave the innermost defer boundary is
+  // rejected; the whole stack is cleared while compiling a nested function.
+  std::vector<DeferCtx> deferStack_;
 
   // Slots reserved for the direct declarations of the block currently being
   // compiled, keyed by the statement node. The pre-pass in `compileBlockBody`
@@ -238,6 +264,12 @@ class Compiler {
   void compileSwitch(const SwitchStmt& stmt);
   void compileBreak(const Stmt& stmt);
   void compileContinue(const Stmt& stmt);
+  void compileDefer(const DeferStmt& stmt);
+  // Emits the deferred blocks of every scope from the innermost down to (and
+  // including) `minDepth`, in LIFO order, so the code at that exit point runs
+  // them. Called at normal scope exit, before `return`, and before the jump
+  // emitted by `break`/`continue`. `minDepth` is a 1-based scope count.
+  void emitDeferredBlocks(size_t minDepth);
 
   void resetChunk(const std::string& name = "<main>");
 

@@ -415,6 +415,69 @@ void testSwitchSignedLabels() {
   expectCompiles("switch (1) { case -1: {} case +2: {} }\n");
 }
 
+void testDeferCompiles() {
+  // `defer { ... }` compiles: the block is inlined at the scope exit, so on
+  // the `return` path the deferred call is emitted just before the RETURN.
+  Bytecode bc = compileSource(
+      "fn f() {\n"
+      "  defer { print(\"cleanup\"); }\n"
+      "  return 1;\n"
+      "}\n");
+
+  assert(bc.children.size() == 1);
+  const Bytecode& proto = *bc.children[0];
+  // Find the first RETURN; the deferred CALL must be the instruction before it.
+  size_t firstReturn = proto.code.size();
+  for (size_t i = 0; i < proto.code.size(); ++i) {
+    if (proto.code[i].op == OpCode::RETURN) {
+      firstReturn = i;
+      break;
+    }
+  }
+  assert(firstReturn > 0);
+  assert(proto.code[firstReturn - 1].op == OpCode::CALL);
+}
+
+void testDeferRunsOnFallThrough() {
+  // Falling off the end of the function runs the deferred block before the
+  // implicit nil return, so the deferred call precedes the epilogue.
+  Bytecode bc = compileSource(
+      "fn f() {\n"
+      "  defer { print(\"cleanup\"); }\n"
+      "  var x = 1;\n"
+      "}\n");
+  assert(bc.children.size() == 1);
+  const Bytecode& proto = *bc.children[0];
+  // The epilogue is `LOADK nil; RETURN`; the deferred CALL runs just before it.
+  assert(proto.code.back().op == OpCode::RETURN);
+  assert(proto.code[proto.code.size() - 2].op == OpCode::LOADK);
+  assert(proto.code[proto.code.size() - 3].op == OpCode::CALL);
+}
+
+void testDeferErrors() {
+  expectCompileError("defer { print(\"x\"); }\n", "defer outside a function");
+  expectCompileError("fn f() { defer print(\"x\"); }\n", "defer requires a block");
+  expectCompileError("fn f() { defer { return 1; } return 2; }\n",
+                     "return inside a defer block");
+  expectCompileError("fn f() { for i in 0..3 { defer { break; } } }\n",
+                     "break inside a defer block");
+  expectCompileError("fn f() { for i in 0..3 { defer { continue; } } }\n",
+                     "continue inside a defer block");
+}
+
+void testDeferNestedConstructsCompile() {
+  // A loop inside the deferred block may break: it is nested past the boundary.
+  expectCompiles(
+      "fn f() {\n"
+      "  defer { for i in 0..3 { if (i == 1) { break; } } }\n"
+      "}\n");
+  // A nested function inside the deferred block may return.
+  expectCompiles(
+      "fn f() {\n"
+      "  defer { var g = () => { return 1; }; }\n"
+      "}\n");
+}
+
 void testBlockScopingBytecode() {
   Bytecode bc = compileSource(
       "{\n"
@@ -722,6 +785,10 @@ int main() {
   testSwitchRangeUsesIn();
   testSwitchErrors();
   testSwitchSignedLabels();
+  testDeferCompiles();
+  testDeferRunsOnFallThrough();
+  testDeferErrors();
+  testDeferNestedConstructsCompile();
   testBlockScopingBytecode();
   testShadowingSlots();
   testLocalImmutableAssignment();

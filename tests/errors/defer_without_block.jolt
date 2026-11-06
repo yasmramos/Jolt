@@ -1,0 +1,7 @@
+// expect-exit: 65
+// `defer` requires a `{ ... }` block: a bare expression would run where it is
+// written, not at scope exit.
+fn f() {
+  defer print("nope");
+}
+f();

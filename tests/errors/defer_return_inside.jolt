@@ -1,0 +1,10 @@
+// expect-exit: 65
+// A `return` inside a `defer` block would re-enter the teardown that is
+// running it, so it is rejected.
+fn f() {
+  defer {
+    return 1;
+  }
+  return 2;
+}
+f();

@@ -261,6 +261,7 @@ Current limitations:
 - There is no `try`/`catch` or exceptions that can be caught from the language.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require` and no lazy/cyclic-import handling.
 - There is no `do`/`while`, `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough.
+- `defer { ... }` runs a block when its scope exits, in LIFO order, on fall-through, `return` and `break`/`continue` alike; it compiles to no new opcode.
 - Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - Braces are mandatory in the bodies of `if`, `while`, `for` and `switch`.
 - There is no slicing syntax (`s[1:3]`); use `substr`, `slice`, etc.

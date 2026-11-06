@@ -1,0 +1,194 @@
+// PHASE 6.5: `defer { ... }` runs a block when its enclosing scope exits.
+//
+// The block does not run where it is written. The compiler queues it on the
+// enclosing scope and inlines it at every exit from that scope: normal
+// fall-through, `return`, and the `break`/`continue` that leave the scope.
+// Deferred blocks run in LIFO order, like Go's `defer`.
+
+// LIFO order, and the deferred block runs after the rest of the body.
+fn lifo() {
+  var log = [];
+  defer { log.push("first"); }
+  defer { log.push("second"); }
+  log.push("body");
+  return log;
+}
+assertEq(lifo(), ["body", "second", "first"]);
+
+// A `return` runs the deferred blocks before the function actually returns,
+// and the deferred block cannot change the returned value.
+fn returnsValue() {
+  var trail = [];
+  defer { trail.push("cleanup"); }
+  assertEq(trail, []);
+  return 42;
+}
+assertEq(returnsValue(), 42);
+
+// The deferred block runs on every path that leaves the function, including
+// a `return` inside a conditional.
+fn branch(n) {
+  var trail = [];
+  defer { trail.push("done"); }
+  if (n > 0) {
+    trail.push("positive");
+    return trail;
+  }
+  trail.push("other");
+  return trail;
+}
+assertEq(branch(1), ["positive", "done"]);
+assertEq(branch(-1), ["other", "done"]);
+
+// Falling off the end of the function also runs the deferred blocks.
+fn fallsOff() {
+  var trail = [];
+  defer { trail.push("end"); }
+  trail.push("start");
+  trail;
+}
+// (The trailing expression is discarded; the function returns nil.)
+assertEq(fallsOff(), nil);
+
+// A standalone block is a scope: its deferred block runs when the block ends,
+// before the statement after it.
+fn blockScope() {
+  var trail = [];
+  {
+    defer { trail.push("block"); }
+    trail.push("inside");
+  }
+  trail.push("after");
+  return trail;
+}
+assertEq(blockScope(), ["inside", "block", "after"]);
+
+// `defer` inside a loop body runs once per iteration (normal fall-through),
+// and once more on the iteration that runs `continue`.
+fn loopContinue() {
+  var trail = [];
+  for i in 0..3 {
+    defer { trail.push("iter"); }
+    if (i == 1) { continue; }
+    trail.push("body");
+  }
+  return trail;
+}
+assertEq(loopContinue(), ["body", "iter", "iter", "body", "iter"]);
+
+// `break` leaves the loop body's scope, so its deferred block still runs.
+fn loopBreak() {
+  var trail = [];
+  for i in 0..10 {
+    defer { trail.push("iter"); }
+    if (i == 2) { break; }
+    trail.push("body");
+  }
+  return trail;
+}
+assertEq(loopBreak(), ["body", "iter", "body", "iter", "iter"]);
+
+// A `defer` in a `while` body behaves the same way.
+fn whileDefer() {
+  var n = 0;
+  var trail = [];
+  while (n < 2) {
+    defer { trail.push("iter"); }
+    n += 1;
+  }
+  return trail;
+}
+assertEq(whileDefer(), ["iter", "iter"]);
+
+// Deferred blocks run in LIFO order across nested scopes: the inner scope's
+// block runs before the outer scope's block.
+fn nestedScopes() {
+  var trail = [];
+  defer { trail.push("outer"); }
+  {
+    defer { trail.push("inner"); }
+    trail.push("body");
+  }
+  return trail;
+}
+assertEq(nestedScopes(), ["body", "inner", "outer"]);
+
+// A deferred block may contain its own `defer`; the inner one runs when the
+// deferred block's scope exits, before the outer deferred block finishes.
+fn deferInsideDefer() {
+  var trail = [];
+  defer {
+    trail.push("outer start");
+    defer { trail.push("inner"); }
+    trail.push("outer end");
+  }
+  trail.push("body");
+  return trail;
+}
+assertEq(deferInsideDefer(), ["body", "outer start", "outer end", "inner"]);
+
+// A nested function inside a deferred block is a fresh boundary: its own
+// `return` is allowed and does not re-enter the teardown.
+fn nestedFunctionInDefer() {
+  var trail = [];
+  defer {
+    var inner = () => { return "inner"; };
+    trail.push(inner());
+  }
+  trail.push("body");
+  return trail;
+}
+assertEq(nestedFunctionInDefer(), ["body", "inner"]);
+
+// A loop declared inside a deferred block may `break` normally, because that
+// loop is nested inside the defer boundary.
+fn loopInsideDefer() {
+  var trail = [];
+  defer {
+    for i in 0..5 {
+      if (i == 2) { break; }
+      trail.push(i);
+    }
+  }
+  trail.push("body");
+  return trail;
+}
+assertEq(loopInsideDefer(), ["body", 0, 1]);
+
+// Deferred blocks are only run at scope exit, not when they are written.
+fn ordering() {
+  var trail = [];
+  defer { trail.push("deferred"); }
+  trail.push("live");
+  assertEq(trail, ["live"]);
+  return trail;
+}
+assertEq(ordering(), ["live", "deferred"]);
+
+// A deferred closure captures the live variable, not a snapshot: it reads the
+// value at scope exit, after the body changed it.
+fn capturesLive() {
+  var seen = [];
+  var value = 5;
+  defer { seen.push(value); }
+  value = 10;
+  assertEq(seen, []);
+  return seen;
+}
+assertEq(capturesLive(), [10]);
+
+// The typical use: release a resource on every exit path.
+fn withResource(name) {
+  var closed = false;
+  var resource = {
+    "name": name,
+    "close": () => { closed = true; return name + " closed"; }
+  };
+  var trail = [];
+  defer { trail.push(resource.close()); }
+  trail.push("using " + resource.name);
+  return trail;
+}
+assertEq(withResource("db"), ["using db", "db closed"]);
+
+print("ok");
