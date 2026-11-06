@@ -16,6 +16,22 @@ namespace {
   throw CompileError{message, line, col};
 }
 
+// Splits a dotted module path into its segments: "std.math" -> {"std","math"}.
+std::vector<std::string> splitDotted(const std::string& path) {
+  std::vector<std::string> segments;
+  size_t start = 0;
+  while (start <= path.size()) {
+    size_t dot = path.find('.', start);
+    if (dot == std::string::npos) {
+      segments.push_back(path.substr(start));
+      break;
+    }
+    segments.push_back(path.substr(start, dot - start));
+    start = dot + 1;
+  }
+  return segments;
+}
+
 // Human-readable operator name, used only for diagnostics.
 std::string opName(Tok op) {
   switch (op) {
@@ -328,6 +344,11 @@ void Compiler::resetChunk(const std::string& name) {
   inFunction_ = false;
   currentLine_ = 1;
   currentCol_ = 1;
+  moduleBody_ = false;
+  materializedModules_.clear();
+  namespaces_.clear();
+  boundImports_.clear();
+  wildcardBindings_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
@@ -558,6 +579,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const ForInStmt& s) { compileForIn(s); },
           [&](const BreakStmt&) { compileBreak(stmt); },
           [&](const ContinueStmt&) { compileContinue(stmt); },
+          [&](const ImportStmt& s) { compileImport(s, stmt.line, stmt.col); },
           [&](const auto&) {
             fail("this statement is not supported by the bytecode compiler yet (Phase 6)",
                  stmt.line, stmt.col);
@@ -607,6 +629,281 @@ void Compiler::compileLet(const LetStmt& s) {
     }
   }
   freeReg();
+}
+
+// ------------------------------------------------------------------- modules
+
+ImportedModule Compiler::importModule(const StmtPtr& program, const std::string& path) {
+  // A module is compiled like a function body: its top-level bindings become
+  // locals of the module's own frame (never globals), so a module's internals
+  // cannot leak into the importing program. The proto returns a table of the
+  // module's public names. `moduleBody_` tells `compileLet`/`compileFnDecl`
+  // that a declaration at scope depth 0 is still a local.
+  //
+  // The module is compiled in a fresh chunk: the compiler state of the chunk
+  // that requested the import (its registers, scopes and loops) is saved and
+  // restored around the module, exactly as `compileFunctionProto` does for a
+  // function. A module that imports another module nests these save/restores.
+  Bytecode savedChunk = std::move(bc_);
+  auto savedUpvalueNames = std::move(currentUpvalueNames_);
+  const int savedNextReg = nextReg_;
+  const int savedMaxReg = maxReg_;
+  const int savedNextLocal = nextLocal_;
+  const int savedMaxLocal = maxLocal_;
+  std::vector<Scope> savedScopes = std::move(scopes_);
+  std::vector<Loop> savedLoops = std::move(loops_);
+  const int savedLine = currentLine_;
+  const int savedCol = currentCol_;
+  const bool savedInFunction = inFunction_;
+  const bool savedModuleBody = moduleBody_;
+  auto savedLetSlots = std::move(predeclaredLetSlots_);
+  auto savedFnSlots = std::move(predeclaredFnSlots_);
+  auto savedGlobalConsts = std::move(globalConsts_);
+  std::deque<FuncState> savedFuncStack = std::move(funcStack_);
+
+  bc_ = Bytecode{};
+  bc_.name = path;
+  currentUpvalueNames_.clear();
+  nextReg_ = 0;
+  maxReg_ = 0;
+  nextLocal_ = 0;
+  maxLocal_ = 0;
+  scopes_.clear();
+  loops_.clear();
+  funcStack_.clear();
+  inFunction_ = false;
+  moduleBody_ = true;
+  predeclaredLetSlots_.clear();
+  predeclaredFnSlots_.clear();
+  globalConsts_.clear();
+
+  std::vector<std::string> symbols;
+  const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
+  if (block) {
+    // Public names, in declaration order: every top-level binding whose name
+    // does not start with '_' (the private marker).
+    for (const auto& child : block->stmts) {
+      if (!child) continue;
+      const std::string* name = nullptr;
+      if (const auto* let = std::get_if<LetStmt>(&child->node)) {
+        name = &let->name;
+      } else if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+        name = &fn->name;
+      }
+      if (name != nullptr && !name->empty() && (*name)[0] != '_') {
+        symbols.push_back(*name);
+      }
+    }
+  }
+
+  compileModuleBody(program);
+  moduleBody_ = false;
+
+  ImportedModule module;
+  module.path = path;
+  module.code = std::make_shared<Bytecode>(std::move(bc_));
+  module.symbols = std::move(symbols);
+
+  bc_ = std::move(savedChunk);
+  currentUpvalueNames_ = std::move(savedUpvalueNames);
+  nextReg_ = savedNextReg;
+  maxReg_ = savedMaxReg;
+  nextLocal_ = savedNextLocal;
+  maxLocal_ = savedMaxLocal;
+  scopes_ = std::move(savedScopes);
+  loops_ = std::move(savedLoops);
+  currentLine_ = savedLine;
+  currentCol_ = savedCol;
+  inFunction_ = savedInFunction;
+  moduleBody_ = savedModuleBody;
+  predeclaredLetSlots_ = std::move(savedLetSlots);
+  predeclaredFnSlots_ = std::move(savedFnSlots);
+  globalConsts_ = std::move(savedGlobalConsts);
+  funcStack_ = std::move(savedFuncStack);
+  return module;
+}
+
+// Compiles a module's top-level statements into `bc_` and returns its public
+// surface as a table. Bindings stay frame-local; only names that do not start
+// with '_' are exported.
+void Compiler::compileModuleBody(const StmtPtr& program) {
+  pushScope();
+
+  if (const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr) {
+    // `compileBlockBody` hoists function declarations and pre-declares block
+    // locals, exactly as it does for any other block, so a module function can
+    // reference a binding declared later in the file.
+    compileBlockBody(*block);
+  } else if (program) {
+    compileStmt(*program);
+  }
+
+  // Return the module's public surface as a table: { name = value, ... }.
+  // Every top-level declaration lives in the scope pushed above; one that
+  // starts with '_' stays private and is simply left out of the table.
+  int table = allocReg();
+  emit(OpCode::NEWTABLE, table, 0, 1);
+  for (const auto& entry : scopes_.back().vars) {
+    const std::string& name = entry.first;
+    if (name.empty() || name[0] == '_') continue;
+    int value = allocReg();
+    emit(OpCode::GETLOCAL, value, entry.second.slot);
+    emit(OpCode::SETTABLE, value, table, -addString(name) - 1);
+    freeReg();
+  }
+  emit(OpCode::RETURN, table);
+
+  popScope();
+  bc_.numRegisters = maxReg_;
+  bc_.numLocals = maxLocal_;
+}
+
+const ImportedModule& Compiler::loadModule(const std::string& path, int line, int col) {
+  auto cached = loadedModules_.find(path);
+  if (cached != loadedModules_.end()) return cached->second;
+
+  if (!importLoader_) {
+    fail("module '" + path + "' not found", line, col);
+  }
+  StmtPtr program = importLoader_(path, line, col);
+  ImportedModule module = importModule(program, path);
+  auto inserted = loadedModules_.emplace(path, std::move(module));
+  return inserted.first->second;
+}
+
+void Compiler::compileImport(const ImportStmt& import, int line, int col) {
+  const ImportedModule& module = loadModule(import.module, line, col);
+
+  if (import.mode == ImportStmt::Mode::Qualified) {
+    std::string boundName = import.alias.empty() ? import.module : import.alias;
+    compileQualifiedImport(module, boundName, line, col);
+    return;
+  }
+
+  std::vector<std::string> names;
+  if (import.mode == ImportStmt::Mode::Wildcard) {
+    names = module.symbols;
+  } else {
+    names = import.names;
+    // Validate that every selected name is actually exported.
+    for (const std::string& name : names) {
+      if (std::find(module.symbols.begin(), module.symbols.end(), name) ==
+          module.symbols.end()) {
+        fail("module '" + import.module + "' has no export named '" + name + "'", line, col);
+      }
+    }
+  }
+  compileNameImport(module, names, line, col);
+}
+
+void Compiler::materializeModule(const ImportedModule& module, int line, int col) {
+  (void)line;
+  (void)col;
+  if (materializedModules_.find(module.path) != materializedModules_.end()) return;
+  materializedModules_.insert(module.path);
+
+  // A hidden global name contains `$`, which the lexer never accepts in an
+  // identifier, so user code cannot collide with it. The hidden global keeps
+  // the module's exported table alive for the whole program and, because the
+  // `materializedModules_` guard fires first, the body runs at most once even
+  // when several imports name the same module.
+  int child = static_cast<int>(bc_.children.size());
+  bc_.children.push_back(module.code);
+  int reg = allocReg();
+  emit(OpCode::CLOSURE, reg, child);
+  emit(OpCode::CALL, reg, 0);
+  emit(OpCode::SETGLOBAL, reg, addString("$module$" + module.path));
+  freeReg();
+}
+
+int Compiler::ensureNamespace(const std::string& prefix, int line, int col) {
+  (void)line;
+  (void)col;
+  std::vector<std::string> segments = splitDotted(prefix);
+
+  // Walk the path from the root. Each missing segment becomes a fresh map; an
+  // existing one is reused so a second module in the same namespace does not
+  // replace the table the first module already filled.
+  int current = -1;
+  std::string path;
+  for (const std::string& segment : segments) {
+    path = path.empty() ? segment : path + "." + segment;
+    if (namespaces_.find(path) != namespaces_.end()) {
+      int next = allocReg();
+      emit(OpCode::GETGLOBAL, next, addString(path));
+      if (current >= 0) freeReg();
+      current = next;
+      continue;
+    }
+    if (current < 0) {
+      // Root: create the top-level namespace global.
+      current = allocReg();
+      emit(OpCode::NEWTABLE, current, 0, 1);
+      emit(OpCode::SETGLOBAL, current, addString(path));
+      declareGlobal(path, false);
+    } else {
+      // Intermediate segment: create a map, attach it to its parent, then
+      // reuse the same register to walk deeper.
+      int fresh = allocReg();
+      emit(OpCode::NEWTABLE, fresh, 0, 1);
+      emit(OpCode::SETTABLE, fresh, current, -addString(segment) - 1);
+      freeReg();
+    }
+    namespaces_.insert(path);
+  }
+  return current;
+}
+
+void Compiler::compileQualifiedImport(const ImportedModule& module, const std::string& boundName,
+                                      int line, int col) {
+  if (boundImports_.find(boundName) != boundImports_.end()) return;
+  boundImports_.insert(boundName);
+
+  materializeModule(module, line, col);
+  int table = allocReg();
+  emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
+
+  // Bind the module table at the visible name. A dotted path becomes a real
+  // namespace tree of maps (`std.math.sqrt` is the ordinary member chain); a
+  // bare alias binds the table directly.
+  std::vector<std::string> segments = splitDotted(boundName);
+  if (segments.size() == 1) {
+    emit(OpCode::SETGLOBAL, table, addString(boundName));
+    declareGlobal(boundName, false);
+  } else {
+    int parent = ensureNamespace(boundName.substr(0, boundName.rfind('.')), line, col);
+    emit(OpCode::SETTABLE, table, parent, -addString(segments.back()) - 1);
+    freeReg();
+  }
+  freeReg(nextReg_ - table);
+}
+
+void Compiler::compileNameImport(const ImportedModule& module,
+                                 const std::vector<std::string>& names, int line, int col) {
+  materializeModule(module, line, col);
+
+  for (const std::string& name : names) {
+    // Conflict detection: a name already introduced by another wildcard is
+    // ambiguous unless this import is the very same module. This is the
+    // compile-time guarantee that makes `.*` safe (no silent shadowing).
+    auto existing = wildcardBindings_.find(name);
+    if (existing != wildcardBindings_.end() && existing->second != module.path) {
+      fail("'" + name + "' is ambiguous between " + existing->second + " and " +
+               module.path + "; use '" + existing->second + "." + name + "' or '" +
+               module.path + "." + name + "' to disambiguate",
+           line, col);
+    }
+    wildcardBindings_[name] = module.path;
+    if (globalConsts_.find(name) != globalConsts_.end()) continue;
+
+    int table = allocReg();
+    emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
+    int value = allocReg();
+    emit(OpCode::GETTABLE, value, table, -addString(name) - 1);
+    emit(OpCode::SETGLOBAL, value, addString(name));
+    declareGlobal(name, false);
+    freeReg(nextReg_ - table);
+  }
 }
 
 void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {

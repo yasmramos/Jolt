@@ -1,0 +1,5 @@
+// expect-exit: 65
+// A module path that resolves nowhere is a compile error.
+
+import nope.missing;
+print(1);

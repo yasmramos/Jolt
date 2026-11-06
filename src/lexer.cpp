@@ -20,7 +20,8 @@ const Keyword kKeywords[] = {
     {"fn", Tok::Fn},
     {"if", Tok::If},         {"else", Tok::Else},       {"while", Tok::While},
     {"for", Tok::For},       {"in", Tok::In},           {"break", Tok::Break},
-    {"continue", Tok::Continue}, {"return", Tok::Return}, {"true", Tok::True},
+    {"continue", Tok::Continue}, {"return", Tok::Return}, {"import", Tok::Import},
+    {"true", Tok::True},
     {"false", Tok::False},   {"nil", Tok::Nil},
 };
 

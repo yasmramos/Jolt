@@ -1,0 +1,16 @@
+// Test fixture: a plain user module.
+// `answer` and the functions are public; `_hidden` is private (leading `_`).
+
+let answer = 42;
+
+fn square(x) {
+  return x * x;
+}
+
+fn cube(x) {
+  return x * x * x;
+}
+
+fn _hidden() {
+  return "private";
+}

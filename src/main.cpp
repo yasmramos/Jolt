@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -15,6 +16,7 @@
 #include "compiler.h"
 #include "diagnostic.h"
 #include "lexer.h"
+#include "module_resolver.h"
 #include "parser.h"
 #include "util.h"
 #include "vm.h"
@@ -36,8 +38,92 @@ const char *kUsage =
     "  -e, --eval <code>         evaluate code from the command line\n"
     "  -c, --check               only check the script for errors\n";
 
+// Joins a directory and a relative path without doubling the separator.
+std::string joinPath(const std::string &dir, const std::string &relative) {
+  if (dir.empty()) return relative;
+  char last = dir.back();
+  if (last == '/' || last == '\\') return dir + relative;
+  return dir + "/" + relative;
+}
+
+// Directory of the standard library shipped with the toolchain. `std.*`
+// imports resolve here (see AGENT.md §18: `std.` is reserved).
+//
+// `$JOLT_STDLIB` overrides the search. Otherwise the candidates are the
+// working directory and the locations a built or installed binary keeps its
+// stdlib in (`<exeDir>/std`, `<exeDir>/../std`, `<exeDir>/../share/jolt/std`),
+// so an import resolves whether `jolt` is run from the source tree, from the
+// build directory (as under CTest) or from an install prefix.
+std::string standardLibraryDir(const std::string &argv0) {
+  if (const char *env = std::getenv("JOLT_STDLIB")) return env;
+  std::string exeDir = directoryOf(argv0);
+  const std::string candidates[] = {
+      "std",
+      joinPath(exeDir, "std"),
+      joinPath(exeDir, "../std"),
+      joinPath(exeDir, "../share/jolt/std"),
+  };
+  for (const std::string &candidate : candidates) {
+    std::string ignored;
+    if (readSourceFile(joinPath(candidate, "math.jolt"), ignored)) return candidate;
+  }
+  return "std";  // Nothing found: imports report "module not found".
+}
+
+// Installed-packages root: `$JOLT_PACKAGES`, else `$HOME/.jolt/packages`.
+// Empty when the home directory cannot be determined, which disables the
+// package lookup step.
+std::string packagesDir() {
+  if (const char *explicitDir = std::getenv("JOLT_PACKAGES")) return explicitDir;
+  const char *home = std::getenv("HOME");
+#ifdef _WIN32
+  if (home == nullptr || *home == '\0') home = std::getenv("USERPROFILE");
+#endif
+  if (home == nullptr || *home == '\0') return std::string();
+  return std::string(home) + "/.jolt/packages";
+}
+
+// Resolver for a program named `name`. Imports resolve from the project root:
+// the directory of the file being compiled, or the current directory for
+// `-e`/stdin. A nested import resolves from the same root, so `modules.util`
+// names `<root>/modules/util.jolt` no matter which module declares it.
+ModuleResolver resolverFor(const std::string &name, const std::string &argv0) {
+  bool isFile = !name.empty() && name[0] != '<';
+  std::string projectDir = isFile ? directoryOf(name) : std::string(".");
+  return ModuleResolver(projectDir, standardLibraryDir(argv0), packagesDir());
+}
+
+// Builds the module loader the compiler uses for `import` declarations. It
+// resolves the dotted path to a file, reads and parses it, and returns the
+// program. A path that cannot be resolved becomes the compile error
+// "module 'X' not found"; a parse error inside the module is reported with the
+// module's own file name in the message.
+Compiler::ImportLoader makeImportLoader(ModuleResolver resolver) {
+  // The loader owns its resolver: it outlives the statement that built it.
+  return [resolver](const std::string &path, int line, int col) -> StmtPtr {
+    std::string file;
+    std::string message;
+    if (!resolver.resolve(path, file, message)) {
+      throw CompileError{message, line, col};
+    }
+    std::string moduleSource;
+    if (!readSourceFile(file, moduleSource)) {
+      throw CompileError{"cannot read module '" + path + "' from '" + file + "'", line, col};
+    }
+    try {
+      Parser parser(lex(moduleSource), file);
+      return parser.parseProgram();
+    } catch (const CompileError &error) {
+      throw CompileError{"in module '" + path + "': " + error.message, error.line, error.col};
+    }
+  };
+}
+
+// Compiles `source` (resolving any imports) and, unless `checkOnly`, runs it.
 // Returns 0 on success, 65 for compile errors, 70 for runtime errors.
-int execute(VM &vm, const std::string &source, const std::string &name) {
+int runSource(const std::string &source, const std::string &name,
+              const std::vector<std::string> &scriptArgs, bool checkOnly,
+              const std::string &argv0) {
   std::vector<Token> tokens;
   try {
     tokens = lex(source);
@@ -55,14 +141,23 @@ int execute(VM &vm, const std::string &source, const std::string &name) {
     return 65;
   }
 
+  // Imports are resolved during compilation, so `--check` validates them too.
   Bytecode bytecode;
   try {
-    bytecode = Compiler{}.compile(program);
+    Compiler compiler;
+    compiler.setImportLoader(makeImportLoader(resolverFor(name, argv0)));
+    bytecode = compiler.compile(program);
   } catch (const CompileError &error) {
     printCompileError(name, source, error, platformPosix());
     return 65;
   }
 
+  if (checkOnly) return 0;
+
+  VM vm;
+  vm.sourceName = name;
+  vm.scriptArgs = scriptArgs;
+  registerBuiltins(vm);
   try {
     vm.run(bytecode);
   } catch (const RuntimeError &error) {
@@ -70,26 +165,6 @@ int execute(VM &vm, const std::string &source, const std::string &name) {
     return 70;
   }
   return 0;
-}
-
-int runSource(const std::string &source, const std::string &name,
-              const std::vector<std::string> &scriptArgs, bool checkOnly) {
-  if (checkOnly) {
-    try {
-      Parser parser(lex(source), name);
-      parser.parseProgram();
-    } catch (const CompileError &error) {
-      printCompileError(name, source, error, platformPosix());
-      return 65;
-    }
-    return 0;
-  }
-
-  VM vm;
-  vm.sourceName = name;
-  vm.scriptArgs = scriptArgs;
-  registerBuiltins(vm);
-  return execute(vm, source, name);
 }
 
 bool isStatementStart(const std::string &text) {
@@ -102,7 +177,8 @@ bool isStatementStart(const std::string &text) {
   std::string word = text.substr(0, end);
   return word == "let" || word == "var" || word == "const" || word == "fn" ||
          word == "if" || word == "while" || word == "for" || word == "return" ||
-         word == "break" || word == "continue" || word == "else";
+         word == "break" || word == "continue" || word == "else" ||
+         word == "import";
 }
 
 void printReplHelp() {
@@ -115,7 +191,7 @@ void printReplHelp() {
 }
 
 // Returns true when the REPL should exit.
-bool handleCommand(VM &vm, const std::string &command) {
+bool handleCommand(VM &vm, const std::string &command, const std::string &argv0) {
   if (command == ":quit" || command == ":q" || command == ":exit")
     return true;
 
@@ -136,6 +212,10 @@ bool handleCommand(VM &vm, const std::string &command) {
     for (const auto &entry : vm.globals()) {
       const Value &value = entry.second;
       if (value.isFunc() && value.func().isNative())
+        continue;
+      // Internal globals (the `$module$...` tables that keep imported modules
+      // alive) are not user definitions, so they stay out of the listing.
+      if (!entry.first.empty() && entry.first[0] == '$')
         continue;
       entries.emplace_back(entry.first, value.typeName());
     }
@@ -160,7 +240,19 @@ bool handleCommand(VM &vm, const std::string &command) {
       std::cout << "cannot read file '" << path << "'\n";
       return false;
     }
-    execute(vm, source, path);
+    // `:load` compiles the file against its own directory, so its imports
+    // resolve relative to the file, not to the REPL's working directory.
+    try {
+      Compiler loader;
+      loader.setImportLoader(makeImportLoader(resolverFor(path, argv0)));
+      Parser parser(lex(source), path);
+      Bytecode bytecode = loader.compile(parser.parseProgram());
+      vm.run(bytecode);
+    } catch (const CompileError &error) {
+      printCompileError(path, source, error, platformPosix());
+    } catch (const RuntimeError &error) {
+      printRuntimeError(path, source, error, platformPosix());
+    }
     return false;
   }
 
@@ -176,11 +268,16 @@ void publishReplValue(VM &vm, const Value &value) {
     std::cout << value.repr() << '\n';
 }
 
-void repl(const std::vector<std::string> &scriptArgs) {
+void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) {
   VM vm;
   vm.sourceName = "<repl>";
   vm.scriptArgs = scriptArgs;
   registerBuiltins(vm);
+
+  // One compiler for the whole session so a module imported in an earlier
+  // entry is compiled once and reused by later entries.
+  Compiler compiler;
+  compiler.setImportLoader(makeImportLoader(resolverFor("<repl>", argv0)));
 
   std::cout << "Jolt " << kVersion
             << " - a small scripting language written in C++\n";
@@ -202,7 +299,7 @@ void repl(const std::vector<std::string> &scriptArgs) {
       continue;
     }
     if (buffer.empty() && !trimmed.empty() && trimmed[0] == ':') {
-      if (handleCommand(vm, trimmed))
+      if (handleCommand(vm, trimmed, argv0))
         break;
       continue;
     }
@@ -234,7 +331,7 @@ void repl(const std::vector<std::string> &scriptArgs) {
       try {
         Parser expressionParser(tokens, "<repl>");
         auto expr = expressionParser.parseFullExpression();
-        Bytecode bytecode = Compiler{}.compileExpression(expr);
+        Bytecode bytecode = compiler.compileExpression(expr);
         Value value = vm.run(bytecode);
         publishReplValue(vm, value);
         buffer.clear();
@@ -289,7 +386,7 @@ void repl(const std::vector<std::string> &scriptArgs) {
         tailExpression = &last->expr;
       }
 
-      Bytecode bytecode = Compiler{}.compileRepl(program);
+      Bytecode bytecode = compiler.compileRepl(program);
       Value value = vm.run(bytecode);
       if (endsWithExpression && tailExpression)
         publishReplValue(vm, value);
@@ -364,7 +461,7 @@ int main(int argc, char **argv) {
   }
 
   if (hasEval)
-    return runSource(evalCode, "<eval>", scriptArgs, checkOnly);
+    return runSource(evalCode, "<eval>", scriptArgs, checkOnly, argv[0]);
 
   if (!file.empty()) {
     std::string source;
@@ -372,7 +469,7 @@ int main(int argc, char **argv) {
       std::cerr << "jolt: cannot read file '" << file << "'\n";
       return 66;
     }
-    return runSource(source, file, scriptArgs, checkOnly);
+    return runSource(source, file, scriptArgs, checkOnly, argv[0]);
   }
 
   if (checkOnly) {
@@ -380,6 +477,6 @@ int main(int argc, char **argv) {
     return 64;
   }
 
-  repl(scriptArgs);
+  repl(scriptArgs, argv[0]);
   return 0;
 }

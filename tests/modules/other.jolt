@@ -1,0 +1,11 @@
+// Test fixture: a second module with names that do not clash with util.jolt,
+// so it can be wildcard-imported alongside it. Conflict detection has its own
+// error test (tests/errors/ambiguous_wildcard.jolt).
+
+fn triple(x) {
+  return 3 * x;
+}
+
+fn quadruple(x) {
+  return 4 * x;
+}

@@ -1,0 +1,2 @@
+// Fixture: a user module that collides with the reserved std. prefix.
+fn x() { return 1; }

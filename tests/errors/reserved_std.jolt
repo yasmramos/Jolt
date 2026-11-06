@@ -1,0 +1,6 @@
+// expect-exit: 65
+// `std.` is reserved for the standard library. A user module that tries to
+// occupy the prefix (here tests/errors/std/foo.jolt) is a compile error.
+
+import std.foo;
+print(1);

@@ -259,7 +259,7 @@ Current limitations:
 - Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. While PHASE 6 (functions, closures, collections) is being completed, the `jolt` executable still uses the AST interpreter as a temporary engine; the compiler and the VM already cover control flow and locals. There is no JIT.
 - There are no classes, structs, interfaces or inheritance.
 - There is no `try`/`catch` or exceptions that can be caught from the language.
-- There is no `import`/modules; in the REPL you can use `:load`.
+- Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require` and no lazy/cyclic-import handling.
 - There is no `switch`, `do`/`while`, `++`/`--` or default parameters.
 - Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - Braces are mandatory in the bodies of `if`, `while` and `for`.
@@ -273,7 +273,6 @@ Ideas for future versions:
 - Hook the bytecode compiler and the VM up to the CLI and the REPL.
 - `try`/`catch` and errors as values.
 - User-defined structs and methods.
-- Modules and `import`.
 - String and array slicing.
 - Better Unicode support (upper/lower case and graphemes).
 - More tooling: formatter, syntax highlighting and debugger.

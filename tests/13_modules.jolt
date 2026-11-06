@@ -1,0 +1,32 @@
+// PHASE 6.5 §18: Java-style imports, module resolution and conflict detection.
+//
+// Fixtures live in tests/modules/ and resolve relative to this file's
+// directory: `import modules.util;` -> tests/modules/util.jolt.
+
+// --- qualified import: `import path;` -> access is path.name ---------------
+import modules.util;
+print(modules.util.answer);
+print(modules.util.square(5));
+print(modules.util.cube(3));
+
+// --- alias: `import path as name;` -----------------------------------------
+import modules.util as u;
+print(u.square(6));
+
+// --- selective: `import { names } from path;` ------------------------------
+import { square, cube } from modules.util;
+print(square(7));
+print(cube(2));
+
+// --- wildcard: `import path.*;` -> unqualified access ----------------------
+import modules.other.*;
+print(triple(4));
+
+// --- two imports of the same module share one binding and one execution ----
+import modules.util.*;
+print(modules.util.answer);
+print(answer);
+
+// --- nested: a module that imports another module --------------------------
+import modules.nested;
+print(modules.nested.sumOfSquares(3, 4));

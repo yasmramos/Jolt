@@ -47,6 +47,7 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `parser.cpp` | `Token[]` | `Node*` (AST) | ✅ |
 | `bytecode.cpp` | `Bytecode` | basic operations | ✅ |
 | `compiler.cpp` | `Node*` | `Bytecode*` | ✅ |
+| `module_resolver.cpp` | dotted module path | source file path | ✅ |
 | `vm.cpp` | `Bytecode*` | execution | ✅ |
 | `main.cpp` | CLI | full pipeline | ⬜ (VM as dev engine, PHASE 4) |
 | `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
@@ -335,7 +336,10 @@ previous one.
 - Local type inference: `let x = 5` (x: int).
 - Nullability: `string?`, `?.`, `??`, `!!`.
 - `defer`.
-- **`require`** (modules, Lua-style).
+- **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
+  `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
+  conflict detection for `.*` and a reserved `std.` prefix. `require`
+  (Lua-style) is not used.
 - **`struct`** (data only, no methods).
 - `switch` simple (literals and ranges).
 - **`native fn`** for internal FFI (stdlib in Jolt).
@@ -426,7 +430,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: ⬜ pending (types, nullability, `require`, `struct`, `switch`, `native fn`)
+Phase 6.5: 🔶 in progress (Java-style `import` done; types, nullability, `struct`, `switch`, `native fn` pending)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

@@ -52,6 +52,10 @@ class Parser {
   // are folded later in resolveTopLevelConsts (after the whole program was
   // parsed), so nested blocks keep folding eagerly during parsing.
   bool atTopLevel_ = false;
+  // Number of enclosing `{ ... }` blocks being parsed. `import` is only valid
+  // at depth 0 (a program's top level), so an import nested in a block or a
+  // function body is rejected at parse time.
+  int nestingDepth_ = 0;
 
   bool foldConstant(const Expr& expr, Value& out, std::string& reason) const;
 
@@ -74,6 +78,8 @@ class Parser {
   StmtPtr parseWhile();
   StmtPtr parseFor();
   StmtPtr parseReturn();
+  StmtPtr parseImport();
+  std::string parseImportPath();
   StmtPtr parseBlock();
   StmtPtr parseExpressionStatement();
 

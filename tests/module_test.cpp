@@ -1,0 +1,217 @@
+// Tests for the module resolver and the import compiler (AGENT.md §18).
+// Uses no external framework: only a failure counter and printf.
+
+// Release builds define NDEBUG, which would compile every assert() out and
+// leave the suite green without testing anything.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
+#include <cstdio>
+#include <string>
+
+#include "compiler.h"
+#include "lexer.h"
+#include "module_resolver.h"
+#include "parser.h"
+#include "util.h"
+#include "vm.h"
+
+namespace {
+
+int g_failures = 0;
+
+void check(bool condition, const char* what) {
+  if (!condition) {
+    std::printf("FAIL: %s\n", what);
+    ++g_failures;
+  } else {
+    std::printf("ok: %s\n", what);
+  }
+}
+
+StmtPtr parseSource(const std::string& source, const std::string& name = "<test>") {
+  return Parser(lex(source), name).parseProgram();
+}
+
+// A loader backed by `resolver`, identical in behaviour to the CLI's loader.
+Compiler::ImportLoader loaderFor(const ModuleResolver& resolver) {
+  return [&resolver](const std::string& path, int line, int col) -> StmtPtr {
+    std::string file;
+    std::string message;
+    if (!resolver.resolve(path, file, message)) throw CompileError{message, line, col};
+    std::string text;
+    if (!readSourceFile(file, text)) {
+      throw CompileError{"cannot read module '" + path + "'", line, col};
+    }
+    return parseSource(text, file);
+  };
+}
+
+// Compiles `source` with `resolver` and runs it on `vm`. Tests assign the
+// expression under test to a global and read it back with `findGlobal`.
+void compileAndRun(const std::string& source, const ModuleResolver& resolver, VM& vm) {
+  Compiler compiler;
+  compiler.setImportLoader(loaderFor(resolver));
+  Bytecode bytecode = compiler.compile(parseSource(source));
+  vm.run(bytecode);
+}
+
+// Reads an integer global, or a sentinel when it is missing or not an int.
+long globalInt(VM& vm, const std::string& name) {
+  const Value* value = vm.findGlobal(name);
+  if (value == nullptr || !value->isInt()) return -1;
+  return value->asInt();
+}
+
+ModuleResolver fixtureResolver() { return ModuleResolver("tests", "std", ""); }
+
+void testPathToFile() {
+  check(modulePathToFile("math") == "math.jolt", "single segment -> math.jolt");
+  check(modulePathToFile("std.math") == "std/math.jolt", "std.math -> std/math.jolt");
+  check(modulePathToFile("myapp.utils.helpers") == "myapp/utils/helpers.jolt",
+        "dotted path -> nested directories");
+}
+
+void testReservedPrefix() {
+  check(ModuleResolver::isReservedStd("std"), "'std' is reserved");
+  check(ModuleResolver::isReservedStd("std.math"), "'std.math' is reserved");
+  check(!ModuleResolver::isReservedStd("stdlib"), "'stdlib' is not reserved");
+  check(!ModuleResolver::isReservedStd("myapp.std"), "'myapp.std' is not reserved");
+}
+
+void testNotFoundMessage() {
+  ModuleResolver resolver("does-not-exist", "does-not-exist", "");
+  std::string file;
+  std::string message;
+  check(!resolver.resolve("nope.missing", file, message), "unresolved path returns false");
+  check(message == "module 'nope.missing' not found", "exact not-found message");
+}
+
+void testStdResolution() {
+  ModuleResolver resolver(".", "std", "");
+  std::string file;
+  std::string message;
+  // The repository ships std/math.jolt.
+  bool found = resolver.resolve("std.math", file, message);
+  check(found, "std.math resolves against the stdlib directory");
+  check(file == "std/math.jolt", "std.math resolves to std/math.jolt");
+}
+
+void testQualifiedAccess() {
+  VM vm;
+  compileAndRun("import modules.util;\nlet got = modules.util.square(5);\n", fixtureResolver(), vm);
+  check(globalInt(vm, "got") == 25, "qualified import: util.square(5) == 25");
+}
+
+void testAlias() {
+  VM vm;
+  compileAndRun("import modules.util as u;\nlet got = u.cube(3);\n", fixtureResolver(), vm);
+  check(globalInt(vm, "got") == 27, "alias import: u.cube(3) == 27");
+}
+
+void testWildcard() {
+  VM vm;
+  compileAndRun("import modules.util.*;\nlet got = square(6);\n", fixtureResolver(), vm);
+  check(globalInt(vm, "got") == 36, "wildcard import: square(6) == 36");
+}
+
+void testSelective() {
+  VM vm;
+  compileAndRun("import { square, cube } from modules.util;\nlet got = cube(2) + square(3);\n",
+                fixtureResolver(), vm);
+  check(globalInt(vm, "got") == 17, "selective import binds only the listed names");
+}
+
+void testPrivateNameIsNotExported() {
+  Compiler compiler;
+  ModuleResolver resolver = fixtureResolver();
+  compiler.setImportLoader(loaderFor(resolver));
+  bool threw = false;
+  try {
+    // `_hidden` starts with `_`, so it is private and absent from the exports.
+    compiler.compile(parseSource("import { _hidden } from modules.util;\n"));
+  } catch (const CompileError&) {
+    threw = true;
+  }
+  check(threw, "a private name (leading underscore) is not exported");
+}
+
+void testAmbiguityIsCompileError() {
+  ModuleResolver resolver("tests/errors", "std", "");
+  Compiler compiler;
+  compiler.setImportLoader(loaderFor(resolver));
+  bool threw = false;
+  std::string message;
+  try {
+    compiler.compile(parseSource("import mods.a.*;\nimport mods.b.*;\n"));
+  } catch (const CompileError& error) {
+    threw = true;
+    message = error.message;
+  }
+  check(threw, "two wildcards exporting the same name is a compile error");
+  check(message.find("is ambiguous between") != std::string::npos,
+        "ambiguity error uses the specified wording");
+  check(message.find("mods.a") != std::string::npos &&
+            message.find("mods.b") != std::string::npos,
+        "ambiguity error names both modules");
+}
+
+void testModuleRunsOnce() {
+  // `modules/counter.jolt` increments the caller's `runs` global at load time.
+  // Three imports must run it once, so `runs` ends at 1.
+  VM vm;
+  compileAndRun(
+      "let runs = 0;\n"
+      "import modules.counter;\n"
+      "import modules.counter as c;\n"
+      "import modules.counter.*;\n",
+      fixtureResolver(), vm);
+  check(globalInt(vm, "runs") == 1,
+        "a module body runs exactly once however many times it is imported");
+}
+
+void testNestedImport() {
+  VM vm;
+  compileAndRun("import modules.nested;\nlet got = modules.nested.sumOfSquares(3, 4);\n",
+                fixtureResolver(), vm);
+  check(globalInt(vm, "got") == 25, "a module can import another module (nested resolution)");
+}
+
+void testRepeatedImportBindsOnce() {
+  // Importing the same module twice must not fail or rebind conflicting names.
+  bool threw = false;
+  try {
+    VM vm;
+    compileAndRun("import modules.util;\nimport modules.util;\nlet got = modules.util.answer;\n",
+                  fixtureResolver(), vm);
+  } catch (const CompileError&) {
+    threw = true;
+  }
+  check(!threw, "importing the same module twice is not an error");
+}
+
+}  // namespace
+
+int main() {
+  testPathToFile();
+  testReservedPrefix();
+  testNotFoundMessage();
+  testStdResolution();
+  testQualifiedAccess();
+  testAlias();
+  testWildcard();
+  testSelective();
+  testPrivateNameIsNotExported();
+  testAmbiguityIsCompileError();
+  testModuleRunsOnce();
+  testNestedImport();
+  testRepeatedImportBindsOnce();
+
+  if (g_failures != 0) {
+    std::printf("%d check(s) failed\n", g_failures);
+    return 1;
+  }
+  std::printf("all module checks passed\n");
+  return 0;
+}

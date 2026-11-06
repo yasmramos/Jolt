@@ -23,6 +23,8 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 15. [Command line](#15-command-line)
 16. [Known limitations](#16-known-limitations)
 17. [Complete example](#17-complete-example)
+18. [Modules and `import`](#18-modules-and-import)
+19. [File extensions](#19-file-extensions)
 
 ---
 
@@ -69,7 +71,7 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  const  continue  else  false  fn  for  if  in  let
+break  const  continue  else  false  fn  for  if  import  in  let
 nil    return true  var     while
 ```
 
@@ -1167,7 +1169,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
 - No classes, structs, interfaces or inheritance yet. `struct` (data only, no methods) is planned for PHASE 6.5 (1.0). There are no classes or inheritance (and there never will be — maps + closures replace them).
 - No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
-- No modules or `import` yet. `require` (Lua-style) is planned for PHASE 6.5 (1.0). In the REPL you can use `:load`.
+- Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. There is no `require` and no lazy/cyclic-import handling; a module is loaded once, eagerly, when the program is compiled.
 - No `switch` yet. `switch` (literals and ranges) is planned for PHASE 6.5 (1.0). No `do`/`while`, `++`, `--`, default parameters or variadic arguments.
 - No optional types or nullability yet. `let x: int = 5`, `string?`, `?.`, `??`, `!!` are planned for PHASE 6.5 (1.0).
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
@@ -1217,7 +1219,85 @@ two: 2
 one: 1
 ```
 
-## 18. File extensions
+## 18. Modules and `import`
+
+Jolt imports are Java-style: the module is named by a **dotted path without quotes**, and `std.` is reserved for the standard library. Four forms exist.
+
+```jolt
+import std.math;                  // qualified: access is std.math.sqrt
+import std.math.*;                // wildcard: access is sqrt
+import std.math as m;             // alias: access is m.sqrt
+import { sqrt, pow } from std.math; // selective: access is sqrt and pow
+```
+
+`import` is a declaration, not a function call, and it is only allowed at the **top level of a module**. Nesting an import inside a function or a block is a compile error.
+
+### 18.1 The four forms
+
+| Form | Meaning |
+| --- | --- |
+| `import a.b;` | Load `a/b.jolt` and bind it to the namespace `a.b`. Access is `a.b.name`. |
+| `import a.b.*;` | Load `a/b.jolt` and add all its public names to the current scope. Access is `name`. |
+| `import a.b as c;` | Load `a/b.jolt` and bind it to `c`. Access is `c.name`. |
+| `import { x, y } from a.b;` | Load `a/b.jolt` and bind only `x` and `y`. Access is `x` and `y`. |
+
+### 18.2 What a module exports
+
+A module is a `.jolt` file. Its top-level declarations become the module's public names. A binding whose name starts with `_` is **private** and is not exported.
+
+```jolt
+// std/math.jolt
+const PI = 3.141592653589793;
+
+fn sqrt(x) {
+  return x ** 0.5;
+}
+
+fn _helper() {   // private: not exported
+  return 1;
+}
+```
+
+A module's own top-level bindings are **local to the module frame**: importing a module never injects its internals into the importing program's globals. Only the names you import become visible.
+
+A module body runs **exactly once**, no matter how many times it is imported, and its exported table is shared by every import.
+
+### 18.3 Conflict detection
+
+Wildcard imports are safe because conflicts are caught at compile time. If two `.*` imports export the same name, the compiler reports an error instead of silently letting one shadow the other:
+
+```text
+'sqrt' is ambiguous between std.math and std.stats; use 'std.math.sqrt' or 'std.stats.sqrt' to disambiguate
+```
+
+Importing the same module twice is not a conflict.
+
+### 18.4 Module resolution
+
+A dotted path `a.b.c` maps to the file `a/b/c.jolt`, looked up in this order:
+
+| Path | Resolves to |
+| --- | --- |
+| `std.*` | the standard library directory (`std/math.jolt`). `std.` is reserved: a user module under that prefix is a compile error. |
+| anything else | the project directory (the directory of the file being compiled), then the installed packages (`$JOLT_PACKAGES`, or `$HOME/.jolt/packages`). |
+
+A path that resolves nowhere is a compile error: `module 'X' not found`.
+
+Nested imports (a module that imports another module) resolve from the same project root.
+
+### 18.5 Example
+
+```jolt
+import std.math;            // std.math.sqrt, std.math.pow, ...
+import { sqrt } from std.math;
+
+print(std.math.sqrt(16));   // 4
+print(sqrt(25));            // 5
+```
+
+---
+
+## 19. File extensions
 | Extension | What it is | Java analog |
 |-----------|------------|-------------|
 | `.jolt` | Source code | `.java` |
