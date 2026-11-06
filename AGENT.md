@@ -341,7 +341,9 @@ previous one.
   conflict detection for `.*` and a reserved `std.` prefix. `require`
   (Lua-style) is not used.
 - **`struct`** (data only, no methods).
-- `switch` simple (literals and ranges).
+- `switch` simple (literals and ranges) — **done**: no fallthrough, labels are
+  literals or integer ranges, optional single `default`; compiles to the
+  existing `EQ`/`IN`/`JMP` opcodes (no new opcode). See `docs/language.md` §6.10.
 - **`native fn`** for internal FFI (stdlib in Jolt).
 
 ### PHASE 6.6 — FFI with C (1.0)
@@ -430,7 +432,7 @@ Phase 3: ✅ completed
 Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
-Phase 6.5: 🔶 in progress (Java-style `import` done; types, nullability, `struct`, `switch`, `native fn` pending)
+Phase 6.5: 🔶 in progress (Java-style `import` and `switch` done; types, nullability, `struct`, `native fn` pending)
 Phase 6.6: ⬜ pending (FFI with C)
 Phase 7: 🔶 in progress (7a done; 7b, 7c, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

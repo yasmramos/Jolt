@@ -577,6 +577,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const WhileStmt& s) { compileWhile(s); },
           [&](const ForStmt& s) { compileFor(s); },
           [&](const ForInStmt& s) { compileForIn(s); },
+          [&](const SwitchStmt& s) { compileSwitch(s); },
           [&](const BreakStmt&) { compileBreak(stmt); },
           [&](const ContinueStmt&) { compileContinue(stmt); },
           [&](const ImportStmt& s) { compileImport(s, stmt.line, stmt.col); },
@@ -1191,6 +1192,59 @@ void Compiler::compileForIn(const ForInStmt& s) {
 
   popScope();
   freeReg(nextReg_ - iterable);
+}
+
+void Compiler::compileSwitch(const SwitchStmt& s) {
+  // The subject is evaluated exactly once and kept in a register for the whole
+  // switch. Every case label is compared against it: equality for a literal,
+  // membership (`IN`) for a range. There is no fallthrough, so the matching
+  // case's body is the only one that runs and each body ends with a jump past
+  // the remaining cases.
+  int subject = compileExpr(*s.subject);
+
+  const size_t caseCount = s.cases.size();
+  std::vector<int> testStart(caseCount, 0);   // where each case's label tests begin
+  std::vector<int> bodyStart(caseCount, 0);   // where each case's body begins
+  std::vector<int> noMatch(caseCount, -1);    // jump taken when no label matched
+  std::vector<std::vector<int>> matchJumps(caseCount);
+  std::vector<int> endJumps;
+
+  for (size_t i = 0; i < caseCount; ++i) {
+    const SwitchCase& entry = s.cases[i];
+    testStart[i] = currentOffset();
+    for (const ExprPtr& label : entry.values) {
+      if (std::holds_alternative<RangeExpr>(label->node)) {
+        int range = compileExpr(*label);
+        emit(OpCode::IN, range, subject, range);
+        matchJumps[i].push_back(emitJump(OpCode::JMP_IF_TRUE, range));
+        freeReg();
+      } else {
+        int value = compileExpr(*label);
+        emit(OpCode::EQ, value, subject, value);
+        matchJumps[i].push_back(emitJump(OpCode::JMP_IF_TRUE, value));
+        freeReg();
+      }
+    }
+    // No label matched: skip this body and fall to the next case's tests.
+    noMatch[i] = emitJump(OpCode::JMP);
+
+    bodyStart[i] = currentOffset();
+    compileScopedBlock(*entry.body);
+    endJumps.push_back(emitJump(OpCode::JMP));
+  }
+
+  const int defaultStart = currentOffset();
+  if (s.defaultBody) compileScopedBlock(*s.defaultBody);
+  const int end = currentOffset();
+
+  for (size_t i = 0; i < caseCount; ++i) {
+    for (int jump : matchJumps[i]) patchJump(jump, bodyStart[i]);
+    const int target = (i + 1 < caseCount) ? testStart[i + 1] : defaultStart;
+    patchJump(noMatch[i], target);
+  }
+  for (int jump : endJumps) patchJump(jump, end);
+
+  freeReg();  // release the subject register
 }
 
 void Compiler::compileBreak(const Stmt& stmt) {

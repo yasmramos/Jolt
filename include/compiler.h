@@ -46,6 +46,7 @@ struct ImportedModule {
 //     locals (upvalues resolved at compile time)
 //   - arrays, maps, ranges, interpolation, indexing, members and `in`
 //   - `for-in` over arrays, strings, maps and ranges
+//   - `switch` on literals and integer ranges (no fallthrough)
 //   - Java-style `import` (qualified, wildcard, alias and selective forms)
 //     with compile-time conflict detection
 class Compiler {
@@ -234,6 +235,7 @@ class Compiler {
   void compileWhile(const WhileStmt& stmt);
   void compileFor(const ForStmt& stmt);
   void compileForIn(const ForInStmt& stmt);
+  void compileSwitch(const SwitchStmt& stmt);
   void compileBreak(const Stmt& stmt);
   void compileContinue(const Stmt& stmt);
 

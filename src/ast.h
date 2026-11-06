@@ -237,9 +237,28 @@ struct ImportStmt {
   std::vector<std::string> names;  // Selective only: the selected names
 };
 
+// One `case` of a `switch`. `values` holds the case labels, each a literal
+// (`case 1:`) or a range (`case 10..=20:`). A case with several labels
+// (`case 2: case 3:`) matches if any of them does. There is no fallthrough:
+// the body of the matching case is the only one that runs.
+struct SwitchCase {
+  std::vector<ExprPtr> values;
+  StmtPtr body;  // BlockStmt
+};
+
+// `switch (subject) { case 1: { ... } case 2: case 3: { ... } default: { ... } }`.
+// The subject is evaluated exactly once and compared against each case label
+// (equality for literals, membership for ranges). A null `defaultBody` means
+// there is no `default` clause; an empty block is a distinct, present clause.
+struct SwitchStmt {
+  ExprPtr subject;
+  std::vector<SwitchCase> cases;
+  StmtPtr defaultBody;  // may be null
+};
+
 using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, BlockStmt, IfStmt, WhileStmt,
                               ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
-                              ImportStmt>;
+                              ImportStmt, SwitchStmt>;
 
 struct Stmt {
   StmtNode node;

@@ -1,0 +1,6 @@
+// expect-exit: 65
+// `case` is only valid inside a `switch` body.
+
+case 1: {
+  print("nope");
+}

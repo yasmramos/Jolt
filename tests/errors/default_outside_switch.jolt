@@ -1,0 +1,6 @@
+// expect-exit: 65
+// `default` is only valid inside a `switch` body.
+
+default: {
+  print("nope");
+}

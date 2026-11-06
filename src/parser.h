@@ -79,6 +79,7 @@ class Parser {
   StmtPtr parseFor();
   StmtPtr parseReturn();
   StmtPtr parseImport();
+  StmtPtr parseSwitch();
   std::string parseImportPath();
   StmtPtr parseBlock();
   StmtPtr parseExpressionStatement();

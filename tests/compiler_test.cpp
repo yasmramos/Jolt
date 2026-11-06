@@ -362,6 +362,59 @@ void testBreakAndContinueBackpatch() {
   expectCompileError("continue;\n", "continue outside loop");
 }
 
+void testSwitchBytecode() {
+  // `switch (2) { case 1: {...} case 2: {...} }` compiles the subject once,
+  // compares each label with EQ, jumps to the matching body and skips the rest.
+  Bytecode bc = compileSource(
+      "switch (2) {\n"
+      "  case 1: { print(\"one\"); }\n"
+      "  case 2: { print(\"two\"); }\n"
+      "}\n");
+
+  // LOADK (subject) is the first instruction; each case compares with EQ.
+  assert(bc.code[0].op == OpCode::LOADK && bc.code[0].b == 0);
+  size_t eqCount = 0;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::EQ) ++eqCount;
+  }
+  assert(eqCount == 2);  // one comparison per literal label
+  assert(bc.code.back().op == OpCode::HALT);
+}
+
+void testSwitchRangeUsesIn() {
+  // A range label compiles to `IN` (membership), not `EQ`.
+  Bytecode bc = compileSource(
+      "switch (5) {\n"
+      "  case 1..=10: { print(\"in\"); }\n"
+      "}\n");
+  size_t inCount = 0;
+  size_t eqCount = 0;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::IN) ++inCount;
+    if (instruction.op == OpCode::EQ) ++eqCount;
+  }
+  assert(inCount == 1);
+  assert(eqCount == 0);
+}
+
+void testSwitchErrors() {
+  expectCompileError("case 1: {}\n", "case outside switch");
+  expectCompileError("default: {}\n", "default outside switch");
+  expectCompileError("switch (1) { case x: {} }\n", "case label must be a literal or a range");
+  expectCompileError("switch (1) { case f(): {} }\n", "case label must be a literal or a range");
+  expectCompileError("switch (1) { default: {} default: {} }\n", "duplicate default");
+  expectCompileError("switch (1) { case 1 }\n", "missing ':' after case label");
+  expectCompileError("switch (1) { case 1: {} }\nswitch (2) { case 2: { break; } }\n",
+                     "break outside loop inside a switch");
+  expectCompileError("switch (1) { case 1: {} }\nswitch (2) { case 2: { continue; } }\n",
+                     "continue outside loop inside a switch");
+}
+
+void testSwitchSignedLabels() {
+  // A leading sign on a numeric label is accepted.
+  expectCompiles("switch (1) { case -1: {} case +2: {} }\n");
+}
+
 void testBlockScopingBytecode() {
   Bytecode bc = compileSource(
       "{\n"
@@ -626,6 +679,7 @@ void testPhase6ConstructsCompile() {
   expectCompiles("let x = 1 in 2;\n");
   expectCompiles("let a = 1;\nlet x = a[0];\n");
   expectCompiles("let m = 1;\nlet x = m.a;\n");
+  expectCompiles("switch (1) { case 1: {} default: {} }\n");
 }
 
 void testNestedFunctionDeclarationsAreSupported() {
@@ -664,6 +718,10 @@ int main() {
   testWhileBackpatch();
   testForBackpatch();
   testBreakAndContinueBackpatch();
+  testSwitchBytecode();
+  testSwitchRangeUsesIn();
+  testSwitchErrors();
+  testSwitchSignedLabels();
   testBlockScopingBytecode();
   testShadowingSlots();
   testLocalImmutableAssignment();
