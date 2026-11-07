@@ -955,8 +955,8 @@ void registerBuiltins(Runtime& in) {
     const Value& value = args[0];
     if (value.isInt()) return value;
     if (value.isBool()) return Value(static_cast<int64_t>(value.asBool() ? 1 : 0));
-    if (value.isFloat()) {
-      double number = value.asFloat();
+    if (value.isFloat() || value.isDouble()) {
+      double number = value.number();
       if (!std::isfinite(number)) in.fail("cannot convert a non-finite float to int");
       if (number < -9223372036854775808.0 || number > 9223372036854775807.0) {
         in.fail("float is out of the integer range");
@@ -981,8 +981,9 @@ void registerBuiltins(Runtime& in) {
     need(in, "float", args, 1);
     const Value& value = args[0];
     if (value.isFloat()) return value;
-    if (value.isInt()) return Value(static_cast<double>(value.asInt()));
-    if (value.isBool()) return Value(value.asBool() ? 1.0 : 0.0);
+    if (value.isInt()) return Value::fromFloat(static_cast<float>(value.asInt()));
+    if (value.isDouble()) return Value::fromFloat(static_cast<float>(value.asDouble()));
+    if (value.isBool()) return Value::fromFloat(value.asBool() ? 1.0f : 0.0f);
     if (value.isStr()) {
       std::string text = trim(value.asStr());
       if (text.empty()) in.fail("cannot convert an empty string to float");
@@ -991,9 +992,28 @@ void registerBuiltins(Runtime& in) {
       if (end == nullptr || *end != '\0') {
         in.fail("cannot convert '" + value.asStr() + "' to float");
       }
-      return Value(result);
+      return Value::fromFloat(static_cast<float>(result));
     }
     in.fail("cannot convert '" + std::string(value.typeName()) + "' to float");
+  });
+
+  in.addNative("double", [](Runtime& in, Args args) -> Value {
+    need(in, "double", args, 1);
+    const Value& value = args[0];
+    if (value.isDouble()) return value;
+    if (value.isFloat() || value.isInt()) return Value(value.number());
+    if (value.isBool()) return Value(value.asBool() ? 1.0 : 0.0);
+    if (value.isStr()) {
+      std::string text = trim(value.asStr());
+      if (text.empty()) in.fail("cannot convert an empty string to double");
+      char* end = nullptr;
+      double result = std::strtod(text.c_str(), &end);
+      if (end == nullptr || *end != '\0') {
+        in.fail("cannot convert '" + value.asStr() + "' to double");
+      }
+      return Value(result);
+    }
+    in.fail("cannot convert '" + std::string(value.typeName()) + "' to double");
   });
 
   in.addNative("bool", [](Runtime& in, Args args) -> Value {

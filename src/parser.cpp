@@ -240,6 +240,7 @@ std::string Parser::describe(const Token& token) {
       return "'" + token.lexeme + "'";
     case Tok::Int:
     case Tok::Float:
+    case Tok::Double:
       return "'" + token.lexeme + "'";
     case Tok::Str:
       return "a string literal";
@@ -376,7 +377,11 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
             out = Value(static_cast<int64_t>(0ULL - static_cast<uint64_t>(operand.asInt())));
             return true;
           }
-          if (operand.isFloat()) { out = Value(-operand.asFloat()); return true; }
+          if (operand.isFloat()) {
+            out = Value::fromFloat(-static_cast<float>(operand.asFloat()));
+            return true;
+          }
+          if (operand.isDouble()) { out = Value(-operand.asDouble()); return true; }
           reason = "unary '-' needs a numeric constant";
           return false;
         case Tok::Plus:
@@ -496,17 +501,22 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
       }
       const double a = left.number();
       const double c = right.number();
+      // Java-style promotion: int/float -> float, anything with a double -> double.
+      const bool asFloat = !left.isDouble() && !right.isDouble();
+      auto makeNum = [&](double result) {
+        return asFloat ? Value::fromFloat(static_cast<float>(result)) : Value(result);
+      };
       switch (b.op) {
-        case Tok::Plus: out = Value(a + c); return true;
-        case Tok::Minus: out = Value(a - c); return true;
-        case Tok::Star: out = Value(a * c); return true;
+        case Tok::Plus: out = makeNum(a + c); return true;
+        case Tok::Minus: out = makeNum(a - c); return true;
+        case Tok::Star: out = makeNum(a * c); return true;
         case Tok::Slash:
           if (c == 0) { reason = "division by zero in a constant expression"; return false; }
-          out = Value(a / c); return true;
+          out = makeNum(a / c); return true;
         case Tok::Percent:
           if (c == 0) { reason = "division by zero in a constant expression"; return false; }
-          out = Value(std::fmod(a, c)); return true;
-        case Tok::StarStar: out = Value(std::pow(a, c)); return true;
+          out = makeNum(std::fmod(a, c)); return true;
+        case Tok::StarStar: out = makeNum(std::pow(a, c)); return true;
         default:
           reason = "unsupported binary operator in a constant expression";
           return false;
@@ -1204,8 +1214,12 @@ ExprPtr Parser::parsePrimary() {
   if (match(Tok::Int)) {
     return makeExpr(LiteralExpr{Value(token.intValue)}, token.line, token.col);
   }
-  if (match(Tok::Float)) {
+  if (match(Tok::Double)) {
     return makeExpr(LiteralExpr{Value(token.floatValue)}, token.line, token.col);
+  }
+  if (match(Tok::Float)) {
+    return makeExpr(LiteralExpr{Value::fromFloat(static_cast<float>(token.floatValue))},
+                    token.line, token.col);
   }
   if (match(Tok::Str)) return buildString(token);
   if (match(Tok::True)) return makeExpr(LiteralExpr{Value(true)}, token.line, token.col);
@@ -1258,8 +1272,10 @@ ExprPtr Parser::parsePrimary() {
           key = keyToken.parts[0].text;
         } else if (check(Tok::Int)) {
           key = std::to_string(advance().intValue);
-        } else if (check(Tok::Float)) {
+        } else if (check(Tok::Double)) {
           key = Value(advance().floatValue).toString();
+        } else if (check(Tok::Float)) {
+          key = Value::fromFloat(static_cast<float>(advance().floatValue)).toString();
         } else if (check(Tok::True)) {
           advance();
           key = "true";

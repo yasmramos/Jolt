@@ -7,16 +7,16 @@
 // name must exist at run time or the program reports an undefined variable.
 
 // A native bound to a builtin, with a fully typed signature.
-native fn sqrt(x: float): float;
-native fn floor(x: float): float;
+native fn sqrt(x: double): double;
+native fn floor(x: double): double;
 
 assertEq(sqrt(9.0), 3.0);
-// `int` widens to `float`, so an int argument is accepted.
+// `int` widens to `double`, so an int argument is accepted.
 assertEq(sqrt(16), 4.0);
 assertEq(floor(2.9), 2.0);
 
-// The declared return type is used for inference: `let y: float = ...` checks.
-let y: float = sqrt(25.0);
+// The declared return type is used for inference: `let y: double = ...` checks.
+let y: double = sqrt(25.0);
 assertEq(y, 5.0);
 
 // A native may also be called through a reference, like any other function.

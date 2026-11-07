@@ -28,8 +28,8 @@ let pr = Pair { first: 1, second: "two" };
 assertEq(pr.first, 1);
 assertEq(pr.second, "two");
 
-// The annotated type is checked: int widens to float.
-struct Vec { x: float; y: float; }
+// The annotated type is checked: int widens to double.
+struct Vec { x: double; y: double; }
 let v = Vec { x: 1, y: 2.5 };
 assertEq(v.x, 1.0);
 assertEq(v.y, 2.5);

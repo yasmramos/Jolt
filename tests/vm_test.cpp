@@ -146,12 +146,43 @@ void testFloatArithmetic() {
   vm.run(bytecode);
 
   const Value& x = requireGlobal(vm, "x");
-  assert(x.isFloat());
-  assert(x.asFloat() == 2.5);
+  assert(x.isDouble());
+  assert(x.asDouble() == 2.5);
 
   const Value& y = requireGlobal(vm, "y");
-  assert(y.isFloat());
-  assert(y.asFloat() == 3.5);
+  assert(y.isDouble());
+  assert(y.asDouble() == 3.5);
+}
+
+void testFloatDoublePromotion() {
+  TEST_SCOPE();
+  Bytecode bytecode = compileSource(
+      "let a = 1.5f + 1.5f;\n"
+      "let b = 1.5f + 1.5;\n"
+      "let c = 1 + 1.5f;\n"
+      "let d = 1f;\n");
+  VM vm;
+  vm.run(bytecode);
+
+  // float + float -> float (binary32).
+  const Value& a = requireGlobal(vm, "a");
+  assert(a.isFloat());
+  assert(a.asFloat() == 3.0);
+
+  // float + double -> double.
+  const Value& b = requireGlobal(vm, "b");
+  assert(b.isDouble());
+  assert(b.asDouble() == 3.0);
+
+  // int + float -> float.
+  const Value& c = requireGlobal(vm, "c");
+  assert(c.isFloat());
+  assert(c.asFloat() == 2.5);
+
+  // An integer-looking literal with an `f` suffix is a float.
+  const Value& d = requireGlobal(vm, "d");
+  assert(d.isFloat());
+  assert(d.asFloat() == 1.0);
 }
 
 void testSubtractionAndMultiplication() {
@@ -174,7 +205,7 @@ void testModulo() {
   assert(a.isInt() && a.asInt() == 1);
 
   const Value& b = requireGlobal(vm, "b");
-  assert(b.isFloat() && b.asFloat() == 1.5);
+  assert(b.isDouble() && b.asDouble() == 1.5);
 
   const Value& c = requireGlobal(vm, "c");
   assert(c.isInt() && c.asInt() == -1);
@@ -194,11 +225,11 @@ void testPower() {
   assert(a.isInt() && a.asInt() == 256);
 
   const Value& b = requireGlobal(vm, "b");
-  assert(b.isFloat() && b.asFloat() == 8.0);
+  assert(b.isDouble() && b.asDouble() == 8.0);
 
   // Negative exponent: falls into the double path, same as the interpreter.
   const Value& c = requireGlobal(vm, "c");
-  assert(c.isFloat() && c.asFloat() == 0.5);
+  assert(c.isDouble() && c.asDouble() == 0.5);
 }
 
 void testStringConcatenation() {
@@ -283,7 +314,7 @@ void testUnaryOperators() {
   assert(requireGlobal(vm, "e").isBool() && !requireGlobal(vm, "e").asBool());
 
   const Value& f = requireGlobal(vm, "f");
-  assert(f.isFloat() && f.asFloat() == -2.5);
+  assert(f.isDouble() && f.asDouble() == -2.5);
 }
 
 void testComparisons() {
@@ -1283,6 +1314,7 @@ void testErrorValuesAreNotConfusedWithMaps() {
 int main() {
   testIntegerArithmetic();
   testFloatArithmetic();
+  testFloatDoublePromotion();
   testSubtractionAndMultiplication();
   testModulo();
   testPower();

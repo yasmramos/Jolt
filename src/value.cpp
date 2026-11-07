@@ -15,6 +15,8 @@ const char* Value::typeName() const {
       return "int";
     case VType::Float:
       return "float";
+    case VType::Double:
+      return "double";
     case VType::Str:
       return "string";
     case VType::Error:
@@ -50,6 +52,7 @@ bool Value::equals(const Value& other) const {
       return asBool() == other.asBool();
     case VType::Int:
     case VType::Float:
+    case VType::Double:
       return false;  // handled above
     case VType::Str:
       return asStr() == other.asStr();
@@ -96,6 +99,18 @@ static std::string formatFloat(double d) {
   return std::string(buffer, result.ptr);
 }
 
+// A `float` prints with the shortest text that round-trips through binary32
+// (Java-style: `0.1f` prints "0.1", not the binary64 value "0.1"). `to_chars`
+// with the `float` overload produces exactly that.
+static std::string formatFloat32(double d) {
+  if (std::isnan(d)) return "nan";
+  if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
+  char buffer[64];
+  auto result = std::to_chars(buffer, buffer + sizeof(buffer), static_cast<float>(d));
+  if (result.ec != std::errc()) return "nan";
+  return std::string(buffer, result.ptr);
+}
+
 static void writeValue(std::string& out, const Value& value, bool repr, int depth) {
   if (depth > 8) {
     out += "...";
@@ -112,7 +127,10 @@ static void writeValue(std::string& out, const Value& value, bool repr, int dept
       out += std::to_string(value.asInt());
       break;
     case VType::Float:
-      out += formatFloat(value.asFloat());
+      out += formatFloat32(value.asFloat());
+      break;
+    case VType::Double:
+      out += formatFloat(value.asDouble());
       break;
     case VType::Str:
       out += repr ? quoteString(value.asStr()) : value.asStr();
