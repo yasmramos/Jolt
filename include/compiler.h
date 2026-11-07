@@ -338,6 +338,7 @@ class Compiler {
   int compileMap(const MapExpr& map);
   int compileStructLiteral(const StructLitExpr& literal, int line, int col);
   int compileRange(const RangeExpr& range, int line, int col);
+  int compileSlice(const SliceExpr& slice, int line, int col);
   int compileInterpolation(const InterpExpr& interpolation, int line, int col);
   // Converts `source` to a string through the compiler's private runtime
   // helper and returns the register holding the result.

@@ -1,0 +1,5 @@
+// expect-exit: 70
+// Only arrays and strings can be sliced.
+
+let m = { a: 1 };
+print(m[0:1]);
