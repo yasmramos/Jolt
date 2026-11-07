@@ -357,6 +357,18 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
   if (!to.isPresent() || !from.isPresent()) return;  // any / unknown
   if (to.name == "any" || from.name == "any") return;
 
+  // `void` is a return-only type: it is never a value, so nothing can be
+  // stored into it and a `void` expression cannot be used where a value is
+  // expected (PHASE 6.6 maps it to C's `void`).
+  if (to.name == "void") {
+    fail("cannot store a value into '" + describeType(to) + "' in " + context +
+             ": 'void' is only a return type",
+         line, col);
+  }
+  if (from.name == "void") {
+    fail("cannot use a 'void' expression as a value in " + context, line, col);
+  }
+
   // `nil` fits any nullable target, whatever its type.
   if (from.name == "nil") {
     if (to.nullable) return;
@@ -749,7 +761,13 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
       if (!child) continue;
       if (const auto* let = std::get_if<LetStmt>(&child->node)) {
         TypeRef type = let->type;
-        if (!type.isPresent() && let->init) type = inferExprType(*let->init);
+        if (!type.isPresent() && let->init) {
+          type = inferExprType(*let->init);
+          // A `void` initializer has no value, so the binding stays untyped
+          // (mirrors `compileLet`); otherwise a hoisted closure reading it
+          // would see a bogus `void` type.
+          if (type.name == "void") type = TypeRef{};
+        }
         blockTypes[let->name] = type;
         auto found = blockSlots.find(let->name);
         if (let->kind == Tok::Var && found != blockSlots.end()) {
@@ -892,8 +910,9 @@ void Compiler::compileLet(const LetStmt& s) {
     TypeRef inferred = inferExprType(*s.init);
     if (declared.isPresent()) {
       checkAssignable(inferred, declared, "'" + s.name + "'", s.init->line, s.init->col);
-    } else if (inferred.isPresent() && inferred.name != "nil") {
-      // `let x = nil` stays untyped, so a later `x = 5` is allowed.
+    } else if (inferred.isPresent() && inferred.name != "nil" && inferred.name != "void") {
+      // `let x = nil` stays untyped, so a later `x = 5` is allowed. So does
+      // `let x = voidNative();`: a void expression has no value to type.
       declared = inferred;
     }
   } else if (declared.isPresent()) {
@@ -1434,6 +1453,11 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
 
   int reg;
   if (stmt.value) {
+    if (currentReturnType_.isPresent() && currentReturnType_.name == "void") {
+      fail("cannot return a value from a function declared to return 'void'; "
+           "use a bare 'return;'",
+           stmt.value->line, stmt.value->col);
+    }
     // Check the returned value against the declared return type (PHASE 6.5),
     // when both are known. Types are metadata only: the check never changes
     // the emitted code.
@@ -1445,7 +1469,7 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
     reg = compileExpr(*stmt.value);
   } else {
     if (currentReturnType_.isPresent() && currentReturnType_.name != "any" &&
-        !currentReturnType_.nullable) {
+        currentReturnType_.name != "void" && !currentReturnType_.nullable) {
       fail("cannot return 'nil' from a function declared to return '" +
                describeType(currentReturnType_) + "' (use '" + currentReturnType_.name + "?')",
            currentLine_, currentCol_);

@@ -982,6 +982,42 @@ void testTryCatchErrors() {
   expectCompiles("let x = error(\"a\") catch 0;\n");
 }
 
+void testVoidReturnType() {
+  // `void` is a return-only annotation. A function that falls off the end or
+  // uses a bare `return;` compiles, and it still emits the implicit nil return
+  // (void is metadata only, so no opcode is added).
+  expectCompiles("fn f(): void { print(1); }\n");
+  expectCompiles("fn f(): void { return; }\n");
+  expectCompiles("fn f(x: int): void { if (x > 0) { return; } print(x); }\n");
+
+  Bytecode bc = compileSource("fn f(): void { return; }\nf();\n");
+  const Bytecode* fProto = nullptr;
+  for (const auto& child : bc.children) {
+    if (child->name == "f") fProto = child.get();
+  }
+  assert(fProto != nullptr);
+  bool sawReturn = false;
+  for (const Instruction& ins : fProto->code) {
+    if (ins.op == OpCode::RETURN) sawReturn = true;
+  }
+  assert(sawReturn && "a void function still emits a RETURN");
+
+  // A void value is not a value: `var x = voidFn();` stays untyped (like
+  // `var x = nil`), so a later assignment is allowed and no bogus type sticks.
+  expectCompiles("fn f(): void {}\nvar x = f();\nx = 5;\n");
+}
+
+void testVoidErrors() {
+  // Returning a value from a void function is rejected.
+  expectCompileError("fn f(): void { return 1; }\n", "return a value from void");
+  // `void` is not valid on a variable, a parameter or a struct field.
+  expectCompileError("let x: void = nil;\n", "void variable");
+  expectCompileError("fn f(x: void) {}\n", "void parameter");
+  expectCompileError("struct S { v: void; }\n", "void struct field");
+  // `void` has no value, so a nullable `void?` is meaningless.
+  expectCompileError("fn f(): void? {}\n", "nullable void");
+}
+
 void testCyclicImportIsRejected() {
   // A cycle (a -> b -> a) must be reported as a compile error instead of
   // recursing until the compiler overflows the stack. The loader maps dotted
@@ -1084,6 +1120,8 @@ int main() {
   testStructNamesAreUsableAsTypes();
   testTryCatchBytecode();
   testTryCatchErrors();
+  testVoidReturnType();
+  testVoidErrors();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

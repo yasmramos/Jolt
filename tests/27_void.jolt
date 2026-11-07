@@ -1,0 +1,38 @@
+// `void` is a return-only type annotation (PHASE 6.6 groundwork). It maps
+// directly to C's `void` in the FFI, so `native fn free(p): void;` reads like
+// its C declaration. It is compile-time metadata only: a `void` function still
+// returns nil at run time, so no opcode and no runtime type is added.
+
+// A `void` function may fall off the end of its body.
+fn logLine(msg: string): void {
+  print(msg);
+}
+
+// ... or return early with a bare `return;`.
+fn maybeLog(flag: bool): void {
+  if (!flag) {
+    return;
+  }
+  print("logged");
+}
+
+// `void` is also valid on a `native fn`: this is the direct FFI mapping.
+native fn print(v: any): void;
+
+logLine("void function ok");
+maybeLog(false);
+maybeLog(true);
+
+// At run time a void function produces nil, like any other value-less return.
+assertEq(type(logLine("x")), "nil");
+assertEq(type(maybeLog(false)), "nil");
+
+// A void result may be discarded or bound loosely: like `let x = nil`, the
+// binding stays untyped because a void expression has no value to infer.
+let discarded = logLine("discarded");
+assertEq(discarded, nil);
+
+// A void function is an ordinary function value.
+assertEq(type(logLine), "function");
+
+print("void ok");

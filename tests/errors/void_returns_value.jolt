@@ -1,0 +1,5 @@
+// expect-exit: 65
+// A `void` function cannot return a value; use a bare `return;`.
+fn f(): void {
+  return 1;
+}

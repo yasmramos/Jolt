@@ -386,6 +386,14 @@ previous one.
   feeds inference. A parameter with no annotation (or `any`) turns the check
   off for that argument. See `docs/language.md` §7.6 and
   `tests/19_native_fn.jolt`.
+- **`void` return type** — **done**: `fn f(): void` and `native fn free(p):
+  void;` declare a function that produces no value, mapping directly to C's
+  `void` in the FFI (PHASE 6.6). It is a return-only annotation (rejected on
+  variables, parameters and fields), compile-time metadata only: a `void`
+  function still returns `nil` at run time, so no opcode and no runtime type is
+  added. `return expr;` is rejected in a `void` function (use a bare
+  `return;`), and a `void` expression cannot be used as a value. See
+  `docs/language.md` §4.6 and `tests/27_void.jolt`.
 - **Variadic parameters** — **done**: a trailing `rest...` parameter
   (`fn sum(first, rest...)`) binds an array holding every extra argument; the
   `...` follows the optional element type (`rest...` or `parts: int...`) and

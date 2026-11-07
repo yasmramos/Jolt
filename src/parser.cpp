@@ -331,16 +331,28 @@ StmtPtr Parser::parseVarDecl() {
 // Parses an optional `: <type>` annotation. The type name is an identifier,
 // optionally followed by `?` (nullability, used by PHASE 6.5). Unknown type
 // names are rejected here so the compiler only ever sees valid ones.
-TypeRef Parser::parseTypeAnnotation() {
+//
+// `void` is a return-only annotation (it maps to C's `void` in the FFI, PHASE
+// 6.6), so `allowVoid` is true only in the `fn`/`native fn` return position.
+TypeRef Parser::parseTypeAnnotation(bool allowVoid) {
   if (!match(Tok::Colon)) return TypeRef{};
   const Token& typeName = consume(Tok::Ident, "expected a type name after ':'");
   TypeRef type;
   type.name = typeName.lexeme;
+  if (type.name == "void" && !allowVoid) {
+    // Thrown directly, not through `error`, so the message matches the other
+    // "only allowed here" diagnostics without the trailing ", found ...".
+    throw CompileError{"'void' is only allowed as a return type", typeName.line,
+                       typeName.col};
+  }
   // A struct name is a valid annotation too (PHASE 6.5): `let p: Point = ...`.
   if (!isKnownTypeName(type.name) && structNames_.count(type.name) == 0) {
     error(typeName, "unknown type name");
   }
   if (match(Tok::Question)) type.nullable = true;
+  if (type.name == "void" && type.nullable) {
+    throw CompileError{"'void' cannot be nullable", typeName.line, typeName.col};
+  }
   return type;
 }
 
@@ -535,7 +547,7 @@ StmtPtr Parser::parseFnDecl() {
   }
   const Token& name = consume(Tok::Ident, "expected a function name");
   auto params = parseParams();
-  TypeRef returnType = parseTypeAnnotation();
+  TypeRef returnType = parseTypeAnnotation(/*allowVoid=*/true);
   StmtPtr body;
   if (check(Tok::Arrow)) {
     const Token& arrow = advance();
@@ -573,7 +585,7 @@ StmtPtr Parser::parseNativeDecl() {
   consume(Tok::Fn, "expected 'fn' after 'native'");
   const Token& name = consume(Tok::Ident, "expected a function name");
   auto params = parseParams();
-  TypeRef returnType = parseTypeAnnotation();
+  TypeRef returnType = parseTypeAnnotation(/*allowVoid=*/true);
   if (check(Tok::Arrow) || check(Tok::LBrace)) {
     throw CompileError{"a 'native fn' has no body; it binds to a function the runtime provides",
                        peek().line, peek().col};
