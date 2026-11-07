@@ -1442,6 +1442,16 @@ Running `jolt` with no arguments starts the REPL. Features:
 - The trailing `;` of each entry may be omitted.
 - Definitions persist until `:clear`.
 
+The session is semantic, not just a bag of values. An entry sees the
+definitions of the entries before it exactly as if they were one accumulating
+program: a `let` stays immutable, a `var` keeps its type annotation, a
+`struct` stays usable as a literal or an annotation, and an `import` is bound
+once. Redefining a name in a later entry is allowed and replaces the old
+binding. An entry that fails to compile leaves no trace: it commits nothing,
+so an import it started can be imported again cleanly. `:clear` drops the
+whole session state with the definitions. A file (`jolt file.jolt`, `:load`)
+always starts from an empty session.
+
 Commands:
 
 | Command | Description |

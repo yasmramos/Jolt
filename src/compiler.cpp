@@ -488,11 +488,6 @@ void Compiler::resetChunk(const std::string& name) {
   deferStack_.clear();
   funcStack_.clear();
   currentUpvalueNames_.clear();
-  globalConsts_.clear();
-  userGlobals_.clear();
-  globalTypes_.clear();
-  structDefs_.clear();
-  nativeSigs_.clear();
   currentReturnType_ = TypeRef{};
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
@@ -500,14 +495,24 @@ void Compiler::resetChunk(const std::string& name) {
   currentLine_ = 1;
   currentCol_ = 1;
   moduleBody_ = false;
+  loadingStack_.clear();
+}
+
+void Compiler::clearSession() {
+  globalConsts_.clear();
+  userGlobals_.clear();
+  globalTypes_.clear();
+  structDefs_.clear();
+  nativeSigs_.clear();
+  loadedModules_.clear();
   materializedModules_.clear();
   namespaces_.clear();
   boundImports_.clear();
   wildcardBindings_.clear();
-  loadingStack_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
+  clearSession();
   resetChunk();
 
   if (!program) fail("empty program", 1, 1);
@@ -551,7 +556,8 @@ Bytecode Compiler::compileExpression(const ExprPtr& expr) {
   if (!expr) fail("empty expression", 1, 1);
 
   // Expressions run in the global scope: a REPL entry can read and write the
-  // globals defined by earlier entries.
+  // globals defined by earlier entries. The session state (types, imports) is
+  // kept, so an expression sees the definitions of previous entries.
   scopes_.push_back(Scope{});
   int result = compileExpr(*expr);
   emit(OpCode::RETURN, result);
@@ -561,6 +567,39 @@ Bytecode Compiler::compileExpression(const ExprPtr& expr) {
 }
 
 Bytecode Compiler::compileRepl(const StmtPtr& program) {
+  // A definition is committed only when its entry compiles: the session state
+  // is snapshotted and restored if the entry throws. Without this, an entry
+  // that materializes an import and then fails would leave that import marked
+  // as bound although its bytecode never ran, and the next entry would see a
+  // module that is not there.
+  auto savedConsts = globalConsts_;
+  auto savedUserGlobals = userGlobals_;
+  auto savedTypes = globalTypes_;
+  auto savedStructs = structDefs_;
+  auto savedNatives = nativeSigs_;
+  auto savedLoaded = loadedModules_;
+  auto savedMaterialized = materializedModules_;
+  auto savedNamespaces = namespaces_;
+  auto savedBound = boundImports_;
+  auto savedWildcards = wildcardBindings_;
+  try {
+    return compileReplEntry(program);
+  } catch (...) {
+    globalConsts_ = std::move(savedConsts);
+    userGlobals_ = std::move(savedUserGlobals);
+    globalTypes_ = std::move(savedTypes);
+    structDefs_ = std::move(savedStructs);
+    nativeSigs_ = std::move(savedNatives);
+    loadedModules_ = std::move(savedLoaded);
+    materializedModules_ = std::move(savedMaterialized);
+    namespaces_ = std::move(savedNamespaces);
+    boundImports_ = std::move(savedBound);
+    wildcardBindings_ = std::move(savedWildcards);
+    throw;
+  }
+}
+
+Bytecode Compiler::compileReplEntry(const StmtPtr& program) {
   resetChunk();
   if (!program) fail("empty program", 1, 1);
 
