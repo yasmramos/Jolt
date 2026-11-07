@@ -17,6 +17,8 @@ const char* Value::typeName() const {
       return "float";
     case VType::Str:
       return "string";
+    case VType::Error:
+      return "error";
     case VType::Array:
       return "array";
     case VType::Map:
@@ -51,6 +53,10 @@ bool Value::equals(const Value& other) const {
       return false;  // handled above
     case VType::Str:
       return asStr() == other.asStr();
+    case VType::Error:
+      // Errors compare by value (message and code), like strings. This keeps
+      // `assertEq` and `==` useful for error results.
+      return err().message == other.err().message && err().code == other.err().code;
     case VType::Array: {
       const auto& a = arr().items;
       const auto& b = other.arr().items;
@@ -111,6 +117,25 @@ static void writeValue(std::string& out, const Value& value, bool repr, int dept
     case VType::Str:
       out += repr ? quoteString(value.asStr()) : value.asStr();
       break;
+    case VType::Error: {
+      const auto& e = value.err();
+      if (repr) {
+        // Debug form, used at the top level and inside containers:
+        // `error("message")`, or `error("message", code)` when the code is set.
+        out += "error(";
+        out += quoteString(e.message);
+        if (e.code != 0) {
+          out += ", ";
+          out += std::to_string(e.code);
+        }
+        out += ')';
+      } else {
+        // Display form: the message alone, so `${err}` and `print(err)` read
+        // like the error text.
+        out += e.message;
+      }
+      break;
+    }
     case VType::Array: {
       const auto& items = value.arr().items;
       out += '[';
@@ -219,6 +244,10 @@ ArrayPtr makeArray(std::vector<Value> items) {
 }
 
 MapPtr makeMap() { return makeRef<Map>(); }
+
+Value makeError(std::string message, int64_t code) {
+  return Value(makeRef<ErrorObj>(std::move(message), code));
+}
 
 RangePtr makeRange(int64_t start, int64_t end, bool inclusive) {
   auto range = makeRef<Range>();

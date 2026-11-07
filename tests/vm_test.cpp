@@ -1227,6 +1227,57 @@ void testVmRejectsAstFunctions() {
   assert(threw);
 }
 
+void testErrorValues() {
+  // An error is a distinct runtime type, not a map. The reference counting of
+  // the underlying ErrorObj must behave like a string: copying a Value bumps
+  // the count, moving transfers it, and the last handle frees it.
+  Value e = makeError("boom", 42);
+  assert(e.isError());
+  assert(e.type() == VType::Error);
+  assert(e.typeName() == std::string("error"));
+  assert(e.err().message == "boom");
+  assert(e.err().code == 42);
+
+  // `errorPtr()` returns a handle by value, so hold the raw pointer to observe
+  // the count without the temporary handle skewing it.
+  ErrorObj* object = e.errorPtr().get();
+  assert(object->refs == 1);
+
+  // Copy bumps the count.
+  Value copy = e;
+  assert(object->refs == 2);
+  assert(copy.isError() && copy.err().message == "boom");
+  assert(copy.equals(e));
+
+  // Move transfers the reference without touching the count.
+  Value moved = std::move(copy);
+  assert(moved.isError());
+  assert(object->refs == 2);
+  // The moved-from value is left nil, as for every other reference type.
+  assert(copy.isNil());
+
+  // Equality is by value (message and code).
+  assert(makeError("x", 1).equals(makeError("x", 1)));
+  assert(!makeError("x", 1).equals(makeError("x", 2)));
+  assert(!makeError("x", 0).equals(Value("x")));
+
+  // Dropping every handle frees the object.
+  moved = Value();
+  e = Value();
+}
+
+void testErrorValuesAreNotConfusedWithMaps() {
+  // The whole point of a dedicated type: `isError` is exact, so a user map that
+  // happens to have an `ok` field can never be mistaken for an error.
+  assert(!Value("error").isError());
+  assert(!Value().isError());
+  assert(!Value(int64_t{0}).isError());
+  MapPtr lookalike = makeMap();
+  lookalike->set("ok", Value(false));
+  lookalike->set("error", Value("boom"));
+  assert(!Value(lookalike).isError());
+}
+
 }  // namespace
 
 int main() {
@@ -1302,6 +1353,8 @@ int main() {
   testUpvalueIndexOutOfRangeFailsCleanly();
   testClosureWriteBackIntoEnclosingLocal();
   testVmRejectsAstFunctions();
+  testErrorValues();
+  testErrorValuesAreNotConfusedWithMaps();
 
   std::puts("vm tests passed");
   return 0;

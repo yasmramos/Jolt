@@ -423,11 +423,17 @@ Slices, each independently shippable:
   token, node, parser rule or opcode, and no new VM logic (it reuses
   `Runtime::call` and the unwinding `catch(...)` already in `VM::call`). This
   is the value-based core; the rest is sugar over it.
-- **6.7.2 dedicated `error` value type** — a `VType::Error` tag with
-  `message`/`code`, so `isError` is exact instead of the `ok == false`
-  heuristic (a user map with `{ok: false}` must not be mistaken for an error).
-  Touches `Value`, its five `switch`es, `toString`/`repr`/`equals` and the GC.
-  There is no `.jolc` serializer in the tree, so serialization is out of scope.
+- **6.7.2 dedicated `error` value type (done)** — `VType::Error` is a real tag
+  (10 types), so `isError` is exact instead of the `ok == false` heuristic: a
+  user map with `{ok: false}` is never mistaken for an error. An `ErrorObj`
+  carries `message` and `code`; it holds no references, so like a string it
+  cannot sit in a cycle and is not a `GcNode`. Touches `Value` (the union,
+  the three private `switch`es), `typeName`/`equals`/`writeValue`, the GC
+  (no new edge, so no change), and `ops.cpp` (`err.message`/`err.code`).
+  Builtins `error(message, code?)` and `isError(value)`. `pcall` now returns
+  an error value in `result.error` instead of a string. There is no `.jolc`
+  serializer in the tree, so serialization is out of scope. Tested by
+  `tests/24_error_type.jolt` and the C++ `testErrorValues` in `vm_test.cpp`.
 - **6.7.3 `try expr catch default`** — prefix `try` (propagation) and postfix
   `catch` (local recovery), Zig-style. Prefix `try` is chosen over postfix `?`
   because `?` already starts the ternary `a ? b : c`. Compiles to
@@ -561,7 +567,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
 Phase 6.6: ⬜ pending (FFI with C)
-Phase 6.7: 🔶 in progress (6.7.1 `pcall` done; 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions, 6.7.5 `@mustUse` pending)
+Phase 6.7: 🔶 in progress (6.7.1 `pcall` and 6.7.2 `error` type done; 6.7.3 `try`/`catch`, 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)

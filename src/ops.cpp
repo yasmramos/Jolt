@@ -356,6 +356,12 @@ void indexSet(Runtime& rt, const Value& object, const Value& index, Value value,
 
 Value memberGet(Runtime &rt, const Value &object, const std::string &name,
                 int line, int col) {
+  if (object.isError()) {
+    const ErrorObj& error = object.err();
+    if (name == "message") return Value(error.message);
+    if (name == "code") return Value(error.code);
+    rt.fail("type 'error' has no member '" + name + "'", line, col);
+  }
   if (object.isMap()) {
     if (const Value *found = object.map().get(name))
       return *found;

@@ -2,7 +2,7 @@
 //
 // `pcall(fn, args...)` calls `fn` and returns a map `{ok, value, error}`:
 // on success `ok` is true, `value` holds the return value and `error` is
-// nil; on failure `ok` is false, `value` is nil and `error` is the message.
+// nil; on failure `ok` is false, `value` is nil and `error` is an error value.
 // The program keeps running after a caught error.
 
 // --- success --------------------------------------------------------------
@@ -26,10 +26,11 @@ assertEq(nothing.value, nil);
 let bad = pcall(() => 1 / 0);
 assertEq(bad.ok, false);
 assertEq(bad.value, nil);
-assertEq(bad.error, "division by zero");
+assertEq(isError(bad.error), true);
+assertEq(bad.error.message, "division by zero");
 
 // `panic` is caught the same way as any other runtime error.
-assertEq(pcall(() => panic("boom")).error, "boom");
+assertEq(pcall(() => panic("boom")).error.message, "boom");
 
 // Other runtime errors are caught too.
 assertEq(pcall(() => [1, 2][9]).ok, false);
@@ -39,7 +40,7 @@ assertEq(pcall(() => "x" + 1).ok, false);
 // --- the program continues after a caught error ---------------------------
 
 let after = pcall(() => 1 / 0);
-assertEq(after.error, "division by zero");
+assertEq(after.error.message, "division by zero");
 assertEq(2 + 2, 4);
 
 // The engine stays consistent: code after the catch runs normally.
@@ -62,7 +63,7 @@ assertEq(numbers[0], 1);
 let nested = pcall(() => pcall(() => 1 / 0));
 assertEq(nested.ok, true);
 assertEq(nested.value.ok, false);
-assertEq(nested.value.error, "division by zero");
+assertEq(nested.value.error.message, "division by zero");
 
 // An error raised deep in the call stack unwinds and is caught at the top.
 fn deep(n) {
@@ -73,11 +74,11 @@ fn deep(n) {
 }
 let unwound = pcall(deep, 50);
 assertEq(unwound.ok, false);
-assertEq(unwound.error, "division by zero");
+assertEq(unwound.error.message, "division by zero");
 
 // --- misuse fails loudly --------------------------------------------------
 
 // A non-function first argument is a caller bug, not a catchable error.
-assertEq(pcall(() => pcall(5)).error, "pcall() expects a function as its first argument");
+assertEq(pcall(() => pcall(5)).error.message, "pcall() expects a function as its first argument");
 
 print("ok");
