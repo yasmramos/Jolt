@@ -346,11 +346,12 @@ vocabulary (PHASE 6.6) adds pointers and fixed-width/unsigned integers:
 | `uint` | `unsigned int` | Unsigned. |
 | `size_t` | `size_t` | Unsigned size. |
 
-These are **compile-time annotations, erased before the bytecode**: the runtime
-value is still an `int` (a pointer is an opaque handle) and `type()` keeps
-reporting the primitive name, so no opcode and no runtime type is added. The
-width and signedness are recorded for the FFI marshalling to honour, not for
-the VM.
+These are **compile-time annotations**: the integer family is erased before the
+bytecode (the runtime value is still an `int`) and `type()` keeps reporting the
+primitive name. Pointers are the exception: `ptr` and `cstring` are a distinct
+runtime value (see **Pointer values** below), because a pointer has to be
+recognisable at run time to be marshalled safely. The width and signedness of
+the integers are recorded for the FFI marshalling to honour, not for the VM.
 
 ```jolt
 native fn strlen(s: cstring): size_t;
@@ -366,6 +367,41 @@ also a `ptr` (an upcast to `void*`); the reverse needs an explicit cast, so it
 is not implicit. The integer family (`int`, the fixed-width types, `uint`,
 `size_t`) is mutually assignable at compile time and widens to `float`/`double`,
 following the same numeric rule as `int`.
+
+**Pointer values.** A `ptr`/`cstring` is an **opaque handle**, never a machine
+address: the program can pass it to a native and read it back, but it can never
+dereference an arbitrary location. This keeps Jolt memory-safe and keeps the
+allocation visible to the cycle collector. `type()` reports `ptr` for a `void *`
+and `cstring` for a C string, and a `cstring` upcasts to `ptr` without losing
+its kind. Pointers compare by identity (like functions), not by their contents.
+
+The development engine owns the storage through the handle and exposes it with
+these builtins:
+
+| Builtin | Meaning |
+| --- | --- |
+| `cstring(s)` | Builds a `cstring` from a Jolt string (bytes plus a NUL). |
+| `cstr(p)` | Reads a `cstring`/buffer back as a Jolt string. |
+| `buffer(n)` | Allocates `n` zero-initialised bytes and returns a `ptr`. |
+| `byteLen(p)` | Bytes the handle owns (`cstring` excludes the NUL; `void *` is 0). |
+| `loadByte(p, i)` | Byte `0..255` at index `i` (bounds-checked). |
+| `storeByte(p, i, b)` | Writes a byte into a buffer (`cstring` is read-only). |
+| `intToPtr(n)` / `ptrToInt(p)` | Wraps and reads the opaque integer token a native returns. |
+| `free(p)` | Releases the handle's storage; a later use is a runtime error. |
+
+```jolt
+let greeting = cstring("hi");
+print(cstr(greeting));      // hi
+print(byteLen(greeting));   // 2
+
+let buf = buffer(4);
+storeByte(buf, 0, 65);      // 'A'
+print(loadByte(buf, 0));    // 65
+free(buf);
+```
+
+The AOT backend (PHASE 7) lowers the same handles to real C pointers, so a
+program that only passes them to natives compiles unchanged.
 
 **`extern "C"` blocks.** A C function is declared in an `extern "C" { ... }`
 block (PHASE 6.6). The ABI is a plain string literal and only `"C"` is
@@ -386,8 +422,9 @@ print(sqrt(16.0));         // 4
 let n: size_t = strlen("hi");
 ```
 
-Binding a declaration to a real C function (the marshalling and the call
-lowering without `libffi`) is the remaining part of PHASE 6.6.
+In the development engine a declaration binds to the host builtin of the same
+name; lowering a call to a real C symbol (the marshalling without `libffi`) is
+the remaining part of PHASE 6.6.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -1526,6 +1563,23 @@ assertEq(sqrt(81), 9.0);
 | `exit(code?)` | Ends the process with the given code (0 by default). |
 
 `assertEq` follows the order `expected, actual` and adds both values to the error message.
+
+### 12.8 FFI pointers
+
+Opaque `ptr`/`cstring` handles (PHASE 6.6, see §4.6). They own host storage and
+are never a machine address the program can dereference.
+
+| Function | Description |
+| --- | --- |
+| `cstring(s)` | Builds a `cstring` from a string (bytes plus a NUL). |
+| `cstr(p)` | Reads a `cstring`/buffer back as a string. |
+| `buffer(n)` | Allocates `n` zero-initialised bytes and returns a `ptr`. |
+| `byteLen(p)` | Bytes the handle owns. |
+| `loadByte(p, i)` | Byte `0..255` at index `i` (bounds-checked). |
+| `storeByte(p, i, b)` | Writes a byte into a buffer. |
+| `intToPtr(n)` | Wraps an opaque integer token in a `ptr`. |
+| `ptrToInt(p)` | Reads the opaque integer token back. |
+| `free(p)` | Releases the handle's storage. |
 
 ---
 
