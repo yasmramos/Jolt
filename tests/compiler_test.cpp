@@ -81,11 +81,11 @@ void testArithmeticAndPrint() {
 void testNumericConstantTypes() {
   Bytecode bc = compileSource("let a = 1;\nlet b = 1.0;\n");
 
-  // int and float must not be merged in the constant pool. Global names share
+  // int and double must not be merged in the constant pool. Global names share
   // the pool, so the layout is 1, "a", 1.0, "b".
   assert(bc.constants.size() == 4);
   assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
-  assert(bc.constants[2].isFloat() && bc.constants[2].asFloat() == 1.0);
+  assert(bc.constants[2].isDouble() && bc.constants[2].asDouble() == 1.0);
 }
 
 void testLeftAssociativePrecedence() {

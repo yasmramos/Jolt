@@ -1,0 +1,3 @@
+// expect-exit: 65
+// `double` does not implicitly narrow to `float` (Java-style). Use `float(x)`.
+let x: float = 2.5;

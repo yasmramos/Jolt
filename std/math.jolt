@@ -12,16 +12,16 @@
 // call site. Everything that can be written in Jolt (abs, min, max, clamp) is
 // plain Jolt, so the standard library is mostly Jolt.
 
-native fn sqrt(x: float): float;
-native fn pow(base: float, exponent: float): float;
-native fn sin(x: float): float;
-native fn cos(x: float): float;
-native fn tan(x: float): float;
-native fn log(x: float): float;
-native fn exp(x: float): float;
-native fn floor(x: float): float;
-native fn ceil(x: float): float;
-native fn round(x: float): float;
+native fn sqrt(x: double): double;
+native fn pow(base: double, exponent: double): double;
+native fn sin(x: double): double;
+native fn cos(x: double): double;
+native fn tan(x: double): double;
+native fn log(x: double): double;
+native fn exp(x: double): double;
+native fn floor(x: double): double;
+native fn ceil(x: double): double;
+native fn round(x: double): double;
 
 const PI = 3.141592653589793;
 const E = 2.718281828459045;

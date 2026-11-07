@@ -91,13 +91,17 @@ The convention is `camelCase` for variables, functions and methods, and the stan
 | Hexadecimal | `0x2A` | `42` |
 | Binary | `0b101010` | `42` |
 | Octal | `0o52` | `42` |
-| Float | `1.5`, `0.25` | `1.5`, `0.25` |
+| Double | `1.5`, `0.25` | `1.5`, `0.25` (binary64) |
+| Float | `1.5f`, `0.25F` | `1.5`, `0.25` (binary32) |
 | Scientific notation | `1.5e3`, `2E-2` | `1500.0`, `0.02` |
 
 - Integers are 64-bit signed. An out-of-range literal is a compile error.
 - The `-` sign is a unary operator, not part of the literal.
 - A dot is only part of a float when followed by a digit: `1.` is not a valid float; write `1.0`.
 - Underscores are ignored inside digits: `1_0` is equivalent to `10`.
+- A fractional literal with no suffix is a `double` (binary64); a trailing
+  `f`/`F` makes it a `float` (binary32), like Java. The suffix also turns an
+  integer-looking literal into a float: `1f` is a `float`.
 
 ### 2.4 Strings
 
@@ -158,7 +162,8 @@ Strings are UTF-8 and **immutable**. Length and index operations work on code po
 | `nil` | `nil` | Absence of a value. |
 | `bool` | `true`, `false` | Logical values. |
 | `int` | 64-bit signed integers. | Arithmetic wraps around on overflow. |
-| `float` | IEEE 754 double-precision floating-point numbers. | Can be `inf`, `-inf` or `nan` as the result of operations. |
+| `float` | IEEE 754 single-precision floating-point numbers (binary32). | Literal with an `f`/`F` suffix. Can be `inf`, `-inf` or `nan`. |
+| `double` | IEEE 754 double-precision floating-point numbers (binary64). | Default for a fractional literal. Can be `inf`, `-inf` or `nan`. |
 | `string` | UTF-8 text. | Immutable. |
 | `error` | Error values built by `error(message, code?)`. | Immutable. Carries a `message` and an integer `code` (see §13.2). |
 | `array` | Ordered sequence of values. | Mutable and by reference. |
@@ -187,13 +192,13 @@ if (0) {
 
 ### 3.2 Equality
 
-- `int` and `float` are compared numerically: `1 == 1.0` is `true`.
+- `int`, `float` and `double` are compared numerically: `1 == 1.0` and `1.5f == 1.5` are `true`.
 - Strings are compared by content.
 - Errors are compared by content (message and code).
 - Arrays and maps are compared **structurally**, in depth.
 - Ranges compare start, end and inclusiveness.
 - Functions are compared by identity (the very same function).
-- Values of different types (except `int`/`float`) are not equal: `0 == false` is `false`.
+- Values of different types (except the numeric types) are not equal: `0 == false` is `false`.
 
 ### 3.3 Mutability and references
 
@@ -281,7 +286,8 @@ with or without them and the VM never sees a type.
 
 ```jolt
 let count: int = 5;
-let ratio: float = 0.5;
+let ratio: float = 0.5f;
+let precise: double = 0.5;
 let title: string = "Jolt";
 let ok: bool = true;
 let items: array = [1, 2, 3];
@@ -295,8 +301,8 @@ fn add(a: int, b: int): int {
 ```
 
 The accepted type names are the primitives reported by `type()`: `nil`, `bool`,
-`int`, `float`, `string`, `error`, `array`, `map`, `function` and `range`, plus
-`any`. A name that is not one of these is a compile error.
+`int`, `float`, `double`, `string`, `error`, `array`, `map`, `function` and
+`range`, plus `any`. A name that is not one of these is a compile error.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -312,12 +318,15 @@ A `nil` initializer does **not** pin a type (`var x = nil;` stays untyped), and
 an expression whose type is not evident is left unchecked, so inference never
 rejects a program that would have run.
 
-**Widening.** An `int` value may be stored in a `float` slot; the reverse is not
-implicit.
+**Widening.** Numeric widening follows Java: `int` → `float` → `double`. The
+reverse is not implicit; use an explicit conversion.
 
 ```jolt
-let x: float = 3;    // ok: int widens to float
-let y: int = 1.5;    // compile error
+let a: float = 3;      // ok: int widens to float
+let b: double = 3;     // ok: int widens to double
+let c: double = 1.5f;  // ok: float widens to double
+let d: float = 1.5;    // compile error: double does not narrow to float
+let e: int = 1.5;      // compile error
 ```
 
 **Nullability.** A trailing `?` marks a type that also accepts `nil`. Without
@@ -392,8 +401,8 @@ the future AOT backend never see a struct type. `type(p)` reports `"map"`.
 present exactly once. The compiler rejects an unknown field (a typo), a missing
 field (a key the declaration promises), a duplicate field and a duplicate
 struct name. A field annotation is optional; when present, the value is checked
-with the same rules as every other annotation (including `int` → `float`
-widening).
+with the same rules as every other annotation (including `int` → `float` →
+`double` widening).
 
 ```jolt
 struct Pair { first; second; }          // untyped fields
@@ -482,15 +491,17 @@ Rules:
 - If both operands are `int`, `+ - * / %` produce `int`.
 - Integer division truncates toward zero: `7 / 2 == 3`, `-7 / 2 == -3`.
 - The integer remainder takes the sign of the dividend: `-7 % 3 == -1`.
-- If at least one operand is `float`, the result is `float`.
-- Dividing or taking the remainder with a zero divisor is a runtime error, for floats too.
-- `**` returns `int` if base and exponent are integers and the exponent is not negative; otherwise it uses `std::pow` and returns `float`.
+- If an operand is `float`, the result is `float`; if an operand is `double`, the result is `double`. A `float` with a `double` promotes to `double`.
+- Dividing or taking the remainder with a zero divisor is a runtime error, for floating-point types too.
+- `**` returns `int` if base and exponent are integers and the exponent is not negative; otherwise it uses `std::pow` and returns `double`.
 - `int` overflow wraps around (two's complement).
 - `+` concatenates two strings and also two arrays (creating a new array).
 
 ```jolt
 assertEq(7 / 2, 3);
 assertEq(7 / 2.0, 3.5);
+assertEq(type(1.5f + 1.5f), "float");
+assertEq(type(1.5f + 1.5), "double");
 assertEq(2 ** 10, 1024);
 assertEq("a" + "b", "ab");
 assertEq([1] + [2], [1, 2]);
@@ -500,7 +511,7 @@ assertEq([1] + [2], [1, 2]);
 
 `<`, `<=`, `>`, `>=` work with:
 
-- two numbers (`int` or `float`, mixed);
+- two numbers (`int`, `float` or `double`, mixed);
 - two strings (lexicographic order by UTF-8 bytes);
 - two booleans (`false < true`).
 
@@ -999,10 +1010,10 @@ carries only a signature, so it emits no bytecode and adds no opcode — the nam
 is bound with a plain `GETGLOBAL` of the host function.
 
 ```jolt
-native fn sqrt(x: float): float;
+native fn sqrt(x: double): double;
 
 print(sqrt(9.0));   // 3
-print(sqrt(16));    // 4  (int widens to float)
+print(sqrt(16));    // 4  (int widens to double)
 ```
 
 The signature is checked at compile time: a call must pass the exact number of
@@ -1010,13 +1021,13 @@ arguments, and each argument must be assignable to its parameter type. A
 trailing `rest...` parameter makes the native variadic: the call must pass the
 fixed parameters plus zero or more extras, and each extra is checked against the
 variadic parameter's element type. The return type is used for inference, so
-`let y: float = sqrt(4.0)` is checked like any other annotated binding. An
+`let y: double = sqrt(4.0)` is checked like any other annotated binding. An
 unannotated parameter (or `any`) turns the check off for that argument, which is
 how a builtin with a loose signature is declared:
 
 ```jolt
 native fn str(v: any): string;
-native fn min(first: float, rest: float...): float;   // variadic
+native fn min(first: double, rest: double...): double;   // variadic
 native fn len(v);                 // fully untyped parameter
 
 assertEq(str(42), "42");
@@ -1112,7 +1123,7 @@ Details:
 - `slice` clamps the indexes to the size of the array and accepts negatives. If `end < start`, it returns an empty array.
 - `sort` and `sorted` use ascending order by default. The comparator receives `(a, b)` and must return `true` if `a` should come before `b`; the sort is stable.
 - `reduce` without an initial value uses the first element as the accumulator and fails if the array is empty.
-- `sum` requires all elements to be numbers; it returns `int` if all are integers and `float` otherwise.
+- `sum` requires all elements to be numbers; it returns `int` if all are integers and `double` otherwise.
 - `clone` is shallow: nested arrays and maps are shared.
 
 ```jolt
@@ -1195,7 +1206,7 @@ assertEq("5".padStart(3, "0"), "005");
 
 ### 10.1 Literals
 
-Keys in a literal can be identifiers, string literals, scalar literals (`int`, `float`, `true`, `false`, `nil`) or computed expressions in brackets:
+Keys in a literal can be identifiers, string literals, scalar literals (`int`, `float`, `double`, `true`, `false`, `nil`) or computed expressions in brackets:
 
 ```jolt
 let person = {
@@ -1330,11 +1341,12 @@ assertEq(len(5..0), 5);
 | `type(value)` | Name of the type as a string. |
 | `str(value)` | Text representation. |
 | `repr(value)` | Representation with strings in quotes. |
-| `int(value)` | Converts to integer (truncates floats). |
-| `float(value)` | Converts to float. |
+| `int(value)` | Converts to integer (truncates floats and doubles). |
+| `float(value)` | Converts to `float` (binary32). |
+| `double(value)` | Converts to `double` (binary64). |
 | `bool(value)` | Applies Jolt's truthiness. |
 
-`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` uses `strtod`. Converting an empty or badly formatted string is an error.
+`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error.
 
 `str` of an array or map uses the representation of its elements, with inner strings in quotes:
 
@@ -1357,7 +1369,7 @@ Host builtins:
 | `ceil(n)` | Rounds up. |
 | `round(n)` | Rounds to the nearest integer (halves away from zero). |
 | `sqrt(n)` | Square root; error if `n < 0`. |
-| `pow(base, exp)` | Power as `float`. |
+| `pow(base, exp)` | Power as `double`. |
 | `sin(n)`, `cos(n)`, `tan(n)` | Trigonometric functions (radians). |
 | `log(n)` | Natural logarithm; error if `n <= 0`. |
 | `exp(n)` | `e ** n`. |
@@ -1372,7 +1384,7 @@ Host builtins:
 | `clamp(n, minimum, maximum)` | Limits `n` to the interval. |
 | `PI`, `E` | Constants. |
 
-`floor`, `ceil` and `round` return the same `int` if they receive an `int`, and a `float` if they receive a `float`.
+`floor`, `ceil` and `round` return the same `int` if they receive an `int`, and a `double` for a `float` or `double` argument (like Java's `Math.floor`, which takes and returns `double`).
 
 ```jolt
 import std.math.*;
@@ -1387,7 +1399,7 @@ assertEq(sqrt(81), 9.0);
 
 | Function | Description |
 | --- | --- |
-| `random()` | `float` in `[0, 1)`. |
+| `random()` | `double` in `[0, 1)`. |
 | `random(high)` | `int` in `[0, high)`. |
 | `random(low, high)` | `int` in `[low, high)`. |
 | `seed(n)` | Reseeds the generator. |
@@ -1622,7 +1634,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
-- Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
+- Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
 - `for ... in` does not accept parentheses around the variable and the iterable.
 - Slicing syntax `s[start:end]` works for strings and arrays (see §8.1 and §9); there is no step (`s[start:end:step]`), and the methods `substr`/`slice` remain available.

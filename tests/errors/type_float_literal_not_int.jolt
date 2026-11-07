@@ -1,0 +1,3 @@
+// expect-exit: 65
+// `float` does not implicitly narrow to `int` either; use `int(x)`.
+let x: int = 1.5f;

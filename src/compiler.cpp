@@ -373,8 +373,10 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
     return;
   }
 
-  // Numeric widening: int fits float. The reverse is not implicit.
-  if (from.name == "int" && to.name == "float") return;
+  // Numeric widening follows Java: int -> float -> double. Narrowing
+  // (double -> float, float -> int) is not implicit; use an explicit conversion.
+  if (from.name == "int" && (to.name == "float" || to.name == "double")) return;
+  if (from.name == "float" && to.name == "double") return;
 
   fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
            context,

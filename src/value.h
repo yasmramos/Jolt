@@ -174,7 +174,7 @@ using FuncPtr = Ref<Function>;
 using RangePtr = Ref<Range>;
 using NativeFn = std::function<Value(Runtime&, std::vector<Value>&)>;
 
-enum class VType : std::uint8_t { Nil, Bool, Int, Float, Str, Error, Array, Map, Func, Range };
+enum class VType : std::uint8_t { Nil, Bool, Int, Float, Double, Str, Error, Array, Map, Func, Range };
 
 // A dynamically typed value optimized for VM registers.
 //
@@ -207,7 +207,17 @@ struct Value {
   Value(int i) noexcept : tag(VType::Int) { new (&data.integer) int64_t(i); }
   Value(int64_t i) noexcept : tag(VType::Int) { new (&data.integer) int64_t(i); }
   Value(size_t i) noexcept : tag(VType::Int) { new (&data.integer) int64_t(i); }
-  Value(double d) noexcept : tag(VType::Float) { new (&data.number) double(d); }
+  // Both binary floating-point types share the same storage: a `float` (binary32)
+  // is stored widened to `double` and rounded back on read, so it always holds
+  // exactly the value a C++ `float` would. `double` is the default for a
+  // fractional literal with no suffix (Java-style).
+  Value(double d) noexcept : tag(VType::Double) { new (&data.number) double(d); }
+  static Value fromFloat(float f) noexcept {
+    Value v;
+    v.tag = VType::Float;
+    new (&v.data.number) double(static_cast<double>(f));
+    return v;
+  }
   Value(const char* s) : Value(std::string(s)) {}
   Value(std::string s) : tag(VType::Str) {
     new (&data.string) StringPtr(makeString(std::move(s)));
@@ -254,19 +264,23 @@ struct Value {
   bool isBool() const { return tag == VType::Bool; }
   bool isInt() const { return tag == VType::Int; }
   bool isFloat() const { return tag == VType::Float; }
+  bool isDouble() const { return tag == VType::Double; }
   bool isStr() const { return tag == VType::Str; }
   bool isError() const { return tag == VType::Error; }
   bool isArray() const { return tag == VType::Array; }
   bool isMap() const { return tag == VType::Map; }
   bool isFunc() const { return tag == VType::Func; }
   bool isRange() const { return tag == VType::Range; }
-  bool isNumber() const { return isInt() || isFloat(); }
+  bool isNumber() const { return isInt() || isFloat() || isDouble(); }
 
   bool truthy() const;
   bool asBool() const { return data.boolean; }
   int64_t asInt() const { return data.integer; }
-  double asFloat() const { return data.number; }
-  double number() const { return isInt() ? static_cast<double>(asInt()) : asFloat(); }
+  // A `float` is stored as a `double` holding a binary32 value; rounding back to
+  // `float` recovers exactly the original value, so `asFloat()` is lossless.
+  double asFloat() const { return static_cast<double>(static_cast<float>(data.number)); }
+  double asDouble() const { return data.number; }
+  double number() const { return isInt() ? static_cast<double>(asInt()) : data.number; }
 
   // Jolt strings are immutable. The shared object is never exposed as mutable.
   const std::string& asStr() const { return data.string->value; }
@@ -316,6 +330,7 @@ struct Value {
         new (&data.integer) int64_t(other.data.integer);
         break;
       case VType::Float:
+      case VType::Double:
         new (&data.number) double(other.data.number);
         break;
       case VType::Str:
@@ -350,6 +365,7 @@ struct Value {
         new (&data.integer) int64_t(other.data.integer);
         break;
       case VType::Float:
+      case VType::Double:
         new (&data.number) double(other.data.number);
         break;
       case VType::Str:
@@ -379,6 +395,7 @@ struct Value {
       case VType::Bool:
       case VType::Int:
       case VType::Float:
+      case VType::Double:
         break;
       case VType::Str:
         destroyMember(data.string);
