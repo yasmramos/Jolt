@@ -1130,6 +1130,41 @@ void registerBuiltins(Runtime& in) {
     in.fail(args.empty() ? "panic" : args[0].toString());
   });
 
+  // `pcall(fn, args...)` calls `fn` with the remaining arguments and turns a
+  // runtime error into a value instead of aborting the program. The result is
+  // a map `{ok, value, error}`: on success `ok` is true, `value` is the return
+  // value and `error` is nil; on failure `ok` is false, `value` is nil and
+  // `error` is the message. This is the value-based error handling of PHASE
+  // 6.7 slice 1: no new opcode, no new syntax, and it stays AOT-friendly (the
+  // freestanding runtime reports errors through the same call path).
+  //
+  // The first argument must be a function: passing anything else is a bug in
+  // the caller, so it fails loudly rather than returning `{ok: false}` and
+  // hiding the mistake.
+  in.addNative("pcall", [](Runtime& in, Args args) -> Value {
+    if (args.empty() || !args[0].isFunc()) {
+      in.fail("pcall() expects a function as its first argument");
+    }
+    Value callee = args[0];
+    std::vector<Value> callArgs(args.begin() + 1, args.end());
+    const int line = in.currentLine;
+    const int col = in.currentCol;
+    MapPtr result = makeMap();
+    try {
+      Value value = in.call(callee, std::move(callArgs), line, col);
+      result->set("ok", Value(true));
+      result->set("value", std::move(value));
+      result->set("error", Value());
+    } catch (const RuntimeError& error) {
+      // `in.call` has already unwound the VM to the state it had on entry, so
+      // the engine is consistent and the program continues normally.
+      result->set("ok", Value(false));
+      result->set("value", Value());
+      result->set("error", Value(error.message));
+    }
+    return Value(result);
+  });
+
   in.addNative("exit", [](Runtime& in, Args args) -> Value {
     needBetween(in, "exit", args, 0, 1);
     int code = args.empty() ? 0 : static_cast<int>(wantInt(in, "exit", args[0]));

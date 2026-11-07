@@ -258,7 +258,7 @@ Current limitations:
 
 - Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. There is no JIT.
 - There are no classes, structs, interfaces or inheritance.
-- There is no `try`/`catch` or exceptions that can be caught from the language.
+- There is no `try`/`catch` or catchable exceptions. Recoverable runtime errors are handled with `pcall(fn, ...)`, which returns `{ok, value, error}` instead of aborting; `panic()` is for unrecoverable ones.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require`; modules are loaded eagerly and a cyclic import is a compile error.
 - There is no `do`/`while`, `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough.
 - `defer { ... }` runs a block when its scope exits, in LIFO order, on fall-through, `return` and `break`/`continue` alike; it compiles to no new opcode.
@@ -271,7 +271,7 @@ Current limitations:
 
 Ideas for future versions:
 
-- `try`/`catch` and errors as values.
+- `try`/`catch` syntax sugar over `pcall`, a dedicated `error` value type, and `@mustUse` warnings (PHASE 6.7, slices 2-6).
 - User-defined structs and methods.
 - Better Unicode support (upper/lower case and graphemes).
 - More tooling: formatter, syntax highlighting and debugger.

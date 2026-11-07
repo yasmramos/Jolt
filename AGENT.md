@@ -408,6 +408,39 @@ previous one.
 - **No `libffi`**.
 - Support for ints, floats, strings, structs, callbacks.
 
+### PHASE 6.7 — Error handling 🔶 in progress
+
+Value-based error handling, no catchable exceptions: the AOT runtime has no
+unwinding, so a feature the freestanding backend cannot compile would be
+forbidden by the "no VM-only features" rule (§3). The design combines Rust
+(propagation, must-use) and Zig (local recovery) with a Jolt syntax that does
+not collide with the existing ternary `?` or bitwise `|`.
+
+Slices, each independently shippable:
+
+- **6.7.1 `pcall` (done)** — `pcall(fn, args...)` calls `fn` and returns a map
+  `{ok, value, error}` instead of aborting. It is a plain builtin: no new
+  token, node, parser rule or opcode, and no new VM logic (it reuses
+  `Runtime::call` and the unwinding `catch(...)` already in `VM::call`). This
+  is the value-based core; the rest is sugar over it.
+- **6.7.2 dedicated `error` value type** — a `VType::Error` tag with
+  `message`/`code`, so `isError` is exact instead of the `ok == false`
+  heuristic (a user map with `{ok: false}` must not be mistaken for an error).
+  Touches `Value`, its five `switch`es, `toString`/`repr`/`equals` and the GC.
+  There is no `.jolc` serializer in the tree, so serialization is out of scope.
+- **6.7.3 `try expr catch default`** — prefix `try` (propagation) and postfix
+  `catch` (local recovery), Zig-style. Prefix `try` is chosen over postfix `?`
+  because `?` already starts the ternary `a ? b : c`. Compiles to
+  `CALL isError` + `JMP_IF_FALSE` + `RETURN`/`MOVE`: no new opcode.
+- **6.7.4 unions `T | E`** — a real type lattice, not an extension of
+  nullability (`T?` is a `bool`, and `string | nil` does not parse). `|` is
+  accepted only in type position; in expression position it stays `BOR`.
+- **6.7.5 `@mustUse`** — a warning (never a hard error) when a `@mustUse`
+  return is discarded, matching Rust `#[must_use]` and Kotlin
+  `@CheckReturnValue`. A hard error would violate the §4.6 principle that
+  inference never rejects a program that would have run. `_ = expr`
+  acknowledges a discard.
+
 ### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
   x86-64 following the bytecode → native lowering table of §3.
@@ -528,6 +561,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
 Phase 6.6: ⬜ pending (FFI with C)
+Phase 6.7: 🔶 in progress (6.7.1 `pcall` done; 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
