@@ -1045,6 +1045,44 @@ void testFfiTypeVocabulary() {
   expectCompiles("native fn strlen(s: cstring): size_t;\nlet n: int = strlen(nil);\n");
 }
 
+void testExternBlock() {
+  // An `extern "C"` block declares C functions. Each declaration follows the
+  // `native fn` path, so a block compiles to exactly the bytecode of the
+  // equivalent top-level `native fn` declarations (no dedicated opcode).
+  Bytecode block = compileSource("extern \"C\" {\n  fn f(): int;\n}\n");
+  Bytecode native = compileSource("native fn f(): int;\n");
+  assert(block.code.size() == native.code.size());
+  for (size_t i = 0; i < block.code.size(); ++i) {
+    assert(block.code[i].op == native.code[i].op);
+    assert(block.code[i].a == native.code[i].a);
+    assert(block.code[i].b == native.code[i].b);
+  }
+
+  // The declaration is hoisted, so a function may call one declared later and
+  // the call is checked against the signature.
+  expectCompiles(
+      "fn g(): double { return h(2.0); }\n"
+      "extern \"C\" {\n  fn h(x: double): double;\n}\n");
+
+  // The FFI vocabulary is accepted inside a block, and a `void` result too.
+  expectCompiles("extern \"C\" { fn free(p: ptr): void; }\nfree(nil);\n");
+  expectCompiles("extern \"C\" { fn strlen(s: cstring): size_t; }\n");
+
+  // The signature is enforced at the call site, like `native fn`.
+  expectCompileError("extern \"C\" { fn f(x: int): int; }\nf();\n",
+                     "extern call with too few arguments");
+  expectCompileError("extern \"C\" { fn f(x: int): int; }\nf(\"s\");\n",
+                     "extern call with a wrong argument type");
+
+  // The block is module-level metadata: nesting it is an error, the ABI must be
+  // "C", only `fn` declarations are allowed, and a body is rejected.
+  expectCompileError("fn g() { extern \"C\" { fn f(): int; } }\n", "nested extern block");
+  expectCompileError("extern \"Rust\" { fn f(): int; }\n", "unsupported ABI");
+  expectCompileError("extern \"C\" { let x = 1; }\n", "non-fn inside extern");
+  expectCompileError("extern \"C\" { fn f(): int { return 1; } }\n", "extern body");
+  expectCompileError("extern \"C${1}\" { fn f(): int; }\n", "interpolated ABI");
+}
+
 void testCyclicImportIsRejected() {
   // A cycle (a -> b -> a) must be reported as a compile error instead of
   // recursing until the compiler overflows the stack. The loader maps dotted
@@ -1150,6 +1188,7 @@ int main() {
   testVoidReturnType();
   testVoidErrors();
   testFfiTypeVocabulary();
+  testExternBlock();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

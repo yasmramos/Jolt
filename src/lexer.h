@@ -34,6 +34,7 @@ enum class Tok {
   Defer,
   Struct,
   Native,
+  Extern,
   Try,
   Catch,
   True,

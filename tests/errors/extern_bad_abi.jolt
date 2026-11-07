@@ -1,0 +1,5 @@
+// expect-exit: 65
+// Only the "C" ABI is supported; any other ABI string is a compile error.
+extern "Rust" {
+  fn f(): int;
+}
