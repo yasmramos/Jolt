@@ -1,0 +1,9 @@
+// Test fixture: a module that qualified-imports another module. The namespace
+// `modules.helper` is visible to this module's own functions but must not leak
+// into the importing program.
+
+import modules.helper;
+
+fn viaQual() {
+  return modules.helper.helper();
+}
