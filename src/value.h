@@ -25,6 +25,7 @@ struct Array;
 struct Map;
 struct Function;
 struct Range;
+struct PtrObj;
 
 // Single-threaded reference counting for VM values. The interpreter/VM do not
 // share values across threads, so a non-atomic counter is enough and avoids
@@ -174,7 +175,53 @@ using FuncPtr = Ref<Function>;
 using RangePtr = Ref<Range>;
 using NativeFn = std::function<Value(Runtime&, std::vector<Value>&)>;
 
-enum class VType : std::uint8_t { Nil, Bool, Int, Float, Double, Str, Error, Array, Map, Func, Range };
+// FFI pointer (PHASE 6.6). A `ptr`/`cstring` is an *opaque handle*, never a raw
+// address: exposing a machine address to Jolt would let a program dereference
+// arbitrary memory (Jolt is meant to be memory-safe) and would hide the
+// allocation from the cycle collector, which only understands `Value` edges.
+// The handle owns the C-side storage; the host is the only code that ever sees
+// the address.
+enum class PtrKind : std::uint8_t {
+  Void,     // `ptr` (C `void *`): opaque, not dereferenceable
+  CString,  // `cstring` (C `const char *`): NUL-terminated bytes, read-only
+  Buffer,   // owned byte buffer: the storage `loadByte`/`storeByte` operate on
+};
+
+// The object behind a pointer value. It is reference counted but, like a string
+// or an error, it is *not* a `GcNode`: it owns only raw bytes, so it can never
+// be part of a reference cycle. The host owns the storage through this handle,
+// and releasing the last handle frees the bytes.
+struct PtrObj : RefCounted {
+  PtrObj(PtrKind k, std::vector<char> storage) : kind(k), bytes(std::move(storage)) {}
+
+  PtrKind kind;
+  // `CString` and `Buffer` own their bytes; `Void` keeps them empty and carries
+  // no storage. A released handle drops its bytes, so using it afterwards is a
+  // detectable error rather than a use-after-free.
+  std::vector<char> bytes;
+  // Opaque integer token, only meaningful to the host. A `Void` handle is just
+  // this token (the result of a native such as `malloc`); an owned buffer keeps
+  // it at 0. It is never an address the program may dereference.
+  int64_t address = 0;
+  bool released = false;
+};
+
+using PtrPtr = Ref<PtrObj>;
+
+enum class VType : std::uint8_t {
+  Nil,
+  Bool,
+  Int,
+  Float,
+  Double,
+  Str,
+  Error,
+  Array,
+  Map,
+  Func,
+  Range,
+  Ptr,
+};
 
 // A dynamically typed value optimized for VM registers.
 //
@@ -196,6 +243,7 @@ struct Value {
     MapPtr map;
     FuncPtr function;
     RangePtr range;
+    PtrPtr pointer;
 
     Storage() {}
     ~Storage() {}
@@ -227,6 +275,7 @@ struct Value {
   Value(MapPtr m) noexcept : tag(VType::Map) { new (&data.map) MapPtr(std::move(m)); }
   Value(FuncPtr f) noexcept : tag(VType::Func) { new (&data.function) FuncPtr(std::move(f)); }
   Value(RangePtr r) noexcept : tag(VType::Range) { new (&data.range) RangePtr(std::move(r)); }
+  Value(PtrPtr p) noexcept : tag(VType::Ptr) { new (&data.pointer) PtrPtr(std::move(p)); }
 
   Value(const Value& other) : tag(other.tag) { copyFrom(other); }
   Value(Value&& other) noexcept : tag(other.tag) {
@@ -271,6 +320,7 @@ struct Value {
   bool isMap() const { return tag == VType::Map; }
   bool isFunc() const { return tag == VType::Func; }
   bool isRange() const { return tag == VType::Range; }
+  bool isPtr() const { return tag == VType::Ptr; }
   bool isNumber() const { return isInt() || isFloat() || isDouble(); }
 
   bool truthy() const;
@@ -291,6 +341,7 @@ struct Value {
   MapPtr mapPtr() const { return data.map; }
   FuncPtr funcPtr() const { return data.function; }
   RangePtr rangePtr() const { return data.range; }
+  PtrPtr ptrPtr() const { return data.pointer; }
 
   // Mutable access to the stored function reference, used by `bindMethod` to
   // stamp the receiver identity on freshly created bound methods.
@@ -301,6 +352,7 @@ struct Value {
   Function& func() const;
   Range& range() const;
   ErrorObj& err() const;
+  PtrObj& ptr() const;
 
   // Display form: strings are rendered raw.
   std::string toString() const;
@@ -351,6 +403,9 @@ struct Value {
       case VType::Range:
         new (&data.range) RangePtr(other.data.range);
         break;
+      case VType::Ptr:
+        new (&data.pointer) PtrPtr(other.data.pointer);
+        break;
     }
   }
 
@@ -386,6 +441,9 @@ struct Value {
       case VType::Range:
         new (&data.range) RangePtr(std::move(other.data.range));
         break;
+      case VType::Ptr:
+        new (&data.pointer) PtrPtr(std::move(other.data.pointer));
+        break;
     }
   }
 
@@ -414,6 +472,9 @@ struct Value {
         break;
       case VType::Range:
         destroyMember(data.range);
+        break;
+      case VType::Ptr:
+        destroyMember(data.pointer);
         break;
     }
   }
@@ -504,6 +565,7 @@ inline Map& Value::map() const { return *data.map; }
 inline Function& Value::func() const { return *data.function; }
 inline Range& Value::range() const { return *data.range; }
 inline ErrorObj& Value::err() const { return *data.error; }
+inline PtrObj& Value::ptr() const { return *data.pointer; }
 
 // Reports the tracked object that `value` owns, if any, to a collector visitor.
 // Strings, errors and ranges cannot hold references, so they are not tracked.
@@ -522,6 +584,10 @@ inline void gcVisit(const Value& value, GcNode::Visitor visitor, void* context) 
 ArrayPtr makeArray(std::vector<Value> items = {});
 MapPtr makeMap();
 RangePtr makeRange(int64_t start, int64_t end, bool inclusive);
+// Builds a pointer handle. `Void` carries no bytes (only the opaque `address`
+// token); `CString`/`Buffer` own the storage they are given. The host is the
+// only code that ever sees an address.
+Value makePtr(PtrKind kind, std::vector<char> bytes = {}, int64_t address = 0);
 // Builds an error value from a message and an optional code (0 by default).
 Value makeError(std::string message, int64_t code = 0);
 Value makeNative(std::string name, NativeFn fn);
