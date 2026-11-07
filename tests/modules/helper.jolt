@@ -1,0 +1,6 @@
+// Test fixture: a leaf module imported by `wilduser` and `qualuser`.
+// Proves a module's own imports stay inside the module.
+
+fn helper() {
+  return 100;
+}

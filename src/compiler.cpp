@@ -495,6 +495,8 @@ void Compiler::resetChunk(const std::string& name) {
   currentLine_ = 1;
   currentCol_ = 1;
   moduleBody_ = false;
+  modulePath_.clear();
+  moduleImportNames_.clear();
   loadingStack_.clear();
 }
 
@@ -955,6 +957,16 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedStructDefs = std::move(structDefs_);
   auto savedNativeSigs = std::move(nativeSigs_);
   std::deque<FuncState> savedFuncStack = std::move(funcStack_);
+  // A module's imports are its own: the namespace tables, bound names and
+  // wildcard bindings it creates must not be visible to the importing program
+  // (nor to a sibling module), so they are saved and restored around the body.
+  // `modulePath_`/`moduleImportNames_` give the module-local global names its
+  // imports bind to (see `importBindingName`).
+  auto savedNamespaces = std::move(namespaces_);
+  auto savedBoundImports = std::move(boundImports_);
+  auto savedWildcardBindings = std::move(wildcardBindings_);
+  std::string savedModulePath = std::move(modulePath_);
+  auto savedModuleImportNames = std::move(moduleImportNames_);
 
   bc_ = Bytecode{};
   bc_.name = path;
@@ -968,6 +980,8 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   funcStack_.clear();
   inFunction_ = false;
   moduleBody_ = true;
+  modulePath_ = path;
+  moduleImportNames_.clear();
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
   globalConsts_.clear();
@@ -975,6 +989,9 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   globalTypes_.clear();
   structDefs_.clear();
   nativeSigs_.clear();
+  namespaces_.clear();
+  boundImports_.clear();
+  wildcardBindings_.clear();
 
   std::vector<std::string> symbols;
   const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
@@ -994,6 +1011,11 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
       }
     }
   }
+
+  // Record every name the module's own imports will introduce before the body
+  // is compiled, so a hoisted function that references an imported name
+  // resolves it to the module-local hidden global (see `importBindingName`).
+  if (block) predeclareModuleImports(*block);
 
   compileModuleBody(program);
   moduleBody_ = false;
@@ -1023,6 +1045,11 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   structDefs_ = std::move(savedStructDefs);
   nativeSigs_ = std::move(savedNativeSigs);
   funcStack_ = std::move(savedFuncStack);
+  namespaces_ = std::move(savedNamespaces);
+  boundImports_ = std::move(savedBoundImports);
+  wildcardBindings_ = std::move(savedWildcardBindings);
+  modulePath_ = std::move(savedModulePath);
+  moduleImportNames_ = std::move(savedModuleImportNames);
   return module;
 }
 
@@ -1147,6 +1174,42 @@ void Compiler::materializeModule(const ImportedModule& module, int line, int col
   freeReg();
 }
 
+std::string Compiler::importBindingName(const std::string& visible) const {
+  // Outside a module body (or for a name the module did not import) the binding
+  // is the program global, so the visible name is used unchanged.
+  if (modulePath_.empty() || moduleImportNames_.find(visible) == moduleImportNames_.end()) {
+    return visible;
+  }
+  // Inside a module, its own imports bind to hidden per-module globals. The `$`
+  // is never accepted in an identifier, so the name cannot collide with user
+  // code, and two modules importing the same name get distinct bindings.
+  return "$imp$" + modulePath_ + "$" + visible;
+}
+
+void Compiler::predeclareModuleImports(const BlockStmt& block) {
+  // Record every name the module's imports will introduce, before the body is
+  // compiled, so a hoisted function that references an imported name binds to
+  // the module-local global instead of the program global. Loading a wildcard
+  // module here is what lets its exported names be known up front; the load is
+  // cached, so `compileImport` reuses it.
+  for (const auto& child : block.stmts) {
+    if (!child) continue;
+    const auto* import = std::get_if<ImportStmt>(&child->node);
+    if (!import) continue;
+    if (import->mode == ImportStmt::Mode::Qualified) {
+      const std::string& bound = import->alias.empty() ? import->module : import->alias;
+      // Only the root of the namespace is a global; deeper segments are members
+      // of it, so a read of `a.b.c` starts by reading the module-local `a`.
+      moduleImportNames_.insert(bound.substr(0, bound.find('.')));
+    } else if (import->mode == ImportStmt::Mode::Wildcard) {
+      const ImportedModule& module = loadModule(import->module, child->line, child->col);
+      for (const std::string& name : module.symbols) moduleImportNames_.insert(name);
+    } else {
+      for (const std::string& name : import->names) moduleImportNames_.insert(name);
+    }
+  }
+}
+
 int Compiler::ensureNamespace(const std::string& prefix, int line, int col) {
   (void)line;
   (void)col;
@@ -1169,8 +1232,9 @@ int Compiler::ensureNamespace(const std::string& prefix, int line, int col) {
     if (!exists) {
       emit(OpCode::NEWTABLE, next, 0, 1);
       if (current < 0) {
-        // Root: the namespace table is a top-level global.
-        emit(OpCode::SETGLOBAL, next, addString(path));
+        // Root: the namespace table is a global (module-local inside a module,
+        // so a module's own namespace never reaches the importing program).
+        emit(OpCode::SETGLOBAL, next, addString(importBindingName(path)));
         declareGlobal(path, false);
       } else {
         // Intermediate: attach the new table to its parent.
@@ -1178,7 +1242,7 @@ int Compiler::ensureNamespace(const std::string& prefix, int line, int col) {
       }
       namespaces_.insert(path);
     } else if (current < 0) {
-      emit(OpCode::GETGLOBAL, next, addString(path));
+      emit(OpCode::GETGLOBAL, next, addString(importBindingName(path)));
     } else {
       emit(OpCode::GETTABLE, next, current, -addString(segment) - 1);
     }
@@ -1206,7 +1270,7 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   // namespace tree of maps (`std.math.sqrt` is the ordinary member chain); a
   // bare alias binds the table directly.
   if (segments.size() == 1) {
-    emit(OpCode::SETGLOBAL, table, addString(boundName));
+    emit(OpCode::SETGLOBAL, table, addString(importBindingName(boundName)));
     declareGlobal(boundName, false);
   } else {
     int parent = ensureNamespace(boundName.substr(0, boundName.rfind('.')), line, col);
@@ -1243,7 +1307,7 @@ void Compiler::compileNameImport(const ImportedModule& module,
     emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
     int value = allocReg();
     emit(OpCode::GETTABLE, value, table, -addString(name) - 1);
-    emit(OpCode::SETGLOBAL, value, addString(name));
+    emit(OpCode::SETGLOBAL, value, addString(importBindingName(name)));
     declareGlobal(name, false);
     freeReg(nextReg_ - table);
   }
@@ -1779,7 +1843,7 @@ int Compiler::compileVariable(const std::string& name) {
     // closure's upvalue list (PHASE 6b).
     emit(OpCode::GETUPVAL, reg, upvalue);
   } else {
-    emit(OpCode::GETGLOBAL, reg, addString(name));
+    emit(OpCode::GETGLOBAL, reg, addString(importBindingName(name)));
   }
   return reg;
 }
@@ -1854,7 +1918,7 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
       } else if (upvalueSlot >= 0) {
         emit(OpCode::SETUPVAL, value, upvalueSlot);
       } else {
-        emit(OpCode::SETGLOBAL, value, addString(name));
+        emit(OpCode::SETGLOBAL, value, addString(importBindingName(name)));
       }
       return value;
     }
@@ -1870,7 +1934,7 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     } else if (upvalueSlot >= 0) {
       emit(OpCode::GETUPVAL, current, upvalueSlot);
     } else {
-      emit(OpCode::GETGLOBAL, current, addString(name));
+      emit(OpCode::GETGLOBAL, current, addString(importBindingName(name)));
     }
     int right = compileExpr(*assign.value);
     emit(op, current, current, right);
@@ -1881,7 +1945,7 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     } else if (upvalueSlot >= 0) {
       emit(OpCode::SETUPVAL, current, upvalueSlot);
     } else {
-      emit(OpCode::SETGLOBAL, current, addString(name));
+      emit(OpCode::SETGLOBAL, current, addString(importBindingName(name)));
     }
     return current;
   }
