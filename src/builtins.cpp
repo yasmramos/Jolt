@@ -1211,4 +1211,52 @@ void registerBuiltins(Runtime& in) {
     if (args[0].isNil()) in.fail("unexpected nil (non-null assertion '!!' failed)");
     return args[0];
   });
+
+  // Private helper for slice literals (`obj[start:end]`). A nil bound means
+  // "from the start" / "to the end"; a negative bound counts from the end and
+  // is clamped, matching the `slice`/`substr` methods. Strings slice by UTF-8
+  // character. Keeping the bounds check here gives the diagnostic at the
+  // slice's line/column.
+  in.addNative("$slice", [](Runtime& in, Args args) -> Value {
+    need(in, "$slice", args, 3);
+    // A nil bound is "not given"; an integer is the bound (negative counts
+    // from the end). The two are kept distinct so `s[-3:]` is not read as
+    // "no start".
+    auto bound = [&](const Value& value, const char* what, bool& present) -> int64_t {
+      if (value.isNil()) {
+        present = false;
+        return 0;
+      }
+      if (!value.isInt()) in.fail(std::string("slice ") + what + " must be an integer");
+      present = true;
+      return value.asInt();
+    };
+    bool hasStart = false;
+    bool hasEnd = false;
+    int64_t start = bound(args[1], "start", hasStart);
+    int64_t end = bound(args[2], "end", hasEnd);
+    auto resolve = [](int64_t value, bool present, int64_t length, bool isStart) -> int64_t {
+      if (!present) return isStart ? 0 : length;
+      return clampIndex(value, length);
+    };
+    if (args[0].isArray()) {
+      const auto& items = args[0].arr().items;
+      int64_t length = static_cast<int64_t>(items.size());
+      int64_t from = resolve(start, hasStart, length, true);
+      int64_t to = resolve(end, hasEnd, length, false);
+      if (to < from) to = from;
+      std::vector<Value> out(items.begin() + from, items.begin() + to);
+      return Value(makeArray(std::move(out)));
+    }
+    if (args[0].isStr()) {
+      auto chars = utf8Chars(args[0].asStr());
+      int64_t length = static_cast<int64_t>(chars.size());
+      int64_t from = resolve(start, hasStart, length, true);
+      int64_t to = resolve(end, hasEnd, length, false);
+      if (to < from) to = from;
+      std::vector<std::string> out(chars.begin() + from, chars.begin() + to);
+      return Value(utf8Join(out));
+    }
+    in.fail(std::string("cannot slice a value of type '") + args[0].typeName() + "'");
+  });
 }

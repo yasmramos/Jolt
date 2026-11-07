@@ -2133,6 +2133,30 @@ int Compiler::compileRange(const RangeExpr& range, int line, int col) {
   return start;
 }
 
+int Compiler::compileSlice(const SliceExpr& slice, int line, int col) {
+  int object = compileExpr(*slice.object);
+  // An omitted bound is passed as nil; the `$slice` helper treats nil as
+  // "from the start" / "to the end", so the helper has one fixed arity.
+  int start;
+  if (slice.start) {
+    start = compileExpr(*slice.start);
+  } else {
+    start = allocReg();
+    emit(OpCode::LOADK, start, addConstant(Value()));
+  }
+  int end;
+  if (slice.end) {
+    end = compileExpr(*slice.end);
+  } else {
+    end = allocReg();
+    emit(OpCode::LOADK, end, addConstant(Value()));
+  }
+  int result = compileHelperCall("$slice", {object, start, end}, line, col);
+  emit(OpCode::MOVE, object, result);
+  freeReg(nextReg_ - object - 1);
+  return object;
+}
+
 int Compiler::compileInterpolation(const InterpExpr& interpolation, int /*line*/, int /*col*/) {
   int result = allocReg();
   emit(OpCode::LOADK, result, addConstant(Value(std::string())));
@@ -2261,6 +2285,9 @@ int Compiler::compileExpr(const Expr& expr) {
             emit(OpCode::GETTABLE, object, object, key);
             freeReg();
             return object;
+          },
+          [&](const SliceExpr& slice) -> int {
+            return compileSlice(slice, expr.line, expr.col);
           },
           [&](const MemberExpr& member) -> int {
             int object = compileExpr(*member.object);
