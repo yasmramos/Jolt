@@ -1,0 +1,5 @@
+// expect-exit: 65
+// Only `fn` declarations are allowed inside an `extern` block.
+extern "C" {
+  let x = 1;
+}

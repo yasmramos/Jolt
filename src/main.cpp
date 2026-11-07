@@ -229,7 +229,7 @@ bool isStatementStart(const std::string &text) {
          word == "if" || word == "while" || word == "for" || word == "return" ||
          word == "break" || word == "continue" || word == "else" ||
          word == "import" || word == "switch" || word == "struct" ||
-         word == "native";
+         word == "native" || word == "extern";
 }
 
 void printReplHelp() {

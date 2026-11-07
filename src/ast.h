@@ -420,9 +420,26 @@ struct SwitchStmt {
   StmtPtr defaultBody;  // may be null
 };
 
+// `extern "C" { fn name(params): ret; ... }` (PHASE 6.6). A block of C
+// declarations: the ABI string (`"C"` is the only one supported) plus the
+// functions it declares. Each declaration is a bodyless `FnDeclStmt` with
+// `isNative` set, so it follows exactly the `native fn` path: it emits no
+// bytecode and only records a signature for call checking. The block is
+// module-level metadata, like `import`, `struct` and `native fn`, and is
+// erased before the bytecode.
+//
+// This is the *declaration* half of the FFI. Binding the symbol to a real C
+// function (the marshalling and the call lowering without `libffi`) is a later
+// slice; until then the name binds to the host function of the same name, just
+// like `native fn`.
+struct ExternBlockStmt {
+  std::string abi;                 // the ABI string literal, e.g. "C"
+  std::vector<FnDeclStmt> decls;   // each `fn ...;`, all `isNative`
+};
+
 using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, StructDeclStmt, BlockStmt, IfStmt,
                               WhileStmt, ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
-                              ImportStmt, SwitchStmt, DeferStmt>;
+                              ImportStmt, SwitchStmt, DeferStmt, ExternBlockStmt>;
 
 struct Stmt {
   StmtNode node;

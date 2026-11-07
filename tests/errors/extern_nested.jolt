@@ -1,0 +1,8 @@
+// expect-exit: 65
+// An `extern "C"` block is module-level metadata, like `import` and `native
+// fn`; nesting it inside a function or a block is a compile error.
+fn g() {
+  extern "C" {
+    fn f(): int;
+  }
+}
