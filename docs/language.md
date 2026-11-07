@@ -172,6 +172,7 @@ Strings are UTF-8 and **immutable**. Length and index operations work on code po
 | `map` | Collection of string keys. | Preserves insertion order. Mutable and by reference. |
 | `function` | Native or user-defined functions. | First-class citizens. |
 | `range` | Interval of integers. | Immutable. |
+| `void` | (no values) | Return type only: a function that produces no value (see §4.6). Maps to C's `void` in the FFI. |
 
 The `type(value)` function returns the name of the type as a string.
 
@@ -305,6 +306,33 @@ fn add(a: int, b: int): int {
 The accepted type names are the primitives reported by `type()`: `nil`, `bool`,
 `int`, `float`, `double`, `string`, `error`, `array`, `map`, `function` and
 `range`, plus `any`. A name that is not one of these is a compile error.
+`void` is accepted **only as a return type** (see below).
+
+**`void` return type.** A function may be declared `: void` to say it produces
+no value. This maps directly to C's `void` in the FFI (PHASE 6.6), so a native
+reads like its C declaration: `native fn free(p): void;`. `void` is
+compile-time metadata: the function still returns `nil` at run time, so no
+opcode and no runtime type is added.
+
+```jolt
+fn logLine(msg: string): void {
+  print(msg);
+}
+
+fn maybeLog(flag: bool): void {
+  if (!flag) {
+    return;        // bare return: ok
+  }
+  print("logged");
+}
+```
+
+`void` is a return type only: it cannot annotate a variable, a parameter or a
+struct field. A `void` function cannot `return` a value (use a bare `return;`),
+and a `void` expression cannot be used where a value is expected. A binding
+initialized from a `void` call stays untyped, like `var x = nil`. Because an
+expression body (`fn f(): void => g();`) is an implicit `return`, a `void`
+function uses a block body.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -1033,6 +1061,7 @@ how a builtin with a loose signature is declared:
 native fn str(v: any): string;
 native fn min(first: double, rest: double...): double;   // variadic
 native fn len(v);                 // fully untyped parameter
+native fn free(p: any): void;     // no return value (maps to C's void)
 
 assertEq(str(42), "42");
 assertEq(len([1, 2, 3]), 3);
@@ -1040,7 +1069,8 @@ assertEq(len([1, 2, 3]), 3);
 
 Like `struct`, a `native fn` is **module-level metadata**: it may only be
 declared at the top level of a file. Its parameter and return types must be
-type names the compiler knows (or `any`).
+type names the compiler knows (or `any`). A `void` return type is allowed and
+maps directly to C's `void` in the FFI (PHASE 6.6).
 
 A `native fn` binds the name at run time to whatever the host registered under
 that name. If the host provides nothing, using the name reports
