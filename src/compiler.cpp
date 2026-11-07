@@ -369,9 +369,11 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
     fail("cannot use a 'void' expression as a value in " + context, line, col);
   }
 
-  // `nil` fits any nullable target, whatever its type.
+  // `nil` fits any nullable target, whatever its type. It is also the NULL of
+  // the FFI pointer types, so it is assignable to `ptr`/`cstring` even when the
+  // annotation is not written nullable (`native fn free(p: ptr); free(nil);`).
   if (from.name == "nil") {
-    if (to.nullable) return;
+    if (to.nullable || isPointerTypeName(to.name)) return;
     fail("cannot assign 'nil' to '" + describeType(to) + "' in " + context +
              ": a nullable value is not allowed here (use '" + to.name + "?')",
          line, col);
@@ -388,9 +390,18 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
     return;
   }
 
+  // FFI pointers (PHASE 6.6): a `cstring` is also a `ptr` (upcast to `void*`);
+  // the reverse needs an explicit cast, so it is not implicit.
+  if (from.name == "cstring" && to.name == "ptr") return;
+
+  // Every integer spelling is one numeric family at compile time (the runtime
+  // holds an `int64`), so `int`, the fixed-width types, `uint` and `size_t`
+  // are mutually assignable.
+  if (isIntegerTypeName(from.name) && isIntegerTypeName(to.name)) return;
+
   // Numeric widening follows Java: int -> float -> double. Narrowing
   // (double -> float, float -> int) is not implicit; use an explicit conversion.
-  if (from.name == "int" && (to.name == "float" || to.name == "double")) return;
+  if (isIntegerTypeName(from.name) && (to.name == "float" || to.name == "double")) return;
   if (from.name == "float" && to.name == "double") return;
 
   fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +

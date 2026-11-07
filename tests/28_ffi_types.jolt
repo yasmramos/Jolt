@@ -1,0 +1,49 @@
+// FFI type vocabulary (PHASE 6.6, compile-time only). Pointers and
+// fixed-width/unsigned integers let a `native fn` signature be spelled the way
+// C spells it, so the upcoming `extern "C"` blocks have a vocabulary to use.
+// These annotations are erased before the bytecode: the runtime value is still
+// an `int` (pointers are opaque handles), so no opcode and no runtime type is
+// added.
+
+// A `native fn` can now carry the C spelling of its result. These bind to real
+// host builtins, so the calls run.
+native fn len(v): size_t;
+native fn str(v: any): string;
+
+assertEq(len([1, 2, 3]), 3);
+assertEq(str(42), "42");
+
+// A pointer annotation defaults to nil, which is C's NULL.
+let empty: ptr = nil;
+assertEq(empty, nil);
+
+// `nil` is accepted for a pointer parameter (NULL) even without a `?`.
+fn takesPtr(p: ptr): bool {
+  return p == nil;
+}
+assertEq(takesPtr(nil), true);
+
+// A `cstring` is also a `ptr` (upcast to `void*`).
+fn asVoid(s: cstring): ptr {
+  return s;
+}
+assertEq(type(asVoid), "function");
+
+// The integer family is one numeric family at compile time: `int`, the
+// fixed-width types, `uint` and `size_t` are mutually assignable, and all
+// widen to `float`/`double`.
+let count: size_t = 3;
+let plain: int = count;
+assertEq(plain, 3);
+let wide: double = count;
+assertEq(wide, 3.0);
+let narrow: int32 = plain;
+assertEq(narrow, 3);
+
+// A `native fn` return type feeds inference: `len` yields a `size_t`.
+fn lengthOf(a: array): size_t {
+  return len(a);
+}
+assertEq(lengthOf([9, 8, 7]), 3);
+
+print("ffi types ok");
