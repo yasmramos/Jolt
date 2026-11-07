@@ -191,6 +191,71 @@ void testRepeatedImportBindsOnce() {
   check(!threw, "importing the same module twice is not an error");
 }
 
+void testNestedNamespaceQualifiedAccess() {
+  // A three-segment dotted import builds a real namespace tree: `ns.deep.leaf`
+  // must reach the module through `ns` -> `deep`, not through a `ns.deep`
+  // global (which does not exist). Regression for the namespace walk that
+  // dropped the intermediate table.
+  VM vm;
+  compileAndRun("import ns.deep.leaf;\nlet got = ns.deep.leaf.leaf();\n",
+                fixtureResolver(), vm);
+  check(globalInt(vm, "got") == 123,
+        "a 3-segment qualified import resolves through the nested namespace");
+
+  // A second module under the same nested namespace reuses the tables already
+  // created instead of replacing them.
+  VM vm2;
+  compileAndRun(
+      "import ns.deep.leaf;\nimport ns.deep.other;\n"
+      "let got = ns.deep.leaf.leaf() + ns.deep.other.other();\n",
+      fixtureResolver(), vm2);
+  check(globalInt(vm2, "got") == 130,
+        "two modules under the same nested namespace share the namespace tables");
+}
+
+void testLocalBindingWinsOverWildcard() {
+  // A name the importing module declares itself must win over a wildcard
+  // import, whatever the order. The import must not silently shadow a local
+  // `fn` or `var` (AGENT.md §18: no silent shadowing).
+  {
+    VM vm;
+    compileAndRun(
+        "import modules.util.*;\n"
+        "fn square(x) { return 3; }\n"
+        "let got = square(4);\n",
+        fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 3, "a local fn declared after a wildcard wins");
+  }
+  {
+    VM vm;
+    compileAndRun(
+        "fn square(x) { return 3; }\n"
+        "import modules.util.*;\n"
+        "let got = square(4);\n",
+        fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 3, "a local fn declared before a wildcard wins");
+  }
+  {
+    VM vm;
+    compileAndRun(
+        "import modules.util.*;\n"
+        "var answer = 99;\n"
+        "let got = answer;\n",
+        fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 99, "a local var declared after a wildcard wins");
+  }
+  {
+    // An alias must respect a local binding too, not rebind it to the module.
+    VM vm;
+    compileAndRun(
+        "fn util(x) { return 3; }\n"
+        "import modules.util as util;\n"
+        "let got = util(4);\n",
+        fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 3, "a local fn wins over an alias of the same name");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -207,6 +272,8 @@ int main() {
   testModuleRunsOnce();
   testNestedImport();
   testRepeatedImportBindsOnce();
+  testNestedNamespaceQualifiedAccess();
+  testLocalBindingWinsOverWildcard();
 
   if (g_failures != 0) {
     std::printf("%d check(s) failed\n", g_failures);

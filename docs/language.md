@@ -1442,6 +1442,18 @@ Running `jolt` with no arguments starts the REPL. Features:
 - The trailing `;` of each entry may be omitted.
 - Definitions persist until `:clear`.
 
+The session is semantic, not just a bag of values. An entry sees the
+definitions of the entries before it exactly as if they were one accumulating
+program: a `let` stays immutable, a `var` keeps its type annotation, a
+`struct` stays usable as a literal or an annotation, and an `import` is bound
+once. Redefining a name in a later entry is allowed and replaces the old
+binding. An entry that fails to compile leaves no trace: it commits nothing,
+so an import it started can be imported again cleanly. `:clear` drops the
+whole session state with the definitions. A file run directly (`jolt
+file.jolt`) always starts from an empty session; `:load` instead runs the file
+in the current session, so it sees the session's definitions and merges its
+own into it.
+
 Commands:
 
 | Command | Description |
@@ -1618,6 +1630,8 @@ Wildcard imports are safe because conflicts are caught at compile time. If two `
 ```
 
 Importing the same module twice is not a conflict.
+
+A name the importing module declares itself (`let`, `var` or `fn`) wins over an imported one, whatever the order of the declarations: a wildcard or selective import never silently shadows a local binding. The two cases are distinct — a local binding is deliberate and wins; two imports colliding is a mistake and is reported.
 
 ### 18.4 Module resolution
 

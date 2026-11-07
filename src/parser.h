@@ -40,6 +40,16 @@ class Parser {
   // end of input. Used by the REPL and by string interpolation.
   ExprPtr parseFullExpression();
 
+  // Makes the `struct` names declared by earlier REPL entries visible to this
+  // parser, so a literal (`Point { ... }`) or an annotation written in a later
+  // entry is still recognized. A file parse never needs this: every struct is
+  // declared in the same source. Only `structNames_` is seeded, so re-declaring
+  // a struct in a later entry stays allowed, exactly like redefining a `let`
+  // or a `fn`.
+  void seedStructNames(const std::unordered_set<std::string>& names) {
+    structNames_.insert(names.begin(), names.end());
+  }
+
   const std::string& where() const { return where_; }
 
  private:

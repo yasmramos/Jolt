@@ -1,0 +1,5 @@
+// Fixture: a second module under the same nested namespace ns.deep.
+
+fn other() {
+  return 7;
+}

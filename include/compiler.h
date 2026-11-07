@@ -66,6 +66,23 @@ class Compiler {
   // exactly as in `compile`.
   Bytecode compileRepl(const StmtPtr& program);
 
+  // Forgets the definitions carried from one compilation to the next: global
+  // immutability and types, `struct` shapes, native signatures, and the
+  // imported modules and namespaces they brought in. `compile` resets the
+  // session automatically, so a file always starts clean. The REPL keeps it
+  // across entries and clears it on `:clear`, so its behaviour matches one
+  // accumulating program instead of a sequence of unrelated ones.
+  void clearSession();
+
+  // The `struct` names declared so far in the session. The REPL hands them to
+  // the next entry's parser (see Parser::seedStructNames) so a literal or an
+  // annotation written after the declaration is still recognized.
+  std::unordered_set<std::string> structNames() const {
+    std::unordered_set<std::string> names;
+    for (const auto& entry : structDefs_) names.insert(entry.first);
+    return names;
+  }
+
   // Provides the module loader used to resolve `import` declarations. The
   // callback receives a dotted module path and the position of the import
   // declaration, and returns the module's parsed program, or throws
@@ -76,6 +93,15 @@ class Compiler {
   // module cannot be resolved.
   using ImportLoader = std::function<StmtPtr(const std::string& path, int line, int col)>;
   void setImportLoader(ImportLoader loader) { importLoader_ = std::move(loader); }
+
+  // Compiles a program that runs *in the current session* instead of starting
+  // a clean one. `:load` uses this so a loaded file sees the session's structs,
+  // types and imports, and merges its own definitions into the session, unlike
+  // `compile` which clears it. `loader` resolves the file's own imports
+  // relative to the file; it is used only while this call compiles. The
+  // session is snapshotted first, so a file that fails to compile leaves it
+  // untouched. `name` labels the chunk (the file path) for diagnostics.
+  Bytecode compileLoaded(const StmtPtr& program, ImportLoader loader, const std::string& name);
 
   // Compiles a module body into a standalone proto: its top-level bindings are
   // locals of the proto's frame (not globals) and the proto returns a table of
@@ -197,6 +223,13 @@ class Compiler {
   // valid while more frames are pushed.
   std::deque<FuncState> funcStack_;
   std::unordered_set<std::string> globalConsts_;
+
+  // Names the importing module declares itself (`let`/`var`/`fn`) in its global
+  // scope. A wildcard or selective import must not silently overwrite one of
+  // them: the local binding wins, whatever the order of the declarations. Kept
+  // separate from `globalConsts_`, which is about immutability (const folding),
+  // not about shadowing. Reset per chunk.
+  std::unordered_set<std::string> userGlobals_;
 
   // Type of every global binding, for annotation checks (PHASE 6.5). Kept
   // parallel to `globalConsts_`; both are reset per chunk.
@@ -343,6 +376,38 @@ class Compiler {
   void emitDeferredBlocks(size_t minDepth);
 
   void resetChunk(const std::string& name = "<main>");
+
+  // Everything that outlives one chunk: the definitions a REPL session
+  // carries from one entry to the next. `snapshotSession`/`restoreSession`
+  // make a compile transactional (a definition is committed only when its
+  // entry compiles) and let `compileLoaded` merge a loaded file's state into
+  // the session.
+  struct SessionSnapshot {
+    std::unordered_set<std::string> globalConsts;
+    std::unordered_set<std::string> userGlobals;
+    std::unordered_map<std::string, TypeRef> globalTypes;
+    std::unordered_map<std::string, std::vector<StructField>> structDefs;
+    std::unordered_map<std::string, NativeSig> nativeSigs;
+    std::map<std::string, ImportedModule> loadedModules;
+    std::set<std::string> materializedModules;
+    std::set<std::string> namespaces;
+    std::set<std::string> boundImports;
+    std::unordered_map<std::string, std::string> wildcardBindings;
+  };
+
+  SessionSnapshot snapshotSession() const;
+  void restoreSession(SessionSnapshot snapshot);
+
+  // The shared body of `compile` and `compileLoaded`: compiles a program in the
+  // global scope with whatever session state the caller has set up. It does not
+  // touch the session or the import loader, so `compile` (clean session) and
+  // `compileLoaded` (current session, file loader) both delegate here.
+  Bytecode compileTopLevelBody(const StmtPtr& program);
+
+  // The body of `compileRepl`, split out so the public wrapper can restore the
+  // session state when the entry throws (a definition is committed only when
+  // its entry compiles).
+  Bytecode compileReplEntry(const StmtPtr& program);
 
   // Compiles `body` as a child proto of the chunk being built and returns its
   // index in `bc_.children`. The parent compiler state is saved and restored.

@@ -488,10 +488,6 @@ void Compiler::resetChunk(const std::string& name) {
   deferStack_.clear();
   funcStack_.clear();
   currentUpvalueNames_.clear();
-  globalConsts_.clear();
-  globalTypes_.clear();
-  structDefs_.clear();
-  nativeSigs_.clear();
   currentReturnType_ = TypeRef{};
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
@@ -499,16 +495,33 @@ void Compiler::resetChunk(const std::string& name) {
   currentLine_ = 1;
   currentCol_ = 1;
   moduleBody_ = false;
+  loadingStack_.clear();
+}
+
+void Compiler::clearSession() {
+  globalConsts_.clear();
+  userGlobals_.clear();
+  globalTypes_.clear();
+  structDefs_.clear();
+  nativeSigs_.clear();
+  loadedModules_.clear();
   materializedModules_.clear();
   namespaces_.clear();
   boundImports_.clear();
   wildcardBindings_.clear();
-  loadingStack_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
+  clearSession();
   resetChunk();
+  return compileTopLevelBody(program);
+}
 
+// The shared body of `compile` and `compileLoaded`: compiles a program in the
+// global scope (its `let`s are globals) with the session state the caller has
+// already set up. The caller owns `resetChunk`/`clearSession` and the import
+// loader, so the two entry points differ only in what session they present.
+Bytecode Compiler::compileTopLevelBody(const StmtPtr& program) {
   if (!program) fail("empty program", 1, 1);
 
   // The main chunk uses the global scope: its `let`s are globals, as in the
@@ -550,7 +563,8 @@ Bytecode Compiler::compileExpression(const ExprPtr& expr) {
   if (!expr) fail("empty expression", 1, 1);
 
   // Expressions run in the global scope: a REPL entry can read and write the
-  // globals defined by earlier entries.
+  // globals defined by earlier entries. The session state (types, imports) is
+  // kept, so an expression sees the definitions of previous entries.
   scopes_.push_back(Scope{});
   int result = compileExpr(*expr);
   emit(OpCode::RETURN, result);
@@ -560,6 +574,72 @@ Bytecode Compiler::compileExpression(const ExprPtr& expr) {
 }
 
 Bytecode Compiler::compileRepl(const StmtPtr& program) {
+  // A definition is committed only when its entry compiles: the session state
+  // is snapshotted and restored if the entry throws. Without this, an entry
+  // that materializes an import and then fails would leave that import marked
+  // as bound although its bytecode never ran, and the next entry would see a
+  // module that is not there.
+  SessionSnapshot saved = snapshotSession();
+  try {
+    return compileReplEntry(program);
+  } catch (...) {
+    restoreSession(std::move(saved));
+    throw;
+  }
+}
+
+Compiler::SessionSnapshot Compiler::snapshotSession() const {
+  SessionSnapshot snapshot;
+  snapshot.globalConsts = globalConsts_;
+  snapshot.userGlobals = userGlobals_;
+  snapshot.globalTypes = globalTypes_;
+  snapshot.structDefs = structDefs_;
+  snapshot.nativeSigs = nativeSigs_;
+  snapshot.loadedModules = loadedModules_;
+  snapshot.materializedModules = materializedModules_;
+  snapshot.namespaces = namespaces_;
+  snapshot.boundImports = boundImports_;
+  snapshot.wildcardBindings = wildcardBindings_;
+  return snapshot;
+}
+
+void Compiler::restoreSession(SessionSnapshot snapshot) {
+  globalConsts_ = std::move(snapshot.globalConsts);
+  userGlobals_ = std::move(snapshot.userGlobals);
+  globalTypes_ = std::move(snapshot.globalTypes);
+  structDefs_ = std::move(snapshot.structDefs);
+  nativeSigs_ = std::move(snapshot.nativeSigs);
+  loadedModules_ = std::move(snapshot.loadedModules);
+  materializedModules_ = std::move(snapshot.materializedModules);
+  namespaces_ = std::move(snapshot.namespaces);
+  boundImports_ = std::move(snapshot.boundImports);
+  wildcardBindings_ = std::move(snapshot.wildcardBindings);
+}
+
+Bytecode Compiler::compileLoaded(const StmtPtr& program, ImportLoader loader,
+                                 const std::string& name) {
+  // A loaded file runs in the current session: it sees the session's structs,
+  // types and imports, and the definitions it adds stay for later entries,
+  // unlike `compile` which starts clean. Only the file's own import loader is
+  // swapped in (so its imports resolve relative to the file) and restored
+  // afterwards. The session is snapshotted first so a file that fails to
+  // compile leaves the session untouched, exactly like a failed REPL entry.
+  SessionSnapshot saved = snapshotSession();
+  ImportLoader savedLoader = std::move(importLoader_);
+  importLoader_ = std::move(loader);
+  try {
+    resetChunk(name);
+    Bytecode result = compileTopLevelBody(program);
+    importLoader_ = std::move(savedLoader);
+    return result;
+  } catch (...) {
+    importLoader_ = std::move(savedLoader);
+    restoreSession(std::move(saved));
+    throw;
+  }
+}
+
+Bytecode Compiler::compileReplEntry(const StmtPtr& program) {
   resetChunk();
   if (!program) fail("empty program", 1, 1);
 
@@ -807,6 +887,7 @@ void Compiler::compileLet(const LetStmt& s) {
     emit(OpCode::SETGLOBAL, reg, addString(s.name));
     declareGlobal(s.name, s.kind != Tok::Var);
     declareGlobalType(s.name, declared);
+    userGlobals_.insert(s.name);
     // A global binding replaces a `native fn` of the same name, so its
     // signature no longer applies to calls of the name.
     nativeSigs_.erase(s.name);
@@ -869,6 +950,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedLetSlots = std::move(predeclaredLetSlots_);
   auto savedFnSlots = std::move(predeclaredFnSlots_);
   auto savedGlobalConsts = std::move(globalConsts_);
+  auto savedUserGlobals = std::move(userGlobals_);
   auto savedGlobalTypes = std::move(globalTypes_);
   auto savedStructDefs = std::move(structDefs_);
   auto savedNativeSigs = std::move(nativeSigs_);
@@ -889,6 +971,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
   globalConsts_.clear();
+  userGlobals_.clear();
   globalTypes_.clear();
   structDefs_.clear();
   nativeSigs_.clear();
@@ -935,6 +1018,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   predeclaredLetSlots_ = std::move(savedLetSlots);
   predeclaredFnSlots_ = std::move(savedFnSlots);
   globalConsts_ = std::move(savedGlobalConsts);
+  userGlobals_ = std::move(savedUserGlobals);
   globalTypes_ = std::move(savedGlobalTypes);
   structDefs_ = std::move(savedStructDefs);
   nativeSigs_ = std::move(savedNativeSigs);
@@ -1068,52 +1152,59 @@ int Compiler::ensureNamespace(const std::string& prefix, int line, int col) {
   (void)col;
   std::vector<std::string> segments = splitDotted(prefix);
 
-  // Walk the path from the root. Each missing segment becomes a fresh map; an
-  // existing one is reused so a second module in the same namespace does not
-  // replace the table the first module already filled.
+  // Walk the path from the root, materializing every missing segment as a
+  // table member of its parent. Only the root is a global: a nested namespace
+  // such as `a.b` lives inside `a`, so re-visiting it must read it through the
+  // parent (`GETTABLE`), never with `GETGLOBAL` (there is no `a.b` global).
+  // `current` always holds the table for the deepest segment, so the walk can
+  // continue and the caller receives the innermost namespace to attach the
+  // module to. Registers for outer segments are left allocated; the caller
+  // frees the whole span when it is done.
   int current = -1;
   std::string path;
   for (const std::string& segment : segments) {
     path = path.empty() ? segment : path + "." + segment;
-    if (namespaces_.find(path) != namespaces_.end()) {
-      int next = allocReg();
+    const bool exists = namespaces_.find(path) != namespaces_.end();
+    int next = allocReg();
+    if (!exists) {
+      emit(OpCode::NEWTABLE, next, 0, 1);
+      if (current < 0) {
+        // Root: the namespace table is a top-level global.
+        emit(OpCode::SETGLOBAL, next, addString(path));
+        declareGlobal(path, false);
+      } else {
+        // Intermediate: attach the new table to its parent.
+        emit(OpCode::SETTABLE, next, current, -addString(segment) - 1);
+      }
+      namespaces_.insert(path);
+    } else if (current < 0) {
       emit(OpCode::GETGLOBAL, next, addString(path));
-      if (current >= 0) freeReg();
-      current = next;
-      continue;
-    }
-    if (current < 0) {
-      // Root: create the top-level namespace global.
-      current = allocReg();
-      emit(OpCode::NEWTABLE, current, 0, 1);
-      emit(OpCode::SETGLOBAL, current, addString(path));
-      declareGlobal(path, false);
     } else {
-      // Intermediate segment: create a map, attach it to its parent, then
-      // reuse the same register to walk deeper.
-      int fresh = allocReg();
-      emit(OpCode::NEWTABLE, fresh, 0, 1);
-      emit(OpCode::SETTABLE, fresh, current, -addString(segment) - 1);
-      freeReg();
+      emit(OpCode::GETTABLE, next, current, -addString(segment) - 1);
     }
-    namespaces_.insert(path);
+    current = next;
   }
   return current;
 }
 
 void Compiler::compileQualifiedImport(const ImportedModule& module, const std::string& boundName,
                                       int line, int col) {
+  std::vector<std::string> segments = splitDotted(boundName);
+  // The module body runs on import even when the binding below is skipped, so
+  // its side effects match the wildcard form.
+  materializeModule(module, line, col);
+  // A simple bound name (the alias form) must not silently rebind a name the
+  // module declares itself: the local binding wins, as for a wildcard import.
+  if (segments.size() == 1 && userGlobals_.find(boundName) != userGlobals_.end()) return;
   if (boundImports_.find(boundName) != boundImports_.end()) return;
   boundImports_.insert(boundName);
 
-  materializeModule(module, line, col);
   int table = allocReg();
   emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
 
   // Bind the module table at the visible name. A dotted path becomes a real
   // namespace tree of maps (`std.math.sqrt` is the ordinary member chain); a
   // bare alias binds the table directly.
-  std::vector<std::string> segments = splitDotted(boundName);
   if (segments.size() == 1) {
     emit(OpCode::SETGLOBAL, table, addString(boundName));
     declareGlobal(boundName, false);
@@ -1130,6 +1221,12 @@ void Compiler::compileNameImport(const ImportedModule& module,
   materializeModule(module, line, col);
 
   for (const std::string& name : names) {
+    // A name the importing module declares itself wins over the import: the
+    // import must not silently shadow a local `let`, `var` or `fn`, whatever
+    // the order of the declarations. Such a name is not a wildcard binding, so
+    // it never triggers an ambiguity either.
+    if (userGlobals_.find(name) != userGlobals_.end()) continue;
+
     // Conflict detection: a name already introduced by another wildcard is
     // ambiguous unless this import is the very same module. This is the
     // compile-time guarantee that makes `.*` safe (no silent shadowing).
@@ -1141,7 +1238,6 @@ void Compiler::compileNameImport(const ImportedModule& module,
            line, col);
     }
     wildcardBindings_[name] = module.path;
-    if (globalConsts_.find(name) != globalConsts_.end()) continue;
 
     int table = allocReg();
     emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
@@ -1175,6 +1271,7 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     emit(OpCode::SETGLOBAL, reg, addString(fn.name));
     declareGlobal(fn.name, false);
     declareGlobalType(fn.name, TypeRef{"function", false});
+    userGlobals_.insert(fn.name);
     // Keep the signature table in step with the binding that actually wins: a
     // native keeps its signature, any other global of the same name drops it.
     if (fn.isNative) {

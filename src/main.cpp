@@ -242,7 +242,8 @@ void printReplHelp() {
 }
 
 // Returns true when the REPL should exit.
-bool handleCommand(VM &vm, const std::string &command, const std::string &argv0) {
+bool handleCommand(VM &vm, Compiler &compiler, const std::string &command,
+                   const std::string &argv0) {
   if (command == ":quit" || command == ":q" || command == ":exit")
     return true;
 
@@ -254,6 +255,10 @@ bool handleCommand(VM &vm, const std::string &command, const std::string &argv0)
   if (command == ":clear") {
     vm.clearGlobals();
     registerBuiltins(vm);
+    // The session state (types, structs, imports) belongs to the definitions
+    // just forgotten, so it is dropped with them; otherwise a later entry
+    // would still see a type or a module the user no longer has.
+    compiler.clearSession();
     std::cout << "all definitions cleared\n";
     return false;
   }
@@ -291,13 +296,15 @@ bool handleCommand(VM &vm, const std::string &command, const std::string &argv0)
       std::cout << "cannot read file '" << path << "'\n";
       return false;
     }
-    // `:load` compiles the file against its own directory, so its imports
-    // resolve relative to the file, not to the REPL's working directory.
+    // `:load` runs the file *in the current session*: it sees the session's
+    // structs, types and imports, and its own definitions persist for later
+    // entries. Its imports still resolve relative to the file, so the file's
+    // loader is used only for this call.
     try {
-      Compiler loader;
-      loader.setImportLoader(makeImportLoader(resolverFor(path, argv0)));
       Parser parser(lex(source), path);
-      Bytecode bytecode = loader.compile(parser.parseProgram());
+      parser.seedStructNames(compiler.structNames());
+      Bytecode bytecode = compiler.compileLoaded(
+          parser.parseProgram(), makeImportLoader(resolverFor(path, argv0)), path);
       vm.run(bytecode);
     } catch (const CompileError &error) {
       printCompileError(path, source, error, platformPosix());
@@ -350,7 +357,7 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
       continue;
     }
     if (buffer.empty() && !trimmed.empty() && trimmed[0] == ':') {
-      if (handleCommand(vm, trimmed, argv0))
+      if (handleCommand(vm, compiler, trimmed, argv0))
         break;
       continue;
     }
@@ -381,6 +388,7 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
     if (!isStatementStart(trim(firstLineText))) {
       try {
         Parser expressionParser(tokens, "<repl>");
+        expressionParser.seedStructNames(compiler.structNames());
         auto expr = expressionParser.parseFullExpression();
         Bytecode bytecode = compiler.compileExpression(expr);
         Value value = vm.run(bytecode);
@@ -399,12 +407,14 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
     StmtPtr program;
     try {
       Parser parser(tokens, "<repl>");
+      parser.seedStructNames(compiler.structNames());
       program = parser.parseProgram();
     } catch (const CompileError &error) {
       if (error.message.find("end of input") != std::string::npos) {
         // Convenience: accept a missing ';' at the end of a REPL entry.
         try {
           Parser parser(lex(buffer + ";"), "<repl>");
+          parser.seedStructNames(compiler.structNames());
           program = parser.parseProgram();
         } catch (const CompileError &retry) {
           bool incomplete =
