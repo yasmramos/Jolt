@@ -81,11 +81,11 @@ void testArithmeticAndPrint() {
 void testNumericConstantTypes() {
   Bytecode bc = compileSource("let a = 1;\nlet b = 1.0;\n");
 
-  // int and float must not be merged in the constant pool. Global names share
+  // int and double must not be merged in the constant pool. Global names share
   // the pool, so the layout is 1, "a", 1.0, "b".
   assert(bc.constants.size() == 4);
   assert(bc.constants[0].isInt() && bc.constants[0].asInt() == 1);
-  assert(bc.constants[2].isFloat() && bc.constants[2].asFloat() == 1.0);
+  assert(bc.constants[2].isDouble() && bc.constants[2].asDouble() == 1.0);
 }
 
 void testLeftAssociativePrecedence() {
@@ -932,6 +932,56 @@ void testStructNamesAreUsableAsTypes() {
   expectCompiles("fn make() { return P { x: 1 }; }\nstruct P { x: int; }\n");
 }
 
+void testTryCatchBytecode() {
+  // `e catch d` (PHASE 6.7.3): evaluate the operand, test it with the hidden
+  // `$isError` helper, and on failure evaluate the fallback and MOVE it over
+  // the result. No new opcode is introduced (§3.3).
+  Bytecode bc = compileSource("fn f() { return 1; }\nlet x = f() catch 0;\n");
+  bool sawIsErrorCall = false;
+  bool sawConditionalJump = false;
+  bool sawMove = false;
+  for (const Instruction& ins : bc.code) {
+    if (ins.op == OpCode::CALL) sawIsErrorCall = true;
+    if (ins.op == OpCode::JMP_IF_FALSE) sawConditionalJump = true;
+    if (ins.op == OpCode::MOVE) sawMove = true;
+  }
+  assert(sawIsErrorCall && "catch must test the operand with $isError");
+  assert(sawConditionalJump && "catch must branch on the failure");
+  assert(sawMove && "catch must move the fallback into the result");
+
+  // `try e`: a failed operand returns the error from the enclosing function.
+  // The lowering is `CALL $isError` + `JMP_IF_FALSE` + `RETURN`.
+  Bytecode tb = compileSource("fn g() { return error(\"x\"); }\nfn f() { return try g(); }\n");
+  const Bytecode* fProto = nullptr;
+  for (const auto& child : tb.children) {
+    if (child->name == "f") fProto = child.get();
+  }
+  assert(fProto != nullptr);
+  bool sawReturn = false;
+  bool sawTryCall = false;
+  for (const Instruction& ins : fProto->code) {
+    if (ins.op == OpCode::CALL) sawTryCall = true;
+    if (ins.op == OpCode::RETURN) sawReturn = true;
+  }
+  assert(sawTryCall && sawReturn);
+  // The normal return must survive the conditional RETURN of `try`.
+  int returns = 0;
+  for (const Instruction& ins : fProto->code) {
+    if (ins.op == OpCode::RETURN) ++returns;
+  }
+  assert(returns >= 2 && "`return try f();` must emit its own RETURN too");
+}
+
+void testTryCatchErrors() {
+  // `try` propagates by returning, so it needs a function to return from.
+  expectCompileError("let x = try 5;\n", "try outside a function");
+  // And it is rejected inside a `defer` block, like `return`.
+  expectCompileError("fn f() { defer { let x = try 5; } return 1; }\n",
+                     "try inside a defer block");
+  // `catch` on its own is always fine, even outside a function.
+  expectCompiles("let x = error(\"a\") catch 0;\n");
+}
+
 void testCyclicImportIsRejected() {
   // A cycle (a -> b -> a) must be reported as a compile error instead of
   // recursing until the compiler overflows the stack. The loader maps dotted
@@ -1032,6 +1082,8 @@ int main() {
   testStructLiteralLowersToTable();
   testStructErrors();
   testStructNamesAreUsableAsTypes();
+  testTryCatchBytecode();
+  testTryCatchErrors();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

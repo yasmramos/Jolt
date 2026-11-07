@@ -49,8 +49,8 @@ struct Param {
 // vocabulary.
 inline bool isKnownTypeName(const std::string& name) {
   return name == "nil" || name == "bool" || name == "int" || name == "float" ||
-         name == "string" || name == "array" || name == "map" || name == "function" ||
-         name == "range" || name == "any";
+         name == "double" || name == "string" || name == "error" || name == "array" ||
+         name == "map" || name == "function" || name == "range" || name == "any";
 }
 
 // Human-readable form of a type for diagnostics: `int`, `string?`, `any`.
@@ -211,6 +211,24 @@ struct RangeExpr {
   bool inclusive = false;
 };
 
+// `try expr` (PHASE 6.7.3): when the operand evaluates to an error value, the
+// enclosing function returns it immediately; otherwise the operand is yielded
+// unchanged. It is the propagation half of the error model (Rust's `?`), the
+// postfix `catch` is the recovery half. Both compile to `CALL $isError` plus a
+// conditional jump and a `RETURN`/`MOVE`, so neither adds an opcode.
+struct TryExpr {
+  ExprPtr operand;
+};
+
+// `expr catch default` (PHASE 6.7.3): when the left side is an error value the
+// whole expression evaluates to `fallback`; otherwise it is the left value.
+// Left-associative and lower precedence than `??`, so `a() catch b() catch c`
+// recovers at the first failure.
+struct CatchExpr {
+  ExprPtr operand;
+  ExprPtr fallback;
+};
+
 struct LambdaExpr {
   // Always anonymous: `x => x * 2`, `(a, b) => a + b`, `() => { ... }`.
   // Convention: `body` is always a BlockStmt. An expression-bodied lambda is
@@ -224,7 +242,7 @@ struct LambdaExpr {
 using ExprNode =
     std::variant<LiteralExpr, InterpExpr, VariableExpr, ArrayExpr, MapExpr, StructLitExpr,
                  UnaryExpr, BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr, SliceExpr,
-                 MemberExpr, NonNullExpr, RangeExpr, LambdaExpr>;
+                 MemberExpr, NonNullExpr, RangeExpr, TryExpr, CatchExpr, LambdaExpr>;
 
 struct Expr {
   // Position convention: every Expr/Stmt carries the line/col of the token

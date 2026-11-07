@@ -9,6 +9,8 @@
 enum class Tok {
   // literals and names
   Int,
+  // `1.5` (no suffix) is a `double`; `1.5f`/`1.5F` is a `float` (Java-style).
+  Double,
   Float,
   Str,
   Ident,
@@ -32,6 +34,8 @@ enum class Tok {
   Defer,
   Struct,
   Native,
+  Try,
+  Catch,
   True,
   False,
   Nil,

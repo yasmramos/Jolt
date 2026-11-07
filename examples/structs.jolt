@@ -17,8 +17,8 @@ struct Pair { first; second; }
 let pair = Pair { second: "two", first: 1 };
 print(pair.first, pair.second);
 
-// An int widens to a float field, like every other annotation.
-struct Vec { x: float; y: float; }
+// An int widens to a double field, like every other annotation.
+struct Vec { x: double; y: double; }
 let v = Vec { x: 1, y: 2.5 };
 print(v.x, v.y);
 

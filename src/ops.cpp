@@ -10,6 +10,21 @@
 namespace ops {
 namespace {
 
+// Numeric promotion follows Java: `int` widens to `float` (binary32) and
+// `float` widens to `double` (binary64). The result of an operation is the
+// widest operand's type, and two `float`s produce a `float` (rounded back to
+// binary32), so `0.1f + 0.2f` is the same value Java computes.
+int numericRank(const Value& v) {
+  if (v.isInt()) return 0;
+  if (v.isFloat()) return 1;
+  return 2;  // double
+}
+
+Value makeNumeric(int rank, double result) {
+  if (rank == 1) return Value::fromFloat(static_cast<float>(result));
+  return Value(result);  // double
+}
+
 int64_t normalizeIndex(Runtime &rt, int64_t index, int64_t length,
                        const char *kind, int line, int col) {
   int64_t original = index;
@@ -150,7 +165,9 @@ Value unary(Runtime &rt, Tok op, const Value &operand, int line, int col) {
           static_cast<int64_t>(0ULL - static_cast<uint64_t>(operand.asInt())));
     }
     if (operand.isFloat())
-      return Value(-operand.asFloat());
+      return Value::fromFloat(-static_cast<float>(operand.asFloat()));
+    if (operand.isDouble())
+      return Value(-operand.asDouble());
     break;
   case Tok::Plus:
     if (operand.isNumber())
@@ -176,8 +193,10 @@ Value binary(Runtime &rt, Tok op, const Value &left, const Value &right,
       return Value(static_cast<int64_t>(static_cast<uint64_t>(left.asInt()) +
                                         static_cast<uint64_t>(right.asInt())));
     }
-    if (left.isNumber() && right.isNumber())
-      return Value(left.number() + right.number());
+    if (left.isNumber() && right.isNumber()) {
+      int rank = numericRank(left) > numericRank(right) ? numericRank(left) : numericRank(right);
+      return makeNumeric(rank, left.number() + right.number());
+    }
     if (left.isStr() && right.isStr())
       return Value(left.asStr() + right.asStr());
     if (left.isArray() && right.isArray()) {
@@ -193,8 +212,10 @@ Value binary(Runtime &rt, Tok op, const Value &left, const Value &right,
       return Value(static_cast<int64_t>(static_cast<uint64_t>(left.asInt()) -
                                         static_cast<uint64_t>(right.asInt())));
     }
-    if (left.isNumber() && right.isNumber())
-      return Value(left.number() - right.number());
+    if (left.isNumber() && right.isNumber()) {
+      int rank = numericRank(left) > numericRank(right) ? numericRank(left) : numericRank(right);
+      return makeNumeric(rank, left.number() - right.number());
+    }
     break;
   }
   case Tok::Star: {
@@ -202,8 +223,10 @@ Value binary(Runtime &rt, Tok op, const Value &left, const Value &right,
       return Value(static_cast<int64_t>(static_cast<uint64_t>(left.asInt()) *
                                         static_cast<uint64_t>(right.asInt())));
     }
-    if (left.isNumber() && right.isNumber())
-      return Value(left.number() * right.number());
+    if (left.isNumber() && right.isNumber()) {
+      int rank = numericRank(left) > numericRank(right) ? numericRank(left) : numericRank(right);
+      return makeNumeric(rank, left.number() * right.number());
+    }
     break;
   }
   case Tok::Slash: {
@@ -217,7 +240,8 @@ Value binary(Runtime &rt, Tok op, const Value &left, const Value &right,
           return Value(a);
         return Value(a / b);
       }
-      return Value(left.number() / right.number());
+      int rank = numericRank(left) > numericRank(right) ? numericRank(left) : numericRank(right);
+      return makeNumeric(rank, left.number() / right.number());
     }
     break;
   }
@@ -232,7 +256,8 @@ Value binary(Runtime &rt, Tok op, const Value &left, const Value &right,
           return Value(static_cast<int64_t>(0));
         return Value(a % b);
       }
-      return Value(std::fmod(left.number(), right.number()));
+      int rank = numericRank(left) > numericRank(right) ? numericRank(left) : numericRank(right);
+      return makeNumeric(rank, std::fmod(left.number(), right.number()));
     }
     break;
   }
@@ -241,7 +266,8 @@ Value binary(Runtime &rt, Tok op, const Value &left, const Value &right,
       if (left.isInt() && right.isInt() && right.asInt() >= 0) {
         return Value(intPow(left.asInt(), right.asInt()));
       }
-      return Value(std::pow(left.number(), right.number()));
+      int rank = numericRank(left) > numericRank(right) ? numericRank(left) : numericRank(right);
+      return makeNumeric(rank, std::pow(left.number(), right.number()));
     }
     break;
   }
@@ -356,6 +382,12 @@ void indexSet(Runtime& rt, const Value& object, const Value& index, Value value,
 
 Value memberGet(Runtime &rt, const Value &object, const std::string &name,
                 int line, int col) {
+  if (object.isError()) {
+    const ErrorObj& error = object.err();
+    if (name == "message") return Value(error.message);
+    if (name == "code") return Value(error.code);
+    rt.fail("type 'error' has no member '" + name + "'", line, col);
+  }
   if (object.isMap()) {
     if (const Value *found = object.map().get(name))
       return *found;

@@ -146,12 +146,43 @@ void testFloatArithmetic() {
   vm.run(bytecode);
 
   const Value& x = requireGlobal(vm, "x");
-  assert(x.isFloat());
-  assert(x.asFloat() == 2.5);
+  assert(x.isDouble());
+  assert(x.asDouble() == 2.5);
 
   const Value& y = requireGlobal(vm, "y");
-  assert(y.isFloat());
-  assert(y.asFloat() == 3.5);
+  assert(y.isDouble());
+  assert(y.asDouble() == 3.5);
+}
+
+void testFloatDoublePromotion() {
+  TEST_SCOPE();
+  Bytecode bytecode = compileSource(
+      "let a = 1.5f + 1.5f;\n"
+      "let b = 1.5f + 1.5;\n"
+      "let c = 1 + 1.5f;\n"
+      "let d = 1f;\n");
+  VM vm;
+  vm.run(bytecode);
+
+  // float + float -> float (binary32).
+  const Value& a = requireGlobal(vm, "a");
+  assert(a.isFloat());
+  assert(a.asFloat() == 3.0);
+
+  // float + double -> double.
+  const Value& b = requireGlobal(vm, "b");
+  assert(b.isDouble());
+  assert(b.asDouble() == 3.0);
+
+  // int + float -> float.
+  const Value& c = requireGlobal(vm, "c");
+  assert(c.isFloat());
+  assert(c.asFloat() == 2.5);
+
+  // An integer-looking literal with an `f` suffix is a float.
+  const Value& d = requireGlobal(vm, "d");
+  assert(d.isFloat());
+  assert(d.asFloat() == 1.0);
 }
 
 void testSubtractionAndMultiplication() {
@@ -174,7 +205,7 @@ void testModulo() {
   assert(a.isInt() && a.asInt() == 1);
 
   const Value& b = requireGlobal(vm, "b");
-  assert(b.isFloat() && b.asFloat() == 1.5);
+  assert(b.isDouble() && b.asDouble() == 1.5);
 
   const Value& c = requireGlobal(vm, "c");
   assert(c.isInt() && c.asInt() == -1);
@@ -194,11 +225,11 @@ void testPower() {
   assert(a.isInt() && a.asInt() == 256);
 
   const Value& b = requireGlobal(vm, "b");
-  assert(b.isFloat() && b.asFloat() == 8.0);
+  assert(b.isDouble() && b.asDouble() == 8.0);
 
   // Negative exponent: falls into the double path, same as the interpreter.
   const Value& c = requireGlobal(vm, "c");
-  assert(c.isFloat() && c.asFloat() == 0.5);
+  assert(c.isDouble() && c.asDouble() == 0.5);
 }
 
 void testStringConcatenation() {
@@ -283,7 +314,7 @@ void testUnaryOperators() {
   assert(requireGlobal(vm, "e").isBool() && !requireGlobal(vm, "e").asBool());
 
   const Value& f = requireGlobal(vm, "f");
-  assert(f.isFloat() && f.asFloat() == -2.5);
+  assert(f.isDouble() && f.asDouble() == -2.5);
 }
 
 void testComparisons() {
@@ -1227,11 +1258,63 @@ void testVmRejectsAstFunctions() {
   assert(threw);
 }
 
+void testErrorValues() {
+  // An error is a distinct runtime type, not a map. The reference counting of
+  // the underlying ErrorObj must behave like a string: copying a Value bumps
+  // the count, moving transfers it, and the last handle frees it.
+  Value e = makeError("boom", 42);
+  assert(e.isError());
+  assert(e.type() == VType::Error);
+  assert(e.typeName() == std::string("error"));
+  assert(e.err().message == "boom");
+  assert(e.err().code == 42);
+
+  // `errorPtr()` returns a handle by value, so hold the raw pointer to observe
+  // the count without the temporary handle skewing it.
+  ErrorObj* object = e.errorPtr().get();
+  assert(object->refs == 1);
+
+  // Copy bumps the count.
+  Value copy = e;
+  assert(object->refs == 2);
+  assert(copy.isError() && copy.err().message == "boom");
+  assert(copy.equals(e));
+
+  // Move transfers the reference without touching the count.
+  Value moved = std::move(copy);
+  assert(moved.isError());
+  assert(object->refs == 2);
+  // The moved-from value is left nil, as for every other reference type.
+  assert(copy.isNil());
+
+  // Equality is by value (message and code).
+  assert(makeError("x", 1).equals(makeError("x", 1)));
+  assert(!makeError("x", 1).equals(makeError("x", 2)));
+  assert(!makeError("x", 0).equals(Value("x")));
+
+  // Dropping every handle frees the object.
+  moved = Value();
+  e = Value();
+}
+
+void testErrorValuesAreNotConfusedWithMaps() {
+  // The whole point of a dedicated type: `isError` is exact, so a user map that
+  // happens to have an `ok` field can never be mistaken for an error.
+  assert(!Value("error").isError());
+  assert(!Value().isError());
+  assert(!Value(int64_t{0}).isError());
+  MapPtr lookalike = makeMap();
+  lookalike->set("ok", Value(false));
+  lookalike->set("error", Value("boom"));
+  assert(!Value(lookalike).isError());
+}
+
 }  // namespace
 
 int main() {
   testIntegerArithmetic();
   testFloatArithmetic();
+  testFloatDoublePromotion();
   testSubtractionAndMultiplication();
   testModulo();
   testPower();
@@ -1302,6 +1385,8 @@ int main() {
   testUpvalueIndexOutOfRangeFailsCleanly();
   testClosureWriteBackIntoEnclosingLocal();
   testVmRejectsAstFunctions();
+  testErrorValues();
+  testErrorValuesAreNotConfusedWithMaps();
 
   std::puts("vm tests passed");
   return 0;

@@ -15,8 +15,12 @@ const char* Value::typeName() const {
       return "int";
     case VType::Float:
       return "float";
+    case VType::Double:
+      return "double";
     case VType::Str:
       return "string";
+    case VType::Error:
+      return "error";
     case VType::Array:
       return "array";
     case VType::Map:
@@ -48,9 +52,14 @@ bool Value::equals(const Value& other) const {
       return asBool() == other.asBool();
     case VType::Int:
     case VType::Float:
+    case VType::Double:
       return false;  // handled above
     case VType::Str:
       return asStr() == other.asStr();
+    case VType::Error:
+      // Errors compare by value (message and code), like strings. This keeps
+      // `assertEq` and `==` useful for error results.
+      return err().message == other.err().message && err().code == other.err().code;
     case VType::Array: {
       const auto& a = arr().items;
       const auto& b = other.arr().items;
@@ -90,6 +99,18 @@ static std::string formatFloat(double d) {
   return std::string(buffer, result.ptr);
 }
 
+// A `float` prints with the shortest text that round-trips through binary32
+// (Java-style: `0.1f` prints "0.1", not the binary64 value "0.1"). `to_chars`
+// with the `float` overload produces exactly that.
+static std::string formatFloat32(double d) {
+  if (std::isnan(d)) return "nan";
+  if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
+  char buffer[64];
+  auto result = std::to_chars(buffer, buffer + sizeof(buffer), static_cast<float>(d));
+  if (result.ec != std::errc()) return "nan";
+  return std::string(buffer, result.ptr);
+}
+
 static void writeValue(std::string& out, const Value& value, bool repr, int depth) {
   if (depth > 8) {
     out += "...";
@@ -106,11 +127,33 @@ static void writeValue(std::string& out, const Value& value, bool repr, int dept
       out += std::to_string(value.asInt());
       break;
     case VType::Float:
-      out += formatFloat(value.asFloat());
+      out += formatFloat32(value.asFloat());
+      break;
+    case VType::Double:
+      out += formatFloat(value.asDouble());
       break;
     case VType::Str:
       out += repr ? quoteString(value.asStr()) : value.asStr();
       break;
+    case VType::Error: {
+      const auto& e = value.err();
+      if (repr) {
+        // Debug form, used at the top level and inside containers:
+        // `error("message")`, or `error("message", code)` when the code is set.
+        out += "error(";
+        out += quoteString(e.message);
+        if (e.code != 0) {
+          out += ", ";
+          out += std::to_string(e.code);
+        }
+        out += ')';
+      } else {
+        // Display form: the message alone, so `${err}` and `print(err)` read
+        // like the error text.
+        out += e.message;
+      }
+      break;
+    }
     case VType::Array: {
       const auto& items = value.arr().items;
       out += '[';
@@ -219,6 +262,10 @@ ArrayPtr makeArray(std::vector<Value> items) {
 }
 
 MapPtr makeMap() { return makeRef<Map>(); }
+
+Value makeError(std::string message, int64_t code) {
+  return Value(makeRef<ErrorObj>(std::move(message), code));
+}
 
 RangePtr makeRange(int64_t start, int64_t end, bool inclusive) {
   auto range = makeRef<Range>();

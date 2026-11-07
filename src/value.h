@@ -154,14 +154,27 @@ struct StringObj : RefCounted {
   explicit StringObj(std::string s) : value(std::move(s)) {}
 };
 
+// A first-class error value (PHASE 6.7 slice 2). It carries a human-readable
+// message and an integer code, and it is a distinct runtime type
+// (`type(err) == "error"`), so `isError` is exact: a user map that happens to
+// have an `ok` field can never be mistaken for an error. It holds no
+// references, so like a string it cannot sit in a cycle and is not a GcNode.
+struct ErrorObj : RefCounted {
+  std::string message;
+  int64_t code = 0;
+
+  ErrorObj(std::string m, int64_t c) : message(std::move(m)), code(c) {}
+};
+
 using StringPtr = Ref<StringObj>;
+using ErrorPtr = Ref<ErrorObj>;
 using ArrayPtr = Ref<Array>;
 using MapPtr = Ref<Map>;
 using FuncPtr = Ref<Function>;
 using RangePtr = Ref<Range>;
 using NativeFn = std::function<Value(Runtime&, std::vector<Value>&)>;
 
-enum class VType : std::uint8_t { Nil, Bool, Int, Float, Str, Array, Map, Func, Range };
+enum class VType : std::uint8_t { Nil, Bool, Int, Float, Double, Str, Error, Array, Map, Func, Range };
 
 // A dynamically typed value optimized for VM registers.
 //
@@ -178,6 +191,7 @@ struct Value {
     int64_t integer;
     double number;
     StringPtr string;
+    ErrorPtr error;
     ArrayPtr array;
     MapPtr map;
     FuncPtr function;
@@ -193,11 +207,22 @@ struct Value {
   Value(int i) noexcept : tag(VType::Int) { new (&data.integer) int64_t(i); }
   Value(int64_t i) noexcept : tag(VType::Int) { new (&data.integer) int64_t(i); }
   Value(size_t i) noexcept : tag(VType::Int) { new (&data.integer) int64_t(i); }
-  Value(double d) noexcept : tag(VType::Float) { new (&data.number) double(d); }
+  // Both binary floating-point types share the same storage: a `float` (binary32)
+  // is stored widened to `double` and rounded back on read, so it always holds
+  // exactly the value a C++ `float` would. `double` is the default for a
+  // fractional literal with no suffix (Java-style).
+  Value(double d) noexcept : tag(VType::Double) { new (&data.number) double(d); }
+  static Value fromFloat(float f) noexcept {
+    Value v;
+    v.tag = VType::Float;
+    new (&v.data.number) double(static_cast<double>(f));
+    return v;
+  }
   Value(const char* s) : Value(std::string(s)) {}
   Value(std::string s) : tag(VType::Str) {
     new (&data.string) StringPtr(makeString(std::move(s)));
   }
+  Value(ErrorPtr e) noexcept : tag(VType::Error) { new (&data.error) ErrorPtr(std::move(e)); }
   Value(ArrayPtr a) noexcept : tag(VType::Array) { new (&data.array) ArrayPtr(std::move(a)); }
   Value(MapPtr m) noexcept : tag(VType::Map) { new (&data.map) MapPtr(std::move(m)); }
   Value(FuncPtr f) noexcept : tag(VType::Func) { new (&data.function) FuncPtr(std::move(f)); }
@@ -239,23 +264,29 @@ struct Value {
   bool isBool() const { return tag == VType::Bool; }
   bool isInt() const { return tag == VType::Int; }
   bool isFloat() const { return tag == VType::Float; }
+  bool isDouble() const { return tag == VType::Double; }
   bool isStr() const { return tag == VType::Str; }
+  bool isError() const { return tag == VType::Error; }
   bool isArray() const { return tag == VType::Array; }
   bool isMap() const { return tag == VType::Map; }
   bool isFunc() const { return tag == VType::Func; }
   bool isRange() const { return tag == VType::Range; }
-  bool isNumber() const { return isInt() || isFloat(); }
+  bool isNumber() const { return isInt() || isFloat() || isDouble(); }
 
   bool truthy() const;
   bool asBool() const { return data.boolean; }
   int64_t asInt() const { return data.integer; }
-  double asFloat() const { return data.number; }
-  double number() const { return isInt() ? static_cast<double>(asInt()) : asFloat(); }
+  // A `float` is stored as a `double` holding a binary32 value; rounding back to
+  // `float` recovers exactly the original value, so `asFloat()` is lossless.
+  double asFloat() const { return static_cast<double>(static_cast<float>(data.number)); }
+  double asDouble() const { return data.number; }
+  double number() const { return isInt() ? static_cast<double>(asInt()) : data.number; }
 
   // Jolt strings are immutable. The shared object is never exposed as mutable.
   const std::string& asStr() const { return data.string->value; }
 
   StringPtr strPtr() const { return data.string; }
+  ErrorPtr errorPtr() const { return data.error; }
   ArrayPtr arrayPtr() const { return data.array; }
   MapPtr mapPtr() const { return data.map; }
   FuncPtr funcPtr() const { return data.function; }
@@ -269,6 +300,7 @@ struct Value {
   Map& map() const;
   Function& func() const;
   Range& range() const;
+  ErrorObj& err() const;
 
   // Display form: strings are rendered raw.
   std::string toString() const;
@@ -298,10 +330,14 @@ struct Value {
         new (&data.integer) int64_t(other.data.integer);
         break;
       case VType::Float:
+      case VType::Double:
         new (&data.number) double(other.data.number);
         break;
       case VType::Str:
         new (&data.string) StringPtr(other.data.string);
+        break;
+      case VType::Error:
+        new (&data.error) ErrorPtr(other.data.error);
         break;
       case VType::Array:
         new (&data.array) ArrayPtr(other.data.array);
@@ -329,10 +365,14 @@ struct Value {
         new (&data.integer) int64_t(other.data.integer);
         break;
       case VType::Float:
+      case VType::Double:
         new (&data.number) double(other.data.number);
         break;
       case VType::Str:
         new (&data.string) StringPtr(std::move(other.data.string));
+        break;
+      case VType::Error:
+        new (&data.error) ErrorPtr(std::move(other.data.error));
         break;
       case VType::Array:
         new (&data.array) ArrayPtr(std::move(other.data.array));
@@ -355,9 +395,13 @@ struct Value {
       case VType::Bool:
       case VType::Int:
       case VType::Float:
+      case VType::Double:
         break;
       case VType::Str:
         destroyMember(data.string);
+        break;
+      case VType::Error:
+        destroyMember(data.error);
         break;
       case VType::Array:
         destroyMember(data.array);
@@ -459,11 +503,12 @@ inline Array& Value::arr() const { return *data.array; }
 inline Map& Value::map() const { return *data.map; }
 inline Function& Value::func() const { return *data.function; }
 inline Range& Value::range() const { return *data.range; }
+inline ErrorObj& Value::err() const { return *data.error; }
 
 // Reports the tracked object that `value` owns, if any, to a collector visitor.
-// Strings and ranges cannot hold references, so they are not tracked. Cells
-// will be added with the PHASE 6 closures, the first place they can be part of
-// a cycle.
+// Strings, errors and ranges cannot hold references, so they are not tracked.
+// Cells will be added with the PHASE 6 closures, the first place they can be
+// part of a cycle.
 inline void gcVisit(const Value& value, GcNode::Visitor visitor, void* context) {
   if (value.isArray()) {
     visitor(value.arr(), context);
@@ -477,6 +522,8 @@ inline void gcVisit(const Value& value, GcNode::Visitor visitor, void* context) 
 ArrayPtr makeArray(std::vector<Value> items = {});
 MapPtr makeMap();
 RangePtr makeRange(int64_t start, int64_t end, bool inclusive);
+// Builds an error value from a message and an optional code (0 by default).
+Value makeError(std::string message, int64_t code = 0);
 Value makeNative(std::string name, NativeFn fn);
 
 template <typename T>

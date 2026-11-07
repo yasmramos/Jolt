@@ -1,0 +1,85 @@
+// PHASE 6.7 slice 2: errors are a distinct runtime type.
+//
+// `error(message, code?)` builds an error value; `isError(value)` detects it;
+// `.message` and `.code` read the fields. Errors are ordinary values: they can
+// be returned, stored, compared and caught with `pcall`.
+
+// --- construction ---------------------------------------------------------
+
+let e = error("boom");
+assertEq(type(e), "error");
+assertEq(isError(e), true);
+assertEq(e.message, "boom");
+assertEq(e.code, 0);
+
+// The code is optional and defaults to 0.
+let coded = error("bad request", 400);
+assertEq(coded.message, "bad request");
+assertEq(coded.code, 400);
+
+// A non-string message is stringified, like `panic` does.
+assertEq(error(42).message, "42");
+
+// --- isError is exact -----------------------------------------------------
+
+// Ordinary values are not errors, including a map that looks like one. This is
+// the point of a dedicated type: `{ok: false}` can never be mistaken for an
+// error.
+assertEq(isError(0), false);
+assertEq(isError(nil), false);
+assertEq(isError("error"), false);
+assertEq(isError({ok: false, error: "x"}), false);
+assertEq(isError([1, 2, 3]), false);
+
+// --- errors are values ----------------------------------------------------
+
+// Stored in a container and read back.
+let errors = [error("a"), error("b")];
+assertEq(errors[1].message, "b");
+assertEq(errors[0].code, 0);
+
+// Returned from a function.
+fn find(n) {
+  if (n < 0) {
+    return error("negative", 1);
+  }
+  return n;
+}
+assertEq(find(5), 5);
+assertEq(find(-1).code, 1);
+
+// Compared by value (message and code), like strings.
+assertEq(error("x", 1), error("x", 1));
+assertEq(error("x", 1) == error("x", 2), false);
+
+// --- rendering ------------------------------------------------------------
+
+// Display form is the message, so interpolation and print read naturally.
+let rendered = error("boom");
+assertEq("${rendered}", "boom");
+assertEq(str(rendered), "boom");
+
+// --- integration with pcall ----------------------------------------------
+
+// `pcall` reports a failed call as an error value.
+let failed = pcall(() => 1 / 0);
+assertEq(failed.ok, false);
+assertEq(isError(failed.error), true);
+assertEq(failed.error.message, "division by zero");
+
+// A success has `error` nil, not an error value.
+assertEq(isError(pcall(() => 1).error), false);
+
+// An error value can itself be returned and caught without being confused for
+// a thrown error: returning one is a successful call.
+let returned = pcall(() => error("value, not thrown"));
+assertEq(returned.ok, true);
+assertEq(isError(returned.value), true);
+assertEq(returned.value.message, "value, not thrown");
+
+// --- misuse fails loudly --------------------------------------------------
+
+// Accessing an unknown member of an error is a runtime error.
+assertEq(pcall(() => error("x").nope).ok, false);
+
+print("ok");

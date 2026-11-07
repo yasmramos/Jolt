@@ -323,7 +323,7 @@ assertEq(clamp(15, 0, 10), 10);
 assertEq(clamp(-5, 0, 10), 0);
 
 assertEq(type(1), "int");
-assertEq(type(1.5), "float");
+assertEq(type(1.5), "double");
 assertEq(type("x"), "string");
 assertEq(type(nil), "nil");
 assertEq(type(true), "bool");

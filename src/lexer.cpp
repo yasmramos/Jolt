@@ -24,6 +24,7 @@ const Keyword kKeywords[] = {
     {"switch", Tok::Switch}, {"case", Tok::Case},     {"default", Tok::Default},
     {"defer", Tok::Defer},   {"struct", Tok::Struct},
     {"native", Tok::Native},
+    {"try", Tok::Try},       {"catch", Tok::Catch},
     {"true", Tok::True},
     {"false", Tok::False},   {"nil", Tok::Nil},
 };
@@ -234,23 +235,32 @@ class Lexer {
       while (!atEnd() && (isDigit(peek()) || peek() == '_')) advance();
     }
 
+    // A trailing `f`/`F` (Java-style) makes the literal a `float` (binary32);
+    // with no suffix a fractional literal is a `double` (binary64). The suffix
+    // is not part of the numeric text handed to `strtod`, and it also turns an
+    // integer-looking literal into a float (`1f`), exactly like Java.
+    bool singlePrecision = false;
+    if (peek() == 'f' || peek() == 'F') {
+      singlePrecision = true;
+      advance();
+    }
     std::string raw = src_.substr(start, pos_ - start);
     std::string text;
     for (char ch : raw) {
-      if (ch != '_') text += ch;
+      if (ch != '_' && ch != 'f' && ch != 'F') text += ch;
     }
 
     Token token;
     token.line = startLine;
     token.col = startCol;
     token.lexeme = raw;
-    if (isFloat) {
+    if (isFloat || singlePrecision) {
       errno = 0;
       char* end = nullptr;
       double value = std::strtod(text.c_str(), &end);
       if (errno == ERANGE) error("float literal is out of range", startLine, startCol);
       if (end == nullptr || *end != '\0') error("malformed float literal", startLine, startCol);
-      token.type = Tok::Float;
+      token.type = singlePrecision ? Tok::Float : Tok::Double;
       token.floatValue = value;
     } else {
       errno = 0;

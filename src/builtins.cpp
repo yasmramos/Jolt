@@ -955,8 +955,8 @@ void registerBuiltins(Runtime& in) {
     const Value& value = args[0];
     if (value.isInt()) return value;
     if (value.isBool()) return Value(static_cast<int64_t>(value.asBool() ? 1 : 0));
-    if (value.isFloat()) {
-      double number = value.asFloat();
+    if (value.isFloat() || value.isDouble()) {
+      double number = value.number();
       if (!std::isfinite(number)) in.fail("cannot convert a non-finite float to int");
       if (number < -9223372036854775808.0 || number > 9223372036854775807.0) {
         in.fail("float is out of the integer range");
@@ -981,8 +981,9 @@ void registerBuiltins(Runtime& in) {
     need(in, "float", args, 1);
     const Value& value = args[0];
     if (value.isFloat()) return value;
-    if (value.isInt()) return Value(static_cast<double>(value.asInt()));
-    if (value.isBool()) return Value(value.asBool() ? 1.0 : 0.0);
+    if (value.isInt()) return Value::fromFloat(static_cast<float>(value.asInt()));
+    if (value.isDouble()) return Value::fromFloat(static_cast<float>(value.asDouble()));
+    if (value.isBool()) return Value::fromFloat(value.asBool() ? 1.0f : 0.0f);
     if (value.isStr()) {
       std::string text = trim(value.asStr());
       if (text.empty()) in.fail("cannot convert an empty string to float");
@@ -991,9 +992,28 @@ void registerBuiltins(Runtime& in) {
       if (end == nullptr || *end != '\0') {
         in.fail("cannot convert '" + value.asStr() + "' to float");
       }
-      return Value(result);
+      return Value::fromFloat(static_cast<float>(result));
     }
     in.fail("cannot convert '" + std::string(value.typeName()) + "' to float");
+  });
+
+  in.addNative("double", [](Runtime& in, Args args) -> Value {
+    need(in, "double", args, 1);
+    const Value& value = args[0];
+    if (value.isDouble()) return value;
+    if (value.isFloat() || value.isInt()) return Value(value.number());
+    if (value.isBool()) return Value(value.asBool() ? 1.0 : 0.0);
+    if (value.isStr()) {
+      std::string text = trim(value.asStr());
+      if (text.empty()) in.fail("cannot convert an empty string to double");
+      char* end = nullptr;
+      double result = std::strtod(text.c_str(), &end);
+      if (end == nullptr || *end != '\0') {
+        in.fail("cannot convert '" + value.asStr() + "' to double");
+      }
+      return Value(result);
+    }
+    in.fail("cannot convert '" + std::string(value.typeName()) + "' to double");
   });
 
   in.addNative("bool", [](Runtime& in, Args args) -> Value {
@@ -1128,6 +1148,69 @@ void registerBuiltins(Runtime& in) {
   in.addNative("panic", [](Runtime& in, Args args) -> Value {
     needBetween(in, "panic", args, 0, 1);
     in.fail(args.empty() ? "panic" : args[0].toString());
+  });
+
+  // `pcall(fn, args...)` calls `fn` with the remaining arguments and turns a
+  // runtime error into a value instead of aborting the program. The result is
+  // a map `{ok, value, error}`: on success `ok` is true, `value` is the return
+  // value and `error` is nil; on failure `ok` is false, `value` is nil and
+  // `error` is an error value (see `error`/`isError`). This is the value-based
+  // error handling of PHASE 6.7: no new opcode, no new syntax, and it stays
+  // AOT-friendly (the freestanding runtime reports errors through the same
+  // call path).
+  //
+  // The first argument must be a function: passing anything else is a bug in
+  // the caller, so it fails loudly rather than returning `{ok: false}` and
+  // hiding the mistake.
+  in.addNative("pcall", [](Runtime& in, Args args) -> Value {
+    if (args.empty() || !args[0].isFunc()) {
+      in.fail("pcall() expects a function as its first argument");
+    }
+    Value callee = args[0];
+    std::vector<Value> callArgs(args.begin() + 1, args.end());
+    const int line = in.currentLine;
+    const int col = in.currentCol;
+    MapPtr result = makeMap();
+    try {
+      Value value = in.call(callee, std::move(callArgs), line, col);
+      result->set("ok", Value(true));
+      result->set("value", std::move(value));
+      result->set("error", Value());
+    } catch (const RuntimeError& error) {
+      // `in.call` has already unwound the VM to the state it had on entry, so
+      // the engine is consistent and the program continues normally.
+      result->set("ok", Value(false));
+      result->set("value", Value());
+      result->set("error", makeError(error.message));
+    }
+    return Value(result);
+  });
+
+  // `error(message, code?)` builds an error value: a distinct runtime type
+  // (`type(err) == "error"`) carrying a message and an integer code (0 by
+  // default). It does not raise; to raise, use `panic`. Errors are values, so
+  // they are returned, stored, compared and caught with `pcall` like any other
+  // value. `err.message` and `err.code` read the two fields, and `${err}` /
+  // `print(err)` render the message.
+  in.addNative("error", [](Runtime& in, Args args) -> Value {
+    needBetween(in, "error", args, 1, 2);
+    std::string message = args[0].isStr() ? args[0].asStr() : args[0].toString();
+    int64_t code = args.size() > 1 ? wantInt(in, "error", args[1], "code") : 0;
+    return makeError(std::move(message), code);
+  });
+
+  // `isError(value)` is true only for an error value. It is exact: a user map
+  // that happens to have an `ok` field is never mistaken for an error.
+  in.addNative("isError", [](Runtime& in, Args args) -> Value {
+    need(in, "isError", args, 1);
+    return Value(args[0].isError());
+  });
+
+  // Private helper for `try`/`catch` (PHASE 6.7.3). Its own `$` name keeps the
+  // lowering working even if user code shadows the public `isError`.
+  in.addNative("$isError", [](Runtime& in, Args args) -> Value {
+    need(in, "$isError", args, 1);
+    return Value(args[0].isError());
   });
 
   in.addNative("exit", [](Runtime& in, Args args) -> Value {

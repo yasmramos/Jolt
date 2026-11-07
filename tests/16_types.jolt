@@ -6,7 +6,7 @@
 
 // Annotations on every primitive type.
 let a: int = 5;
-let b: float = 2.5;
+let b: double = 2.5;
 let c: string = "hi";
 let d: bool = true;
 let e: array = [1, 2, 3];
@@ -20,10 +20,12 @@ assertEq(e, [1, 2, 3]);
 assertEq(f, {k: 1});
 assertEq(len(g), 3);
 
-// int widens to float, but not the reverse.
+// int widens to float and to double, but not the reverse.
 let asFloat: float = 3;
 assertEq(asFloat, 3.0);
 assertEq(asFloat == 3, true);
+let asDouble: double = 3;
+assertEq(asDouble, 3.0);
 
 // Inference from the initializer: a later assignment must keep the type.
 var counter = 0;
@@ -55,7 +57,7 @@ fn add(x: int, y: int): int {
 }
 assertEq(add(2, 3), 5);
 
-fn widen(x: int): float {
+fn widen(x: int): double {
   return x;
 }
 assertEq(widen(4), 4.0);
