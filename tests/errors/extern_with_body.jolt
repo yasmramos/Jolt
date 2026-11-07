@@ -1,0 +1,6 @@
+// expect-exit: 65
+// An `extern` declaration has no body: it declares a C function the host
+// provides, so a `{ ... }` body is a compile error.
+extern "C" {
+  fn f(): int { return 1; }
+}

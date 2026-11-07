@@ -426,6 +426,17 @@ previous one.
   assignable and widens to `float`/`double`. This is the vocabulary only;
   the pointer/byte-buffer *representation* and the `extern "C"` call lowering
   are the next slices. See `docs/language.md` §4.6 and `tests/28_ffi_types.jolt`.
+- **`extern "C"` blocks (declaration half, done)** — `extern "C" { fn ...; }`
+  declares C functions. The ABI is a plain string literal and only `"C"` is
+  accepted. Each entry is a bodyless `fn ...;` stored as a `FnDeclStmt` with
+  `isNative`, so it follows exactly the `native fn` path: the name binds to the
+  host function of the same name and the signature is checked at the call site.
+  The block emits no bytecode (a block compiles to the bytecode of the
+  equivalent `native fn` declarations), the declarations are hoisted, and the
+  block is module-level metadata (nesting it is a compile error). Binding a
+  declaration to a real C function — the marshalling and the call lowering
+  without `libffi` — is the remaining part of the phase. See
+  `docs/language.md` §4.6 and `tests/29_extern_c.jolt`.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 
@@ -591,7 +602,7 @@ Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
-Phase 6.6: ⬜ pending (FFI with C)
+Phase 6.6: 🔶 in progress (FFI type vocabulary + `extern "C"` declaration half)
 Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type and 6.7.3 `try`/`catch` done; 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

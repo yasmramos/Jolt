@@ -366,8 +366,12 @@ class Compiler {
   void compileStructDecl(const StructDeclStmt& decl, int line, int col);
   // Registers every `native fn` declared directly in `block` before anything
   // else in it is compiled, so a hoisted function that calls one is checked
-  // against its signature.
+  // against its signature. It also descends into `extern "C"` blocks: their
+  // declarations are natives too.
   void registerNativeDecls(const BlockStmt& block);
+  // Compiles an `extern "C" { ... }` block (PHASE 6.6): each declaration
+  // follows the `native fn` path, so the block emits no bytecode of its own.
+  void compileExternBlock(const ExternBlockStmt& block, int line, int col);
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);

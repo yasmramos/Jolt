@@ -578,16 +578,22 @@ Bytecode Compiler::compileTopLevelBody(const StmtPtr& program) {
     // be checked against its signature.
     registerNativeDecls(*block);
     // Top-level function declarations are hoisted, like `execBlock` does in
-    // the interpreter, so a call can appear before the declaration.
+    // the interpreter, so a call can appear before the declaration. An
+    // `extern "C"` block is hoisted too: its declarations are natives, and a
+    // hoisted function may call one, so the binding must exist regardless of
+    // where the block appears in the file.
     for (const auto& child : block->stmts) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         compileFnDecl(*fn, child->line, child->col);
+      } else if (const auto* ext = std::get_if<ExternBlockStmt>(&child->node)) {
+        compileExternBlock(*ext, child->line, child->col);
       }
     }
     for (const auto& child : block->stmts) {
       if (!child) continue;
       if (std::holds_alternative<FnDeclStmt>(child->node)) continue;
+      if (std::holds_alternative<ExternBlockStmt>(child->node)) continue;
       compileStmt(*child);
     }
   } else {
@@ -699,12 +705,15 @@ Bytecode Compiler::compileReplEntry(const StmtPtr& program) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         compileFnDecl(*fn, child->line, child->col);
+      } else if (const auto* ext = std::get_if<ExternBlockStmt>(&child->node)) {
+        compileExternBlock(*ext, child->line, child->col);
       }
     }
     const size_t count = block->stmts.size();
     for (size_t i = 0; i < count; ++i) {
       const StmtPtr& child = block->stmts[i];
       if (!child || std::holds_alternative<FnDeclStmt>(child->node)) continue;
+      if (std::holds_alternative<ExternBlockStmt>(child->node)) continue;
       const bool isLast = i + 1 == count;
       if (isLast) {
         if (const auto* expression = std::get_if<ExprStmt>(&child->node)) {
@@ -895,6 +904,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const ContinueStmt&) { compileContinue(stmt); },
           [&](const DeferStmt& s) { compileDefer(s); },
           [&](const ImportStmt& s) { compileImport(s, stmt.line, stmt.col); },
+          [&](const ExternBlockStmt& s) { compileExternBlock(s, stmt.line, stmt.col); },
           [&](const auto&) {
             fail("this statement is not supported by the bytecode compiler yet (Phase 6)",
                  stmt.line, stmt.col);
@@ -1448,7 +1458,23 @@ void Compiler::registerNativeDecls(const BlockStmt& block) {
     if (!child) continue;
     if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
       if (fn->isNative) nativeSigs_[fn->name] = NativeSig{fn->params, fn->returnType};
+    } else if (const auto* ext = std::get_if<ExternBlockStmt>(&child->node)) {
+      // An `extern "C"` declaration is a native, so a hoisted function that
+      // calls one is checked against its signature exactly like `native fn`.
+      for (const FnDeclStmt& fn : ext->decls) {
+        nativeSigs_[fn.name] = NativeSig{fn.params, fn.returnType};
+      }
     }
+  }
+}
+
+// An `extern "C" { ... }` block emits no bytecode of its own: each declaration
+// binds its name to the host function of the same name, exactly like a
+// top-level `native fn`. The block is pure compile-time metadata (the ABI
+// string is validated by the parser), so this only walks the declarations.
+void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int col) {
+  for (const FnDeclStmt& fn : block.decls) {
+    compileFnDecl(fn, line, col);
   }
 }
 

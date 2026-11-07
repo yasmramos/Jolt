@@ -268,6 +268,7 @@ StmtPtr Parser::parseStatement() {
   if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
   if (match(Tok::Fn)) return parseFnDecl();
   if (match(Tok::Native)) return parseNativeDecl();
+  if (match(Tok::Extern)) return parseExternDecl();
   if (match(Tok::Struct)) return parseStructDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
@@ -594,6 +595,59 @@ StmtPtr Parser::parseNativeDecl() {
   FnDeclStmt decl{name.lexeme, std::move(params), std::move(returnType), nullptr};
   decl.isNative = true;
   return makeStmt(std::move(decl), keyword.line, keyword.col);
+}
+
+// `extern "C" { fn name(params): ret; ... }` (PHASE 6.6). A block of C
+// declarations. The ABI is a plain string literal (no interpolation): only
+// `"C"` is supported. Inside, each entry is a bodyless `fn ...;`, parsed with
+// the same grammar as `native fn` and stored with `isNative` set, so the
+// compiler handles it exactly like a top-level `native fn`. Like `import`,
+// `struct` and `native fn`, the block is module-level metadata: a nested one
+// is a compile error, and it emits no bytecode.
+StmtPtr Parser::parseExternDecl() {
+  const Token& keyword = previous();
+  if (nestingDepth_ > 0) {
+    throw CompileError{"'extern' is only allowed at the top level of a module", keyword.line,
+                       keyword.col};
+  }
+
+  const Token& abiToken = consume(Tok::Str, "expected an ABI string after 'extern'");
+  // A plain string literal has exactly one text part; an interpolated one has
+  // an expression part and is meaningless as an ABI name.
+  if (abiToken.parts.size() != 1 || abiToken.parts[0].isExpr) {
+    throw CompileError{"the 'extern' ABI must be a plain string literal", abiToken.line,
+                       abiToken.col};
+  }
+  const std::string abi = abiToken.parts[0].text;
+  if (abi != "C") {
+    throw CompileError{"unknown ABI '" + abi + "'; only \"C\" is supported", abiToken.line,
+                       abiToken.col};
+  }
+
+  consume(Tok::LBrace, "expected '{' after the 'extern' ABI");
+  std::vector<FnDeclStmt> decls;
+  while (!check(Tok::RBrace)) {
+    if (check(Tok::Eof)) error(peek(), "expected '}' to close the 'extern' block");
+    if (match(Tok::Semicolon)) continue;
+    // Only bodyless `fn` declarations are valid inside an `extern` block.
+    if (!match(Tok::Fn)) {
+      error(peek(), "only 'fn' declarations are allowed inside an 'extern' block");
+    }
+    const Token& name = consume(Tok::Ident, "expected a function name");
+    auto params = parseParams();
+    TypeRef returnType = parseTypeAnnotation(/*allowVoid=*/true);
+    if (check(Tok::Arrow) || check(Tok::LBrace)) {
+      throw CompileError{"an 'extern' declaration has no body; it declares a C function",
+                         peek().line, peek().col};
+    }
+    consume(Tok::Semicolon, "expected ';' after the 'extern' declaration");
+    FnDeclStmt decl{name.lexeme, std::move(params), std::move(returnType), nullptr};
+    decl.isNative = true;
+    decls.push_back(std::move(decl));
+  }
+  consume(Tok::RBrace, "expected '}' to close the 'extern' block");
+
+  return makeStmt(ExternBlockStmt{abi, std::move(decls)}, keyword.line, keyword.col);
 }
 
 // `struct Name { field: T; other; ... }` (PHASE 6.5). A data-only type: fields
