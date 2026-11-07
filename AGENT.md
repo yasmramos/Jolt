@@ -415,6 +415,17 @@ previous one.
 - Compile-time stubs (like Zig/Rust).
 - **No `libffi`**.
 - Support for ints, floats, strings, structs, callbacks.
+- **FFI type vocabulary (done)** — the type names needed to *spell* a C
+  signature: `ptr` (`void *`), `cstring` (`const char *`), the fixed-width
+  integers (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `uint` and
+  `size_t`. They are compile-time annotations erased before the bytecode: the
+  runtime value stays an `int` (a pointer is an opaque handle) and `type()`
+  keeps reporting the primitive name, so no opcode and no runtime type is
+  added. `checkAssignable` knows `nil` is NULL for a pointer (even without a
+  `?`), `cstring` upcasts to `ptr`, and the integer family is mutually
+  assignable and widens to `float`/`double`. This is the vocabulary only;
+  the pointer/byte-buffer *representation* and the `extern "C"` call lowering
+  are the next slices. See `docs/language.md` §4.6 and `tests/28_ffi_types.jolt`.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 

@@ -1018,6 +1018,33 @@ void testVoidErrors() {
   expectCompileError("fn f(): void? {}\n", "nullable void");
 }
 
+void testFfiTypeVocabulary() {
+  // Pointers and fixed-width/unsigned integers are accepted type names
+  // (PHASE 6.6). They are erased before the bytecode, so a signature using them
+  // compiles exactly like one using `int`.
+  expectCompiles("native fn strlen(s: cstring): size_t;\n");
+  expectCompiles("native fn free(p: ptr): void;\n");
+  expectCompiles("let p: ptr = nil;\n");
+  expectCompiles("let s: cstring = nil;\n");
+
+  // `nil` is the NULL of a pointer parameter, even without a `?`.
+  expectCompiles("native fn free(p: ptr): void;\nfree(nil);\n");
+
+  // `cstring` upcasts to `ptr` (to `void*`); the reverse is not implicit.
+  expectCompiles("fn f(s: cstring) { let p: ptr = s; }\n");
+  expectCompileError("fn f(p: ptr) { let s: cstring = p; }\n", "ptr does not downcast to cstring");
+
+  // The integer family is mutually assignable and widens to float/double.
+  expectCompiles("let a: int32 = 1;\nlet b: int = a;\nlet c: size_t = b;\nlet d: double = c;\n");
+  expectCompiles("let a: uint = 1;\nlet b: int64 = a;\nlet c: float = b;\n");
+  expectCompileError("let x: size_t = \"nope\";\n", "string is not an integer");
+  expectCompileError("let x: ptr = 5;\n", "int is not a pointer");
+  expectCompileError("let x: cstring = \"hi\";\n", "a string is not a cstring");
+
+  // A `native fn` return type feeds inference: the result is a `size_t`.
+  expectCompiles("native fn strlen(s: cstring): size_t;\nlet n: int = strlen(nil);\n");
+}
+
 void testCyclicImportIsRejected() {
   // A cycle (a -> b -> a) must be reported as a compile error instead of
   // recursing until the compiler overflows the stack. The loader maps dotted
@@ -1122,6 +1149,7 @@ int main() {
   testTryCatchErrors();
   testVoidReturnType();
   testVoidErrors();
+  testFfiTypeVocabulary();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

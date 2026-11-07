@@ -334,6 +334,39 @@ initialized from a `void` call stays untyped, like `var x = nil`. Because an
 expression body (`fn f(): void => g();`) is an implicit `return`, a `void`
 function uses a block body.
 
+**FFI scalar types.** To write a C signature the way C writes it, the FFI
+vocabulary (PHASE 6.6) adds pointers and fixed-width/unsigned integers:
+
+| Jolt | C | Notes |
+| --- | --- | --- |
+| `ptr` | `void *` | Opaque handle. `nil` is NULL. |
+| `cstring` | `const char *` | NUL-terminated byte string. `nil` is NULL. Upcasts to `ptr`. |
+| `int8` `int16` `int32` `int64` | `int8_t` … `int64_t` | Signed, fixed width. |
+| `uint8` `uint16` `uint32` `uint64` | `uint8_t` … `uint64_t` | Unsigned, fixed width. |
+| `uint` | `unsigned int` | Unsigned. |
+| `size_t` | `size_t` | Unsigned size. |
+
+These are **compile-time annotations, erased before the bytecode**: the runtime
+value is still an `int` (a pointer is an opaque handle) and `type()` keeps
+reporting the primitive name, so no opcode and no runtime type is added. The
+width and signedness are recorded for the FFI marshalling to honour, not for
+the VM.
+
+```jolt
+native fn strlen(s: cstring): size_t;
+native fn memcmp(a: ptr, b: ptr, n: size_t): int32;
+native fn malloc(n: size_t): ptr;
+native fn free(p: ptr): void;
+
+let empty: ptr = nil;      // nil is NULL
+```
+
+`nil` is assignable to any pointer (NULL), even without a `?`. A `cstring` is
+also a `ptr` (an upcast to `void*`); the reverse needs an explicit cast, so it
+is not implicit. The integer family (`int`, the fixed-width types, `uint`,
+`size_t`) is mutually assignable at compile time and widens to `float`/`double`,
+following the same numeric rule as `int`.
+
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
 later assignments against it:
@@ -1724,7 +1757,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
-- No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0).
+- No FFI with C yet. `extern "C" { ... }` (without `libffi`) is planned for PHASE 6.6 (1.0). The FFI *type vocabulary* (`ptr`, `cstring`, `int8`…`uint64`, `uint`, `size_t`) is already accepted as a compile-time annotation (see §4.6).
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
