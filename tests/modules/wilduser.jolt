@@ -1,0 +1,9 @@
+// Test fixture: a module that wildcard-imports another module. `helper` is
+// visible to this module's own functions but must not leak into the importing
+// program (AGENT.md §18.2).
+
+import modules.helper.*;
+
+fn viaWild() {
+  return helper();
+}

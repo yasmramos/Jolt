@@ -451,6 +451,20 @@ class Compiler {
   // register holding the deepest existing map on the path.
   int ensureNamespace(const std::string& prefix, int line, int col);
 
+  // The global name a visible import binding maps to while a module body is
+  // being compiled. At the top level this is the visible name itself; inside a
+  // module it is a hidden per-module name (`$imp$<module>$<name>`), so a
+  // module's own imports never reach the importing program's globals (AGENT.md
+  // §18.2). Every global read/write and every import binding goes through this
+  // so the two agree.
+  std::string importBindingName(const std::string& visible) const;
+
+  // Walks a module body's top-level imports and records the hidden global each
+  // introduced name maps to (see `importBindingName`). Runs before the body is
+  // compiled, so a hoisted function that references an imported name already
+  // resolves it to the module-local binding.
+  void predeclareModuleImports(const BlockStmt& block);
+
   ImportLoader importLoader_;
   std::map<std::string, ImportedModule> loadedModules_;
   // Module paths currently being loaded, outermost first. A path that is
@@ -474,6 +488,15 @@ class Compiler {
   // module that brought them in, so a second wildcard exporting the same name
   // is reported as ambiguous.
   std::unordered_map<std::string, std::string> wildcardBindings_;
+
+  // Path of the module body currently being compiled. Empty at the top level.
+  // Used to build the hidden global names a module's own imports bind to.
+  std::string modulePath_;
+  // Visible names that the module being compiled introduced through `import`.
+  // A read/write of one of these names inside the module goes to its hidden
+  // per-module global instead of the program's global table, so a module's
+  // imports never leak into the importing program (AGENT.md §18.2).
+  std::unordered_set<std::string> moduleImportNames_;
 };
 
 // Shortcut equivalent to `Compiler{}.compile(program)`.

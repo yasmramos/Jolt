@@ -256,6 +256,75 @@ void testLocalBindingWinsOverWildcard() {
   }
 }
 
+// A module's own imports must stay inside the module: the importing program
+// must not see the namespace, alias or wildcard binding a nested module created
+// (AGENT.md §18.2: "importing a module never injects its internals into the
+// importing program's globals").
+void testModuleImportDoesNotLeakNamespace() {
+  // `qualuser` imports `modules.helper`; the importer only imports `qualuser`,
+  // so `modules.helper` must not be reachable from the importer.
+  bool threw = false;
+  try {
+    VM vm;
+    compileAndRun("import modules.qualuser;\nlet got = modules.helper.helper();\n",
+                  fixtureResolver(), vm);
+  } catch (const RuntimeError&) {
+    threw = true;
+  }
+  check(threw, "a module's qualified import does not leak its namespace to the importer");
+}
+
+void testModuleImportDoesNotLeakWildcard() {
+  // `wilduser` wildcard-imports `modules.helper`; `helper` must not become a
+  // global of the importing program.
+  bool threw = false;
+  try {
+    VM vm;
+    compileAndRun("import modules.wilduser;\nlet got = helper();\n", fixtureResolver(), vm);
+  } catch (const RuntimeError&) {
+    threw = true;
+  }
+  check(threw, "a module's wildcard import does not leak its names to the importer");
+}
+
+void testModuleSeesItsOwnImports() {
+  // The module's own functions still resolve the imports it made: a wildcard
+  // name and a qualified namespace are visible inside the module.
+  {
+    VM vm;
+    compileAndRun("import modules.wilduser;\nlet got = modules.wilduser.viaWild();\n",
+                  fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 100, "a module function sees its own wildcard import");
+  }
+  {
+    VM vm;
+    compileAndRun("import modules.qualuser;\nlet got = modules.qualuser.viaQual();\n",
+                  fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 100, "a module function sees its own qualified import");
+  }
+}
+
+void testNestedWildcardDoesNotCreatePhantomAmbiguity() {
+  // `wilduser` exports `helper` via a wildcard of `modules.helper`. Importing
+  // `modules.helper2.*` in the program introduces the same visible name, but
+  // only one of them is a real wildcard binding of the program, so there is no
+  // ambiguity: the module's internal binding is not the importer's business.
+  bool threw = false;
+  try {
+    VM vm;
+    compileAndRun(
+        "import modules.wilduser;\n"
+        "import modules.helper2.*;\n"
+        "let got = helper();\n",
+        fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 200,
+          "a module's wildcard import does not create a phantom ambiguity in the importer");
+  } catch (const CompileError&) {
+    threw = true;
+  }
+  check(!threw, "no phantom ambiguity from a module's internal wildcard import");
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +343,10 @@ int main() {
   testRepeatedImportBindsOnce();
   testNestedNamespaceQualifiedAccess();
   testLocalBindingWinsOverWildcard();
+  testModuleImportDoesNotLeakNamespace();
+  testModuleImportDoesNotLeakWildcard();
+  testModuleSeesItsOwnImports();
+  testNestedWildcardDoesNotCreatePhantomAmbiguity();
 
   if (g_failures != 0) {
     std::printf("%d check(s) failed\n", g_failures);

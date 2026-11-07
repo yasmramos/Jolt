@@ -1,0 +1,6 @@
+// Test fixture: exports the same name as `helper.jolt`, used to prove a nested
+// wildcard does not create a phantom ambiguity in the importing program.
+
+fn helper() {
+  return 200;
+}

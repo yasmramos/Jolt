@@ -362,8 +362,11 @@ previous one.
   `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
   conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
   once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
-  compile error rather than a stack overflow. `require` (Lua-style) is
-  **dropped**: `import` is the only module form.
+  compile error rather than a stack overflow. A module's own imports are
+  private to it: a namespace, alias or wildcard name it creates never reaches
+  the importing program's globals, and never collides with the importer's own
+  wildcard bindings. `require` (Lua-style) is **dropped**: `import` is the only
+  module form.
 - **`struct`** (data only, no methods) — **done**: a named, module-level map
   shape with optional field types. The declaration emits no bytecode and adds
   no opcode; a `Point { x: 1, y: 2 }` literal is checked against the

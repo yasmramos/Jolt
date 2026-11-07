@@ -1619,6 +1619,8 @@ fn _helper() {   // private: not exported
 
 A module's own top-level bindings are **local to the module frame**: importing a module never injects its internals into the importing program's globals. Only the names you import become visible.
 
+The same holds for a module's own imports: the namespaces, aliases and wildcard names a module creates with `import` are private to that module. A module that imports `a.b` makes `a.b` visible to its own functions, but the importing program does not see `a.b` unless it imports it too. Likewise, a wildcard import inside a module never collides with a wildcard import in the importing program.
+
 A module body runs **exactly once**, no matter how many times it is imported, and its exported table is shared by every import.
 
 ### 18.3 Conflict detection
