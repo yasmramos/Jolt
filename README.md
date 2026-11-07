@@ -17,7 +17,7 @@ for language in languages {
 
 ## Features
 
-- Dynamic types: `nil`, `bool`, `int` (64-bit), `float`, `string`, `array`, `map`, `function` and `range`.
+- Dynamic types: `nil`, `bool`, `int` (64-bit), `float` (binary32), `double` (binary64), `string`, `array`, `map`, `function` and `range`.
 - Variables with `var` (mutable), `let` (immutable, runtime) and `const` (immutable, folded at compile time), block scope and real closures.
 - First-class functions, recursion and `=>` lambdas (`x => x * 2`).
 - String interpolation with `"${expression}"` and UTF-8 support.
