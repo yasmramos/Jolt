@@ -1,0 +1,116 @@
+// PHASE 6.7 slice 3: `try` (propagation) and `catch` (local recovery).
+//
+// Errors are values, not exceptions. `try e` returns the error from the
+// enclosing function when `e` is an error (Rust's `?`); `e catch d` yields `d`
+// when `e` is an error. Both are sugar over `isError` + a jump + a
+// `RETURN`/`MOVE`, so neither adds an opcode.
+
+// --- catch: local recovery ------------------------------------------------
+
+fn parse(s) {
+  if (len(s) == 0) { return error("empty input"); }
+  return 42;
+}
+
+assertEq(parse("") catch 0, 0);      // the call failed: use the default
+assertEq(parse("x") catch 0, 42);    // the call succeeded: keep the value
+
+// The fallback is itself a full expression and is evaluated lazily: on success
+// it never runs, so its side effects do not happen.
+fn returnsValue() { return 7; }
+assertEq(returnsValue() catch panic("never runs"), 7);
+
+// The fallback does not have to be an error-free value.
+assertEq(parse("") catch parse("y"), 42);
+
+// --- catch: precedence ----------------------------------------------------
+
+// `catch` binds looser than `??`, so `a ?? b catch c` recovers from the
+// coalesced result, and looser than arithmetic on the left:
+// `(a + b) catch 0`.
+fn maybeInt(ok) { return ok ? 10 : 0; }
+assertEq(maybeInt(true) + 5 catch 0, 15);
+
+// A runtime *panic* is not an error value, so `catch` does not swallow it:
+// `error("a") + 1` raises before the fallback is considered. `catch` only
+// recovers values built with `error(...)`, which is what `pcall`-style code
+// produces. (This is exercised in the C++ tests, not here.)
+
+// It is left-associative: the first fallback that is not an error wins.
+assertEq(error("a") catch error("b") catch 99, 99);
+assertEq(error("a") catch 5 catch error("unused"), 5);
+
+// --- try: propagation -----------------------------------------------------
+
+// A failed `try` makes the enclosing function return the error value.
+fn inner() { return error("boom", 7); }
+fn outer() {
+  let x = try inner();
+  return x + 1;  // never reached: the error is returned instead
+}
+let propagated = outer();
+assertEq(isError(propagated), true);
+assertEq(propagated.message, "boom");
+assertEq(propagated.code, 7);
+
+// A successful `try` yields the operand unchanged and execution continues.
+fn good() { return 5; }
+fn useGood() {
+  let v = try good();
+  return v * 2;
+}
+assertEq(useGood(), 10);
+
+// `try` on a non-error value is a no-op, like `?` on a payload.
+fn nonError() {
+  let v = try 42;
+  return v;
+}
+assertEq(nonError(), 42);
+
+// A non-tail `try` propagates from the middle of the body too.
+fn middle() {
+  let a = try good();
+  let b = try inner();   // fails here
+  return a + b;          // never reached
+}
+assertEq(isError(middle()), true);
+
+// `try` can be used inline as an argument.
+fn sum(a, b) { return a + b; }
+fn inlineTry() { return sum(try good(), 1); }
+assertEq(inlineTry(), 6);
+
+// --- try + catch together ------------------------------------------------
+
+// `catch` recovers locally, so a propagated error can be caught at the call
+// site instead of aborting.
+fn needsCatch() { return error("recovered"); }
+fn caller() { return try needsCatch(); }
+assertEq((caller() catch 0), 0);
+
+// `catch` replaces the failed value with the fallback, and further operations
+// see the fallback: here the fallback is itself an error value, so `.message`
+// reads "fallback", not "bad".
+fn withMessage() { return error("bad", 2); }
+let message = (withMessage() catch error("fallback")).message;
+assertEq(message, "fallback");
+
+// --- defer still runs on the propagation path -----------------------------
+
+// A propagating `try` leaves the function like a `return`, so deferred blocks
+// run (LIFO) before the caller sees the error.
+let order = [];
+fn withDefer() {
+  defer { order.push("cleanup"); }
+  let x = try inner();
+  return x;
+}
+assertEq(isError(withDefer()), true);
+assertEq(order, ["cleanup"]);
+
+// --- misuse fails at compile time -----------------------------------------
+
+// `try` needs a function to return from. This is caught by the compiler, so it
+// is exercised in the C++ tests (parser/compiler), not here.
+print("ok");

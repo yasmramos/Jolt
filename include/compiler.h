@@ -209,6 +209,11 @@ class Compiler {
   // `break`/`continue` that would leave the innermost defer boundary is
   // rejected; the whole stack is cleared while compiling a nested function.
   std::vector<DeferCtx> deferStack_;
+  // Set by `compileTry` when it emits the conditional `RETURN` of a `try`. It
+  // lets a trailing `return try f();` recover the normal return: the last
+  // instruction is a RETURN, but it only runs on the error path, so the
+  // "already returns" shortcut in `compileReturn` must not apply.
+  bool lastWasConditionalReturn_ = false;
 
   // Slots reserved for the direct declarations of the block currently being
   // compiled, keyed by the statement node. The pre-pass in `compileBlockBody`
@@ -333,6 +338,8 @@ class Compiler {
   int compileLambda(const LambdaExpr& lambda, int line, int col);
   int compileAssign(const AssignExpr& assign, int line, int col);
   int compileTernary(const TernaryExpr& expr);
+  int compileTry(const TryExpr& node, int line, int col);
+  int compileCatch(const CatchExpr& node, int line, int col);
   int compileCall(const CallExpr& call, int line, int col);
   int compileArray(const ArrayExpr& array);
   int compileMap(const MapExpr& map);

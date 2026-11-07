@@ -22,6 +22,7 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 11. [Ranges](#11-ranges)
 12. [Standard library](#12-standard-library)
 13. [Errors and diagnostics](#13-errors-and-diagnostics)
+    - [13.3 Propagating and recovering: `try` and `catch`](#133-propagating-and-recovering-try-and-catch)
 14. [REPL](#14-repl)
 15. [Command line](#15-command-line)
 16. [Known limitations](#16-known-limitations)
@@ -74,8 +75,9 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  case   const  continue  default  defer  else  false  fn  for  if  import
-in     let    native nil      return   struct switch true  var    while
+break  case   catch  const  continue  default  defer  else  false  fn  for  if
+import in     let    native nil       return   struct switch true  try  var
+while
 ```
 
 They cannot be used as names of variables, parameters or unquoted map keys.
@@ -449,7 +451,7 @@ From highest to lowest precedence:
 | --- | --- | --- |
 | 1 | `()` `[]` `.` `?.` `!!` | left |
 | 2 | `**` | right |
-| 3 | `!` `-` `+` `~` (unary) | right |
+| 3 | `!` `-` `+` `~` (unary) `try` (prefix) | right |
 | 4 | `*` `/` `%` | left |
 | 5 | `+` `-` | left |
 | 6 | `..` `..=` | left |
@@ -462,8 +464,9 @@ From highest to lowest precedence:
 | 13 | `&&` | left |
 | 14 | `\|\|` | left |
 | 15 | `??` | left |
-| 16 | `?:` | right |
-| 17 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
+| 16 | `catch` | left |
+| 17 | `?:` | right |
+| 18 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
 
 Notes:
 
@@ -472,6 +475,7 @@ Notes:
 - Ranges have higher precedence than shifts and comparisons: `2 in 1..5` is equivalent to `2 in (1..5)`.
 - Comparisons do not chain: `1 < 2 < 3` tries to compare a boolean with an integer and produces an error.
 - `??` binds looser than `||`: `a || b ?? c` groups as `(a || b) ?? c`.
+- `catch` binds looser than `??` and is left-associative: `a() catch b() catch c` recovers at the first failure (see §13.3).
 - `!!` is postfix and binds tightest, next to member access: `a?.b!!` asserts on the result of the access.
 - Because `!!` is a single token, prefix double negation is not available; write `!(!x)` where a double negation is needed.
 
@@ -1529,6 +1533,65 @@ data with the same field names.
 `panic(...)`. To catch a raised error use `pcall` (§13.1). Because errors are
 ordinary values, they can be stored, returned, compared and carried through
 containers like any other value.
+
+### 13.3 Propagating and recovering: `try` and `catch`
+
+`pcall` turns a raised error into a value, but it is awkward for the common
+case where a function wants to hand a failure back to its caller. Two
+operators cover that, and both work on error **values** (the result of
+`error(...)` or of a function that returns one):
+
+- **`try expr`** — if `expr` is an error value, the enclosing function returns
+  it immediately; otherwise `expr` is yielded unchanged. It is Rust's `?`.
+- **`expr catch default`** — if `expr` is an error value, the whole expression
+  is `default`; otherwise it is `expr`. It is Zig's `catch`.
+
+```jolt
+fn parse(s) {
+  if (len(s) == 0) { return error("empty input"); }
+  return 42;
+}
+
+// `catch` recovers locally, with a default.
+print(parse("") catch 0);     // 0
+print(parse("x") catch 0);    // 42
+
+// `try` propagates to the caller.
+fn double(s) {
+  let n = try parse(s);       // returns the error from `double` if parse fails
+  return n * 2;
+}
+let r = double("");           // the error value, not a crash
+print(isError(r));            // true
+print(r.message);             // empty input
+print(double("x"));           // 84
+```
+
+Precedence and associativity:
+
+- `try` is a prefix operator, binding like `-`, `!` and `~`, so `try f().x`
+  propagates the result of the member access.
+- `catch` binds looser than `??` and is left-associative, so
+  `a() catch b() catch c` recovers at the first failure, and `a + b catch 0`
+  is `(a + b) catch 0`.
+
+Both are pure sugar over `isError` plus a jump, so they add **no opcode**:
+`try` lowers to `CALL $isError` + `JMP_IF_FALSE` + `RETURN`, and `catch` to
+`CALL $isError` + `JMP_IF_FALSE` + `MOVE`.
+
+Two rules mirror `return`:
+
+- `try` needs a function to return from: it is a compile error outside a
+  function.
+- `try` is rejected inside a `defer` block, because the block is inlined at the
+  scope exit and returning from it would re-enter the teardown.
+
+A propagating `try` leaves the function like a `return`, so every `defer` in
+the function runs (LIFO) before the caller sees the error.
+
+`catch` only recovers error **values**. A raised runtime error (for example
+`1 / 0` or `panic(...)`) is not a value and is not caught by `catch`; use
+`pcall` (§13.1) to turn those into values.
 
 ---
 

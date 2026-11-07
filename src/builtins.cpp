@@ -1206,6 +1206,13 @@ void registerBuiltins(Runtime& in) {
     return Value(args[0].isError());
   });
 
+  // Private helper for `try`/`catch` (PHASE 6.7.3). Its own `$` name keeps the
+  // lowering working even if user code shadows the public `isError`.
+  in.addNative("$isError", [](Runtime& in, Args args) -> Value {
+    need(in, "$isError", args, 1);
+    return Value(args[0].isError());
+  });
+
   in.addNative("exit", [](Runtime& in, Args args) -> Value {
     needBetween(in, "exit", args, 0, 1);
     int code = args.empty() ? 0 : static_cast<int>(wantInt(in, "exit", args[0]));

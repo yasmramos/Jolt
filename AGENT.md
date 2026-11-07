@@ -434,10 +434,16 @@ Slices, each independently shippable:
   an error value in `result.error` instead of a string. There is no `.jolc`
   serializer in the tree, so serialization is out of scope. Tested by
   `tests/24_error_type.jolt` and the C++ `testErrorValues` in `vm_test.cpp`.
-- **6.7.3 `try expr catch default`** — prefix `try` (propagation) and postfix
+- **6.7.3 `try expr catch default` (done)** — prefix `try` (propagation) and postfix
   `catch` (local recovery), Zig-style. Prefix `try` is chosen over postfix `?`
   because `?` already starts the ternary `a ? b : c`. Compiles to
-  `CALL isError` + `JMP_IF_FALSE` + `RETURN`/`MOVE`: no new opcode.
+  `CALL isError` + `JMP_IF_FALSE` + `RETURN`/`MOVE`: no new opcode. `try` obeys
+  the `return` rules (a function is required, `defer` is rejected), runs the
+  deferred blocks on the propagation path, and its conditional `RETURN` is
+  tracked so a trailing `return try f();` still emits the normal return. The
+  hidden `$isError` helper keeps the lowering independent of a shadowed public
+  `isError`. Tested by `tests/25_try_catch.jolt`, the `try_*` error cases and
+  `testTryCatchBytecode`/`testTryCatchErrors` in `compiler_test.cpp`.
 - **6.7.4 unions `T | E`** — a real type lattice, not an extension of
   nullability (`T?` is a `bool`, and `string | nil` does not parse). `|` is
   accepted only in type position; in expression position it stays `BOR`.
@@ -567,7 +573,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
 Phase 6.6: ⬜ pending (FFI with C)
-Phase 6.7: 🔶 in progress (6.7.1 `pcall` and 6.7.2 `error` type done; 6.7.3 `try`/`catch`, 6.7.4 unions, 6.7.5 `@mustUse` pending)
+Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type and 6.7.3 `try`/`catch` done; 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)

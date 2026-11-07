@@ -985,7 +985,7 @@ ExprPtr Parser::parseAssignment() {
 
 ExprPtr Parser::parseTernary() {
   const Token& start = peek();
-  auto condition = parseNullCoalesce();
+  auto condition = parseCatch();
   if (match(Tok::Question)) {
     auto thenExpr = parseAssignment();
     consume(Tok::Colon, "expected ':' in ternary expression");
@@ -994,6 +994,21 @@ ExprPtr Parser::parseTernary() {
                     start.line, start.col);
   }
   return condition;
+}
+
+// `expr catch default` (PHASE 6.7.3). Binds looser than `??` so
+// `a ?? b catch c` recovers from the result of the coalescing, and
+// left-associatively so `a() catch b() catch c` recovers at the first
+// failure. The fallback is a full `??`-level expression, so a chained
+// `catch` groups to the left.
+ExprPtr Parser::parseCatch() {
+  auto lhs = parseNullCoalesce();
+  while (match(Tok::Catch)) {
+    const Token& op = previous();
+    auto rhs = parseNullCoalesce();
+    lhs = makeExpr(CatchExpr{std::move(lhs), std::move(rhs)}, op.line, op.col);
+  }
+  return lhs;
 }
 
 // `??` (null coalescing, PHASE 6.5). Binds looser than `||` so `a || b ?? c`
@@ -1149,6 +1164,14 @@ ExprPtr Parser::parsePower() {
 }
 
 ExprPtr Parser::parseUnary() {
+  // `try expr` (PHASE 6.7.3): prefix propagation. It binds like the other
+  // prefix operators (`-`, `!`, `~`), so it applies to the whole postfix
+  // operand: `try f().x` propagates the result of the member access.
+  if (check(Tok::Try)) {
+    const Token& op = advance();
+    auto operand = parseUnary();
+    return makeExpr(TryExpr{std::move(operand)}, op.line, op.col);
+  }
   if (check(Tok::Bang) || check(Tok::Minus) || check(Tok::Plus) || check(Tok::Tilde)) {
     const Token& op = advance();
     auto operand = parseUnary();

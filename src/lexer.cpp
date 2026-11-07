@@ -24,6 +24,7 @@ const Keyword kKeywords[] = {
     {"switch", Tok::Switch}, {"case", Tok::Case},     {"default", Tok::Default},
     {"defer", Tok::Defer},   {"struct", Tok::Struct},
     {"native", Tok::Native},
+    {"try", Tok::Try},       {"catch", Tok::Catch},
     {"true", Tok::True},
     {"false", Tok::False},   {"nil", Tok::Nil},
 };
