@@ -1,0 +1,48 @@
+// `ptr`/`cstring` runtime representation and marshalling builtins
+// (PHASE 6.6, slice B). A pointer is an opaque handle: the program never sees a
+// machine address, only a value it can pass to a native and read back. The
+// development engine owns the storage; the AOT backend lowers the same handles
+// to real C pointers.
+
+// A `cstring` is built from a Jolt string and reads back the same text.
+let s = cstring("hello");
+assertEq(type(s), "cstring");
+assertEq(cstr(s), "hello");
+assertEq(byteLen(s), 5);          // terminator not counted
+assertEq(loadByte(s, 0), 104);    // 'h'
+assertEq(loadByte(s, 4), 111);    // 'o'
+
+// A buffer is owned, zero-initialised storage that can be written.
+let b = buffer(4);
+assertEq(type(b), "ptr");
+assertEq(byteLen(b), 4);
+assertEq(loadByte(b, 0), 0);
+storeByte(b, 0, 65);              // 'A'
+storeByte(b, 3, 68);              // 'D'
+assertEq(loadByte(b, 0), 65);
+assertEq(loadByte(b, 3), 68);
+assertEq(cstr(b), "A\x00\x00D");
+
+// A `void *` handle is an opaque token: it round-trips through an integer but
+// cannot be dereferenced.
+let t = intToPtr(1234);
+assertEq(type(t), "ptr");
+assertEq(ptrToInt(t), 1234);
+
+// Pointers compare by identity (like functions), not by their contents.
+assertEq(s == s, true);
+assertEq(s == cstring("hello"), false);
+
+// `cstring` upcasts to `ptr`, so a function typed `ptr` accepts one.
+fn asVoid(p: ptr): ptr {
+  return p;
+}
+assertEq(type(asVoid(s)), "cstring");
+
+// Freeing a buffer drops its bytes; a later use is a clear error, not a wild
+// read. (The error case is exercised from the C++ suite; here we only check the
+// happy path leaves the value usable up to the free.)
+let tmp = buffer(2);
+free(tmp);
+
+print("ffi ptr ok");

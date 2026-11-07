@@ -1309,6 +1309,65 @@ void testErrorValuesAreNotConfusedWithMaps() {
   assert(!Value(lookalike).isError());
 }
 
+// ------------------------------------------------------------- FFI pointers
+
+void testFfiCStringRoundTrip() {
+  TEST_SCOPE();
+  Bytecode bytecode = compileSource(
+      "let s = cstring(\"hello\");\n"
+      "let t = cstr(s);\n"
+      "let n = byteLen(s);\n"
+      "let kind = type(s);\n");
+  VM vm;
+  registerBuiltins(vm);
+  runOrFail(vm, bytecode);
+  assert(requireGlobal(vm, "t").asStr() == "hello");
+  assert(requireGlobal(vm, "n").asInt() == 5);
+  assert(std::string(requireGlobal(vm, "kind").asStr()) == "cstring");
+  assert(requireGlobal(vm, "s").isPtr());
+}
+
+void testFfiBufferLoadStore() {
+  TEST_SCOPE();
+  Bytecode bytecode = compileSource(
+      "let b = buffer(4);\n"
+      "storeByte(b, 1, 65);\n"
+      "let v = loadByte(b, 1);\n"
+      "let n = byteLen(b);\n");
+  VM vm;
+  registerBuiltins(vm);
+  runOrFail(vm, bytecode);
+  assert(requireGlobal(vm, "v").asInt() == 65);
+  assert(requireGlobal(vm, "n").asInt() == 4);
+}
+
+void testFfiVoidTokenRoundTrip() {
+  TEST_SCOPE();
+  Bytecode bytecode = compileSource(
+      "let p = intToPtr(4096);\n"
+      "let token = ptrToInt(p);\n"
+      "let same = (p == p);\n"
+      "let distinct = (p == intToPtr(4096));\n");
+  VM vm;
+  registerBuiltins(vm);
+  runOrFail(vm, bytecode);
+  assert(requireGlobal(vm, "token").asInt() == 4096);
+  assert(requireGlobal(vm, "same").asBool());
+  // A distinct handle with the same token is not the same pointer.
+  assert(!requireGlobal(vm, "distinct").asBool());
+}
+
+void testFfiErrorsAreCleanRuntimeFailures() {
+  assert(runtimeError("loadByte(cstring(\"x\"), 9);").find("out of range") != std::string::npos);
+  assert(runtimeError("storeByte(cstring(\"x\"), 0, 65);").find("read-only") != std::string::npos);
+  assert(runtimeError("loadByte(1, 0);").find("expects a pointer") != std::string::npos);
+  assert(runtimeError("buffer(-1);").find("must not be negative") != std::string::npos);
+  assert(runtimeError("let p = buffer(2); free(p); loadByte(p, 0);").find("after it was freed") !=
+         std::string::npos);
+  assert(runtimeError("let p = buffer(2); free(p); free(p);").find("after it was freed") !=
+         std::string::npos);
+}
+
 }  // namespace
 
 int main() {
@@ -1387,6 +1446,10 @@ int main() {
   testVmRejectsAstFunctions();
   testErrorValues();
   testErrorValuesAreNotConfusedWithMaps();
+  testFfiCStringRoundTrip();
+  testFfiBufferLoadStore();
+  testFfiVoidTokenRoundTrip();
+  testFfiErrorsAreCleanRuntimeFailures();
 
   std::puts("vm tests passed");
   return 0;
