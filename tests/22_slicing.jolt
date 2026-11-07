@@ -1,0 +1,73 @@
+// Slicing syntax `obj[start:end]` for arrays and strings.
+//
+// A slice is a half-open copy `[start, end)`. Either bound may be omitted
+// (`obj[:]`, `obj[1:]`, `obj[:3]`); a negative bound counts from the end and
+// is clamped to the valid range, matching the `slice`/`substr` methods. The
+// result is always a new value: mutating it never touches the source.
+// Strings slice by UTF-8 character.
+
+// --- arrays ---------------------------------------------------------------
+
+let a = [10, 20, 30, 40, 50];
+
+assertEq(len(a[1:3]), 2);
+assertEq(a[1:3][0], 20);
+assertEq(a[1:3][1], 30);
+assertEq(len(a[:]), 5);
+assertEq(len(a[2:]), 3);
+assertEq(a[2:][0], 30);
+assertEq(len(a[:3]), 3);
+assertEq(a[:3][2], 30);
+assertEq(len(a[1:1]), 0);
+
+// Negative bounds count from the end.
+assertEq(len(a[-2:]), 2);
+assertEq(a[-2:][0], 40);
+assertEq(len(a[:-1]), 4);
+assertEq(a[:-1][3], 40);
+
+// Out-of-range bounds are clamped; an inverted range is empty.
+assertEq(len(a[5:9]), 0);
+assertEq(len(a[-9:2]), 2);
+assertEq(len(a[3:1]), 0);
+
+// A slice is a copy, not a view.
+let b = a[0:2];
+b[0] = 999;
+assertEq(a[0], 10);
+assertEq(b[0], 999);
+
+// --- strings (UTF-8) ------------------------------------------------------
+
+let s = "hello";
+assertEq(s[1:3], "el");
+assertEq(s[:2], "he");
+assertEq(s[2:], "llo");
+assertEq(s[-2:], "lo");
+assertEq(s[:-1], "hell");
+assertEq(s[:], "hello");
+assertEq(s[1:1], "");
+
+let u = "café😀";
+assertEq(u[0:4], "café");
+assertEq(len(u[0:3]), 3);
+assertEq(u[-2:], "é😀");
+
+// --- slices compose with the rest of the expression grammar ---------------
+
+let grid = [[1, 2, 3], [4, 5, 6]];
+assertEq(grid[0][1:][0], 2);
+assertEq("abcdef"[1:4], "bcd");
+assertEq(s[0:5][1:3], "el");
+
+let start = 1;
+let end = 4;
+assertEq(s[start:end], "ell");
+assertEq(len(a[start + 1:end]), 2);
+
+// --- indexing is unchanged ------------------------------------------------
+
+assertEq(a[1], 20);
+assertEq(s[0], "h");
+
+print("ok");

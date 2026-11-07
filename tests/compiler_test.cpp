@@ -844,6 +844,31 @@ void testSafeMemberBytecode() {
   expectCompileError("a?.b = 1;\n", "safe member assignment");
 }
 
+void testSliceBytecode() {
+  // `a[start:end]` lowers to a call to the hidden `$slice` helper, so slicing
+  // adds no opcode to the budget (§3.3).
+  Bytecode bc = compileSource("let x = [1, 2, 3][0:2];\n");
+  bool sawGetGlobalSlice = false;
+  for (const Instruction& instruction : bc.code) {
+    if (instruction.op == OpCode::GETGLOBAL) {
+      const Value& name = bc.constants[static_cast<size_t>(instruction.b)];
+      if (name.isStr() && name.asStr() == "$slice") sawGetGlobalSlice = true;
+    }
+  }
+  assert(sawGetGlobalSlice && "slicing must call the $slice helper");
+
+  // Every form parses and compiles; an omitted bound passes nil.
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[:];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[1:];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[:2];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[0:2];\n");
+  expectCompiles("let s = \"hello\";\nlet t = s[1:3];\n");
+
+  // A slice is read-only and there is no step.
+  expectCompileError("let a = [1, 2, 3];\na[0:1] = [9];\n", "assignment to a slice");
+  expectCompileError("let a = [1, 2, 3];\nlet b = a[0:2:1];\n", "slice step");
+}
+
 void testNonNullBytecode() {
   // `a!!` lowers to a call to the hidden `$nonNull` helper (no new opcode).
   Bytecode bc = compileSource("let x = a!!;\n");
@@ -1002,6 +1027,7 @@ int main() {
   testNullCoalesceBytecode();
   testSafeMemberBytecode();
   testNonNullBytecode();
+  testSliceBytecode();
   testStructDeclEmitsNoBytecode();
   testStructLiteralLowersToTable();
   testStructErrors();

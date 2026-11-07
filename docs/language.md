@@ -1056,6 +1056,21 @@ numbers[0] = 10;
 numbers.push(4);
 ```
 
+A slice `a[start:end]` returns a new array with the half-open range
+`[start, end)`. Either bound may be omitted (`a[:]`, `a[2:]`, `a[:3]`);
+negative bounds count from the end and are clamped to the size, exactly like
+the `slice` method. A slice is a copy, so mutating it never touches the
+source, and it is not an assignment target.
+
+```jolt
+let a = [10, 20, 30, 40, 50];
+assertEq(a[1:3], [20, 30]);
+assertEq(a[2:], [30, 40, 50]);
+assertEq(a[:2], [10, 20]);
+assertEq(a[-2:], [40, 50]);
+assertEq(a[:], a);
+```
+
 ### 8.2 Members
 
 `array.length` returns the number of elements. `len(array)` does the same.
@@ -1120,7 +1135,15 @@ assertEq(s[-1], "é");
 
 An out-of-range index is an error. You cannot assign to a string index.
 
-There is no slicing syntax (`s[1:3]`); use `substr`, `split`, etc.
+Strings also support slicing by code point, with the same rules as arrays
+(bounds omitted, negatives counted from the end, clamped):
+
+```jolt
+let s = "hello";
+assertEq(s[1:3], "el");
+assertEq(s[2:], "llo");
+assertEq(s[:-1], "hell");
+```
 
 ### 9.1 String methods
 
@@ -1537,7 +1560,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
 - `for ... in` does not accept parentheses around the variable and the iterable.
-- No slicing syntax for strings or arrays; methods such as `substr` and `slice` are used.
+- Slicing syntax `s[start:end]` works for strings and arrays (see §8.1 and §9); there is no step (`s[start:end:step]`), and the methods `substr`/`slice` remain available.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.

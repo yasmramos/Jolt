@@ -173,6 +173,18 @@ struct IndexExpr {
   ExprPtr index;
 };
 
+// `obj[start:end]` (slicing syntax): a half-open copy `[start, end)`. Either
+// bound may be omitted (`obj[:]`, `obj[1:]`, `obj[:3]`), which is represented
+// as a null `start`/`end`; a negative bound counts from the end and is clamped
+// to the valid range, exactly like the `slice`/`substr` methods. It is
+// read-only (not an assignment target) and compiles to one `$slice` helper
+// call, so it adds no opcode.
+struct SliceExpr {
+  ExprPtr object;
+  ExprPtr start;
+  ExprPtr end;
+};
+
 struct MemberExpr {
   ExprPtr object;
   std::string name;
@@ -211,7 +223,7 @@ struct LambdaExpr {
 
 using ExprNode =
     std::variant<LiteralExpr, InterpExpr, VariableExpr, ArrayExpr, MapExpr, StructLitExpr,
-                 UnaryExpr, BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr,
+                 UnaryExpr, BinaryExpr, AssignExpr, TernaryExpr, CallExpr, IndexExpr, SliceExpr,
                  MemberExpr, NonNullExpr, RangeExpr, LambdaExpr>;
 
 struct Expr {

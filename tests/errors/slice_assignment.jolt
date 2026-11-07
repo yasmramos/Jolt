@@ -1,0 +1,5 @@
+// expect-exit: 65
+// A slice is a read-only copy, never an assignment target.
+
+let s = "hello";
+s[1:3] = "x";
