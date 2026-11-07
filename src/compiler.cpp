@@ -215,6 +215,9 @@ int Compiler::addConstant(const Value& value) {
 int Compiler::addString(const std::string& value) { return addConstant(Value(value)); }
 
 int Compiler::emit(OpCode op, int a, int b, int c) {
+  // Any ordinary emission invalidates a previous conditional `RETURN`: it is
+  // only "the last instruction" until something else is emitted.
+  lastWasConditionalReturn_ = false;
   Instruction instruction;
   instruction.op = op;
   instruction.a = a;
@@ -464,6 +467,18 @@ TypeRef Compiler::inferExprType(const Expr& expr) const {
       return left;
     }
   }
+  // `try e` (PHASE 6.7.3): on the error path the function returns immediately,
+  // so the value's type on the success path is the operand's. Propagating it
+  // keeps `let x: int = try f();` checked when `f` is a declared `native fn`.
+  if (const auto* attempt = std::get_if<TryExpr>(&expr.node)) {
+    return inferExprType(*attempt->operand);
+  }
+  // `e catch d` (PHASE 6.7.3): the result is either the operand or the
+  // fallback. Without the union types of PHASE 6.7.4 there is no type to give
+  // it, so it stays unknown and no assignment check is applied.
+  if (std::holds_alternative<CatchExpr>(expr.node)) {
+    return TypeRef{};
+  }
   // A call to a declared `native fn` has its declared return type, so
   // `let y: float = sqrt(x)` is checked like any other annotated binding.
   if (const auto* call = std::get_if<CallExpr>(&expr.node)) {
@@ -489,6 +504,7 @@ void Compiler::resetChunk(const std::string& name) {
   funcStack_.clear();
   currentUpvalueNames_.clear();
   currentReturnType_ = TypeRef{};
+  lastWasConditionalReturn_ = false;
   predeclaredLetSlots_.clear();
   predeclaredFnSlots_.clear();
   inFunction_ = false;
@@ -1446,7 +1462,7 @@ void Compiler::compileReturn(const ReturnStmt& stmt) {
   // consistent: a duplicate RETURN would pop the caller's frame too (PHASE 6b).
   const bool alreadyReturns = !bc_.code.empty() &&
                               bc_.code.back().op == OpCode::RETURN &&
-                              bc_.code.back().a == reg;
+                              bc_.code.back().a == reg && !lastWasConditionalReturn_;
   if (!alreadyReturns) emit(OpCode::RETURN, reg);
   freeReg();
 }
@@ -2009,6 +2025,45 @@ int Compiler::compileTernary(const TernaryExpr& ternary) {
   return result;
 }
 
+int Compiler::compileTry(const TryExpr& node, int line, int col) {
+  // `try` propagates by returning the error from the enclosing function, so it
+  // obeys the same rules as `return`: it needs a function to return from, and
+  // it is rejected inside a `defer` block (the deferred body is inlined at the
+  // scope exit, so returning from it could re-enter the teardown).
+  if (!inFunction_) fail("'try' outside of a function", line, col);
+  if (!deferStack_.empty()) {
+    fail("'try' is not allowed inside a 'defer' block", line, col);
+  }
+
+  int result = compileExpr(*node.operand);
+  int failed = compileHelperCall("$isError", {result}, line, col);
+  // On success the operand is already in `result` and the jump skips the
+  // propagation, so a `try` costs one call and one conditional jump.
+  int skip = emitJump(OpCode::JMP_IF_FALSE, failed);
+  freeReg();  // the helper's result register
+  // Leaving the function exits every scope in it, so every deferred block runs
+  // (LIFO) before the RETURN, exactly as for an explicit `return`.
+  emitDeferredBlocks(1);
+  emit(OpCode::RETURN, result);
+  patchJump(skip, currentOffset());
+  lastWasConditionalReturn_ = true;
+  return result;
+}
+
+int Compiler::compileCatch(const CatchExpr& node, int line, int col) {
+  int result = compileExpr(*node.operand);
+  int failed = compileHelperCall("$isError", {result}, line, col);
+  // The fallback is compiled only into the failure branch; on success the jump
+  // skips it and `result` (already the operand) is returned.
+  int skip = emitJump(OpCode::JMP_IF_FALSE, failed);
+  int fallback = compileExpr(*node.fallback);
+  emit(OpCode::MOVE, result, fallback);
+  freeReg();  // the fallback register
+  freeReg();  // the helper's result register
+  patchJump(skip, currentOffset());
+  return result;
+}
+
 int Compiler::compileHelperCall(const std::string& helper, const std::vector<int>& args,
                                 int line, int col) {
   // Hidden helper names contain `$`, which the lexer never accepts in an
@@ -2324,6 +2379,8 @@ int Compiler::compileExpr(const Expr& expr) {
           [&](const RangeExpr& range) -> int {
             return compileRange(range, expr.line, expr.col);
           },
+          [&](const TryExpr& node) -> int { return compileTry(node, expr.line, expr.col); },
+          [&](const CatchExpr& node) -> int { return compileCatch(node, expr.line, expr.col); },
           [&](const auto&) -> int {
             fail("this expression is not supported by the bytecode compiler yet (Phase 6)",
                  expr.line, expr.col);

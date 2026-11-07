@@ -1,0 +1,10 @@
+// expect-exit: 65
+// A `try` inside a `defer` block is rejected: the block is inlined at the scope
+// exit, so returning from it would re-enter the teardown. This is the same rule
+// that forbids `return` inside `defer`.
+
+fn f() {
+  defer { let x = try 5; }
+  return 1;
+}
+print(f());

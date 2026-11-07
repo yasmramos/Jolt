@@ -1,0 +1,5 @@
+// expect-exit: 65
+// `try` propagates by returning the error from the enclosing function, so it
+// is only valid inside a function (like `return`).
+
+let x = try 5;
