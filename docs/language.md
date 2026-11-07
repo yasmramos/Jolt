@@ -1416,6 +1416,7 @@ assertEq(sqrt(81), 9.0);
 | `assert(condition, message?)` | Fails if the condition is falsy. |
 | `assertEq(expected, actual, message?)` | Fails if they are not equal. |
 | `panic(message?)` | Raises a runtime error. |
+| `pcall(fn, args...)` | Calls `fn` and turns a runtime error into a value (see §13.1). |
 | `exit(code?)` | Ends the process with the given code (0 by default). |
 
 `assertEq` follows the order `expected, actual` and adds both values to the error message.
@@ -1452,6 +1453,34 @@ Process exit codes:
 | other | Code given to `exit(n)`. |
 
 `jolt -c file.jolt` only checks the lexer and the parser; it does not run the program.
+
+### 13.1 Recovering from an error: `pcall`
+
+`pcall(fn, args...)` calls `fn` with the remaining arguments and turns a
+runtime error into a value instead of aborting the program. It returns a map
+`{ok, value, error}`:
+
+- on success, `ok` is `true`, `value` is the return value and `error` is `nil`;
+- on failure, `ok` is `false`, `value` is `nil` and `error` is the message.
+
+```jolt
+let result = pcall(() => 1 / 0);
+if (!result.ok) {
+  print("failed: ${result.error}");   // failed: division by zero
+}
+
+// Arguments are forwarded to the callee.
+let sum = pcall((a, b) => a + b, 2, 3);
+print(sum.value);                     // 5
+```
+
+Every runtime error is catchable, including `panic(...)`, an out-of-range
+index, an undefined variable and an error raised deep in the call stack. After
+`pcall` returns, the program keeps running and the engine stays consistent.
+
+`pcall` is a function, not a keyword, so it compiles to an ordinary call: no
+new syntax and no new bytecode. Passing a non-function as the first argument is
+a caller bug, not a catchable error, and fails loudly.
 
 ---
 
@@ -1550,7 +1579,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Dynamic typing. The `jolt` executable compiles source to bytecode and runs it on the register-based VM; the AST is never executed. The compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 - No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
-- No `try`/`catch` or exceptions. Error handling uses `nil` (not found) + `panic()` (unrecoverable). There are no plans to add exceptions.
+- No `try`/`catch` or catchable exceptions. Error handling uses `nil` (not found), `pcall(fn, ...)` for recoverable runtime errors (see §13.1) and `panic()` for unrecoverable ones. There are no plans to add catchable exceptions; `pcall` and errors as values are the model.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.

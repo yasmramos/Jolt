@@ -1,0 +1,83 @@
+// PHASE 6.7 slice 1: `pcall` turns a runtime error into a value.
+//
+// `pcall(fn, args...)` calls `fn` and returns a map `{ok, value, error}`:
+// on success `ok` is true, `value` holds the return value and `error` is
+// nil; on failure `ok` is false, `value` is nil and `error` is the message.
+// The program keeps running after a caught error.
+
+// --- success --------------------------------------------------------------
+
+let ok = pcall(() => 21 * 2);
+assertEq(ok.ok, true);
+assertEq(ok.value, 42);
+assertEq(ok.error, nil);
+
+// Arguments are forwarded to the callee.
+let add = (a, b) => a + b;
+assertEq(pcall(add, 2, 3).value, 5);
+
+// A function that returns nil is still a success.
+let nothing = pcall(() => nil);
+assertEq(nothing.ok, true);
+assertEq(nothing.value, nil);
+
+// --- failure --------------------------------------------------------------
+
+let bad = pcall(() => 1 / 0);
+assertEq(bad.ok, false);
+assertEq(bad.value, nil);
+assertEq(bad.error, "division by zero");
+
+// `panic` is caught the same way as any other runtime error.
+assertEq(pcall(() => panic("boom")).error, "boom");
+
+// Other runtime errors are caught too.
+assertEq(pcall(() => [1, 2][9]).ok, false);
+assertEq(pcall(() => missingName).ok, false);
+assertEq(pcall(() => "x" + 1).ok, false);
+
+// --- the program continues after a caught error ---------------------------
+
+let after = pcall(() => 1 / 0);
+assertEq(after.error, "division by zero");
+assertEq(2 + 2, 4);
+
+// The engine stays consistent: code after the catch runs normally.
+var sum = 0;
+for i in 0..100 {
+  sum = sum + i;
+}
+assertEq(sum, 4950);
+
+// A caught error inside a callback does not corrupt the container.
+let numbers = [1, 2, 3];
+let mapped = pcall(() => numbers.map(x => x / 0));
+assertEq(mapped.ok, false);
+assertEq(numbers.length, 3);
+assertEq(numbers[0], 1);
+
+// --- nesting and depth ----------------------------------------------------
+
+// A nested pcall reports the inner failure to the inner result.
+let nested = pcall(() => pcall(() => 1 / 0));
+assertEq(nested.ok, true);
+assertEq(nested.value.ok, false);
+assertEq(nested.value.error, "division by zero");
+
+// An error raised deep in the call stack unwinds and is caught at the top.
+fn deep(n) {
+  if (n == 0) {
+    return 1 / 0;
+  }
+  return deep(n - 1);
+}
+let unwound = pcall(deep, 50);
+assertEq(unwound.ok, false);
+assertEq(unwound.error, "division by zero");
+
+// --- misuse fails loudly --------------------------------------------------
+
+// A non-function first argument is a caller bug, not a catchable error.
+assertEq(pcall(() => pcall(5)).error, "pcall() expects a function as its first argument");
+
+print("ok");
