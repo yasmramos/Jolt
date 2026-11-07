@@ -144,5 +144,5 @@ class Parser {
   // Parses an optional `: <type>` annotation after a name (variable, parameter
   // or return type). Returns an empty TypeRef when no `:` is present. Rejects
   // unknown type names at parse time.
-  TypeRef parseTypeAnnotation();
+  TypeRef parseTypeAnnotation(bool allowVoid = false);
 };

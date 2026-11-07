@@ -44,13 +44,15 @@ struct Param {
 };
 
 // The primitive type names accepted in an annotation. `any` opts out of
-// checking. `float` also accepts an int (numeric widening). These names match
+// checking. `float` also accepts an int (numeric widening). `void` is a
+// return-only type (see `parseTypeAnnotation`). These names match
 // `Value::typeName()` so a runtime value and its annotation speak the same
 // vocabulary.
 inline bool isKnownTypeName(const std::string& name) {
   return name == "nil" || name == "bool" || name == "int" || name == "float" ||
          name == "double" || name == "string" || name == "error" || name == "array" ||
-         name == "map" || name == "function" || name == "range" || name == "any";
+         name == "map" || name == "function" || name == "range" || name == "void" ||
+         name == "any";
 }
 
 // Human-readable form of a type for diagnostics: `int`, `string?`, `any`.
