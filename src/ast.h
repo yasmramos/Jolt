@@ -49,8 +49,8 @@ struct Param {
 // vocabulary.
 inline bool isKnownTypeName(const std::string& name) {
   return name == "nil" || name == "bool" || name == "int" || name == "float" ||
-         name == "string" || name == "array" || name == "map" || name == "function" ||
-         name == "range" || name == "any";
+         name == "string" || name == "error" || name == "array" || name == "map" ||
+         name == "function" || name == "range" || name == "any";
 }
 
 // Human-readable form of a type for diagnostics: `int`, `string?`, `any`.

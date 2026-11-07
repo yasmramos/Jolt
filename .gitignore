@@ -37,3 +37,4 @@ build-fix/
 
 # Local cmake build directory
 cmake-build/
+build-stress/

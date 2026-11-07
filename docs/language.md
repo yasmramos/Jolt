@@ -160,6 +160,7 @@ Strings are UTF-8 and **immutable**. Length and index operations work on code po
 | `int` | 64-bit signed integers. | Arithmetic wraps around on overflow. |
 | `float` | IEEE 754 double-precision floating-point numbers. | Can be `inf`, `-inf` or `nan` as the result of operations. |
 | `string` | UTF-8 text. | Immutable. |
+| `error` | Error values built by `error(message, code?)`. | Immutable. Carries a `message` and an integer `code` (see §13.2). |
 | `array` | Ordered sequence of values. | Mutable and by reference. |
 | `map` | Collection of string keys. | Preserves insertion order. Mutable and by reference. |
 | `function` | Native or user-defined functions. | First-class citizens. |
@@ -188,6 +189,7 @@ if (0) {
 
 - `int` and `float` are compared numerically: `1 == 1.0` is `true`.
 - Strings are compared by content.
+- Errors are compared by content (message and code).
 - Arrays and maps are compared **structurally**, in depth.
 - Ranges compare start, end and inclusiveness.
 - Functions are compared by identity (the very same function).
@@ -285,6 +287,7 @@ let ok: bool = true;
 let items: array = [1, 2, 3];
 let table: map = {a: 1};
 let span: range = 0..10;
+let failure: error = error("not found", 404);
 
 fn add(a: int, b: int): int {
   return a + b;
@@ -292,8 +295,8 @@ fn add(a: int, b: int): int {
 ```
 
 The accepted type names are the primitives reported by `type()`: `nil`, `bool`,
-`int`, `float`, `string`, `array`, `map`, `function` and `range`, plus `any`.
-A name that is not one of these is a compile error.
+`int`, `float`, `string`, `error`, `array`, `map`, `function` and `range`, plus
+`any`. A name that is not one of these is a compile error.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -1417,6 +1420,8 @@ assertEq(sqrt(81), 9.0);
 | `assertEq(expected, actual, message?)` | Fails if they are not equal. |
 | `panic(message?)` | Raises a runtime error. |
 | `pcall(fn, args...)` | Calls `fn` and turns a runtime error into a value (see §13.1). |
+| `error(message, code?)` | Builds an error value (see §13.2). |
+| `isError(value)` | `true` only for an error value (see §13.2). |
 | `exit(code?)` | Ends the process with the given code (0 by default). |
 
 `assertEq` follows the order `expected, actual` and adds both values to the error message.
@@ -1461,17 +1466,19 @@ runtime error into a value instead of aborting the program. It returns a map
 `{ok, value, error}`:
 
 - on success, `ok` is `true`, `value` is the return value and `error` is `nil`;
-- on failure, `ok` is `false`, `value` is `nil` and `error` is the message.
+- on failure, `ok` is `false`, `value` is `nil` and `error` is an error value
+  (see §13.2).
 
 ```jolt
 let result = pcall(() => 1 / 0);
 if (!result.ok) {
-  print("failed: ${result.error}");   // failed: division by zero
+  print("failed: ${result.error}");            // failed: division by zero
+  print(result.error.code);                    // 0
 }
 
 // Arguments are forwarded to the callee.
 let sum = pcall((a, b) => a + b, 2, 3);
-print(sum.value);                     // 5
+print(sum.value);                              // 5
 ```
 
 Every runtime error is catchable, including `panic(...)`, an out-of-range
@@ -1481,6 +1488,35 @@ index, an undefined variable and an error raised deep in the call stack. After
 `pcall` is a function, not a keyword, so it compiles to an ordinary call: no
 new syntax and no new bytecode. Passing a non-function as the first argument is
 a caller bug, not a catchable error, and fails loudly.
+
+### 13.2 Errors as values
+
+An error is a first-class value with its own runtime type, not a map that
+happens to have the right shape. `error(message, code?)` builds one and
+`isError(value)` detects it:
+
+```jolt
+let failure = error("not found", 404);
+print(type(failure));        // error
+print(failure.message);      // not found
+print(failure.code);         // 404
+print("${failure}");         // not found
+print(isError(failure));     // true
+```
+
+The message is the display form, so `print(err)` and `"${err}"` render the
+text; `repr` shows the constructor form `error("not found", 404)`. Two errors
+are equal when their message and code match.
+
+`isError` is exact: a user map such as `{ok: false, error: "x"}` is never
+mistaken for an error. This is why the type exists instead of reusing a map —
+a helper that returns an error must be distinguishable from one that returns
+data with the same field names.
+
+`error(...)` builds a value; it does **not** raise. To abort the program use
+`panic(...)`. To catch a raised error use `pcall` (§13.1). Because errors are
+ordinary values, they can be stored, returned, compared and carried through
+containers like any other value.
 
 ---
 

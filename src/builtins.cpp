@@ -1134,9 +1134,10 @@ void registerBuiltins(Runtime& in) {
   // runtime error into a value instead of aborting the program. The result is
   // a map `{ok, value, error}`: on success `ok` is true, `value` is the return
   // value and `error` is nil; on failure `ok` is false, `value` is nil and
-  // `error` is the message. This is the value-based error handling of PHASE
-  // 6.7 slice 1: no new opcode, no new syntax, and it stays AOT-friendly (the
-  // freestanding runtime reports errors through the same call path).
+  // `error` is an error value (see `error`/`isError`). This is the value-based
+  // error handling of PHASE 6.7: no new opcode, no new syntax, and it stays
+  // AOT-friendly (the freestanding runtime reports errors through the same
+  // call path).
   //
   // The first argument must be a function: passing anything else is a bug in
   // the caller, so it fails loudly rather than returning `{ok: false}` and
@@ -1160,9 +1161,29 @@ void registerBuiltins(Runtime& in) {
       // the engine is consistent and the program continues normally.
       result->set("ok", Value(false));
       result->set("value", Value());
-      result->set("error", Value(error.message));
+      result->set("error", makeError(error.message));
     }
     return Value(result);
+  });
+
+  // `error(message, code?)` builds an error value: a distinct runtime type
+  // (`type(err) == "error"`) carrying a message and an integer code (0 by
+  // default). It does not raise; to raise, use `panic`. Errors are values, so
+  // they are returned, stored, compared and caught with `pcall` like any other
+  // value. `err.message` and `err.code` read the two fields, and `${err}` /
+  // `print(err)` render the message.
+  in.addNative("error", [](Runtime& in, Args args) -> Value {
+    needBetween(in, "error", args, 1, 2);
+    std::string message = args[0].isStr() ? args[0].asStr() : args[0].toString();
+    int64_t code = args.size() > 1 ? wantInt(in, "error", args[1], "code") : 0;
+    return makeError(std::move(message), code);
+  });
+
+  // `isError(value)` is true only for an error value. It is exact: a user map
+  // that happens to have an `ok` field is never mistaken for an error.
+  in.addNative("isError", [](Runtime& in, Args args) -> Value {
+    need(in, "isError", args, 1);
+    return Value(args[0].isError());
   });
 
   in.addNative("exit", [](Runtime& in, Args args) -> Value {
