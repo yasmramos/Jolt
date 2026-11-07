@@ -44,13 +44,40 @@ struct Param {
 };
 
 // The primitive type names accepted in an annotation. `any` opts out of
-// checking. `float` also accepts an int (numeric widening). These names match
+// checking. `float` also accepts an int (numeric widening). `void` is a
+// return-only type (see `parseTypeAnnotation`). These names match
 // `Value::typeName()` so a runtime value and its annotation speak the same
 // vocabulary.
 inline bool isKnownTypeName(const std::string& name) {
   return name == "nil" || name == "bool" || name == "int" || name == "float" ||
          name == "double" || name == "string" || name == "error" || name == "array" ||
-         name == "map" || name == "function" || name == "range" || name == "any";
+         name == "map" || name == "function" || name == "range" || name == "void" ||
+         name == "any" ||
+         // FFI scalar vocabulary (PHASE 6.6, compile-time only): pointers and
+         // fixed-width/unsigned integers, so a C signature can be spelled the
+         // way C spells it (`native fn strlen(s: cstring): size_t;`). They are
+         // erased before the bytecode; the runtime representation stays `int`
+         // (pointers are opaque handles). The width/signedness is honoured by
+         // the FFI marshalling, not by the VM.
+         name == "ptr" || name == "cstring" || name == "int8" || name == "int16" ||
+         name == "int32" || name == "int64" || name == "uint8" || name == "uint16" ||
+         name == "uint32" || name == "uint64" || name == "uint" || name == "size_t";
+}
+
+// Pointer-like types: an opaque handle (`ptr` == C `void*`) or a NUL-terminated
+// byte string (`cstring` == C `const char*`). `nil` is their NULL.
+inline bool isPointerTypeName(const std::string& name) {
+  return name == "ptr" || name == "cstring";
+}
+
+// Every integer spelling shares one numeric family at compile time: `int`
+// (64-bit signed) plus the FFI widths. The runtime holds an `int64`, so they
+// are mutually assignable; the annotation only records the width/signedness
+// the FFI layer will use when it marshals the value.
+inline bool isIntegerTypeName(const std::string& name) {
+  return name == "int" || name == "int8" || name == "int16" || name == "int32" ||
+         name == "int64" || name == "uint8" || name == "uint16" || name == "uint32" ||
+         name == "uint64" || name == "uint" || name == "size_t";
 }
 
 // Human-readable form of a type for diagnostics: `int`, `string?`, `any`.

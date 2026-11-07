@@ -1,0 +1,3 @@
+// expect-exit: 65
+// `void` is a return type only: a variable, parameter or field cannot be void.
+let x: void = nil;

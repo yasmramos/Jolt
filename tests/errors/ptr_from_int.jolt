@@ -1,0 +1,3 @@
+// expect-exit: 65
+// A pointer is an opaque handle: an integer is not implicitly a `ptr`.
+let x: ptr = 5;
