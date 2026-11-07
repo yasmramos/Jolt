@@ -1449,8 +1449,10 @@ program: a `let` stays immutable, a `var` keeps its type annotation, a
 once. Redefining a name in a later entry is allowed and replaces the old
 binding. An entry that fails to compile leaves no trace: it commits nothing,
 so an import it started can be imported again cleanly. `:clear` drops the
-whole session state with the definitions. A file (`jolt file.jolt`, `:load`)
-always starts from an empty session.
+whole session state with the definitions. A file run directly (`jolt
+file.jolt`) always starts from an empty session; `:load` instead runs the file
+in the current session, so it sees the session's definitions and merges its
+own into it.
 
 Commands:
 

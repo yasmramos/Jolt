@@ -514,7 +514,14 @@ void Compiler::clearSession() {
 Bytecode Compiler::compile(const StmtPtr& program) {
   clearSession();
   resetChunk();
+  return compileTopLevelBody(program);
+}
 
+// The shared body of `compile` and `compileLoaded`: compiles a program in the
+// global scope (its `let`s are globals) with the session state the caller has
+// already set up. The caller owns `resetChunk`/`clearSession` and the import
+// loader, so the two entry points differ only in what session they present.
+Bytecode Compiler::compileTopLevelBody(const StmtPtr& program) {
   if (!program) fail("empty program", 1, 1);
 
   // The main chunk uses the global scope: its `let`s are globals, as in the
@@ -572,29 +579,62 @@ Bytecode Compiler::compileRepl(const StmtPtr& program) {
   // that materializes an import and then fails would leave that import marked
   // as bound although its bytecode never ran, and the next entry would see a
   // module that is not there.
-  auto savedConsts = globalConsts_;
-  auto savedUserGlobals = userGlobals_;
-  auto savedTypes = globalTypes_;
-  auto savedStructs = structDefs_;
-  auto savedNatives = nativeSigs_;
-  auto savedLoaded = loadedModules_;
-  auto savedMaterialized = materializedModules_;
-  auto savedNamespaces = namespaces_;
-  auto savedBound = boundImports_;
-  auto savedWildcards = wildcardBindings_;
+  SessionSnapshot saved = snapshotSession();
   try {
     return compileReplEntry(program);
   } catch (...) {
-    globalConsts_ = std::move(savedConsts);
-    userGlobals_ = std::move(savedUserGlobals);
-    globalTypes_ = std::move(savedTypes);
-    structDefs_ = std::move(savedStructs);
-    nativeSigs_ = std::move(savedNatives);
-    loadedModules_ = std::move(savedLoaded);
-    materializedModules_ = std::move(savedMaterialized);
-    namespaces_ = std::move(savedNamespaces);
-    boundImports_ = std::move(savedBound);
-    wildcardBindings_ = std::move(savedWildcards);
+    restoreSession(std::move(saved));
+    throw;
+  }
+}
+
+Compiler::SessionSnapshot Compiler::snapshotSession() const {
+  SessionSnapshot snapshot;
+  snapshot.globalConsts = globalConsts_;
+  snapshot.userGlobals = userGlobals_;
+  snapshot.globalTypes = globalTypes_;
+  snapshot.structDefs = structDefs_;
+  snapshot.nativeSigs = nativeSigs_;
+  snapshot.loadedModules = loadedModules_;
+  snapshot.materializedModules = materializedModules_;
+  snapshot.namespaces = namespaces_;
+  snapshot.boundImports = boundImports_;
+  snapshot.wildcardBindings = wildcardBindings_;
+  return snapshot;
+}
+
+void Compiler::restoreSession(SessionSnapshot snapshot) {
+  globalConsts_ = std::move(snapshot.globalConsts);
+  userGlobals_ = std::move(snapshot.userGlobals);
+  globalTypes_ = std::move(snapshot.globalTypes);
+  structDefs_ = std::move(snapshot.structDefs);
+  nativeSigs_ = std::move(snapshot.nativeSigs);
+  loadedModules_ = std::move(snapshot.loadedModules);
+  materializedModules_ = std::move(snapshot.materializedModules);
+  namespaces_ = std::move(snapshot.namespaces);
+  boundImports_ = std::move(snapshot.boundImports);
+  wildcardBindings_ = std::move(snapshot.wildcardBindings);
+}
+
+Bytecode Compiler::compileLoaded(const StmtPtr& program, ImportLoader loader,
+                                 const std::string& name) {
+  // A loaded file runs in the current session: it sees the session's structs,
+  // types and imports, and the definitions it adds stay for later entries,
+  // unlike `compile` which starts clean. Only the file's own import loader is
+  // swapped in (so its imports resolve relative to the file) and restored
+  // afterwards. The session is snapshotted first so a file that fails to
+  // compile leaves the session untouched, exactly like a failed REPL entry.
+  SessionSnapshot saved = snapshotSession();
+  ImportLoader savedLoader = std::move(importLoader_);
+  importLoader_ = std::move(loader);
+  try {
+    resetChunk(name);
+    Bytecode result = compileTopLevelBody(program);
+    importLoader_ = std::move(savedLoader);
+    return result;
+  } catch (...) {
+    importLoader_ = std::move(savedLoader);
+    restoreSession(std::move(saved));
     throw;
   }
 }

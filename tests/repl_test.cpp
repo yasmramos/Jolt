@@ -50,6 +50,17 @@ struct ReplSession {
     return vm.run(bytecode);
   }
 
+  // Simulates `:load`: the file runs in the current session (it sees the
+  // session's structs, types and imports) and merges its definitions into it.
+  // `loader` resolves the file's own imports; the default resolves none.
+  Value loadFile(const std::string& source,
+                 Compiler::ImportLoader loader = Compiler::ImportLoader{}) {
+    Parser parser(lex(source), "<load>");
+    parser.seedStructNames(compiler.structNames());
+    Bytecode bytecode = compiler.compileLoaded(parser.parseProgram(), std::move(loader), "<load>");
+    return vm.run(bytecode);
+  }
+
   long globalInt(const std::string& name) const {
     const Value* value = vm.findGlobal(name);
     return value != nullptr && value->isInt() ? value->asInt() : -1;
@@ -145,7 +156,7 @@ static void testFailedEntryDoesNotPoisonSession() {
 
 static void testSessionIsPerCompiler() {
   // The session state belongs to one compiler. A fresh one starts clean, which
-  // is what makes a file (and `:load`) independent of the REPL.
+  // is what makes a standalone file independent of the REPL.
   ReplSession session;
   session.entry("let x = 1;");
   Compiler fresh;
@@ -174,6 +185,82 @@ static void testClearSessionForgets() {
   }
   check(!threw, "after clearSession a name can be redeclared as a mutable binding");
   check(session.globalInt("x") == 2, "the new binding after clearSession takes effect");
+}
+
+static void testLoadMergesSessionState() {
+  // `:load` runs a file *in the current session*: the file sees the session's
+  // definitions and merges its own into it. A `let` it declares stays
+  // immutable for later entries, as in a single file.
+  ReplSession session;
+  session.loadFile("let z = 10;");
+  check(session.globalInt("z") == 10, "a loaded file defines a global");
+  bool threw = false;
+  try {
+    session.entry("z = 20;");
+  } catch (const CompileError&) {
+    threw = true;
+  }
+  check(threw, "a `let` from a loaded file is immutable in a later entry");
+  check(session.globalInt("z") == 10, "the rejected assignment left `z` at 10");
+}
+
+static void testLoadSeesSessionTypes() {
+  // The file sees the session's type annotations, and its own merge back.
+  ReplSession session;
+  session.entry("var n: int = 1;");
+  bool threw = false;
+  try {
+    session.loadFile("n = \"hola\";");
+  } catch (const CompileError&) {
+    threw = true;
+  }
+  check(threw, "a loaded file is checked against the session's types");
+}
+
+static void testLoadSeesSessionStructs() {
+  // A struct declared by an earlier entry is usable as a literal in the file,
+  // and a struct declared by the file is usable by a later entry.
+  ReplSession session;
+  session.entry("struct Point { x: int; y: int; }");
+  session.loadFile("let p = Point { x: 3, y: 4 };");
+  check(session.fieldInt("p", "y") == 4, "a loaded file sees the session's structs");
+  session.loadFile("struct Vec { x: int; y: int; }");
+  session.entry("let v = Vec { x: 1, y: 2 };");
+  check(session.fieldInt("v", "x") == 1, "a struct from a loaded file reaches later entries");
+}
+
+static void testLoadSharesModuleCache() {
+  // A module imported by a loaded file is compiled once; a later entry that
+  // imports it reuses the same body instead of running it again.
+  ReplSession session;
+  auto loader = [](const std::string& path, int line, int col) -> StmtPtr {
+    if (path == "load.mod") {
+      return Parser(lex("runs = runs + 1;\nfn bump() { return runs; }\n"), "<mod>").parseProgram();
+    }
+    throw CompileError{"module '" + path + "' not found", line, col};
+  };
+  session.entry("let runs = 0;");
+  session.loadFile("import load.mod;", loader);
+  check(session.globalInt("runs") == 1, "a loaded file imports a module once");
+  session.entry("import load.mod;");
+  check(session.globalInt("runs") == 1, "a later entry reuses the module body, not re-runs it");
+}
+
+static void testFailedLoadDoesNotPoisonSession() {
+  // A file that fails to compile leaves the session untouched, exactly like a
+  // failed REPL entry: the definitions it started are not committed.
+  ReplSession session;
+  session.entry("let x = 1;");
+  bool threw = false;
+  try {
+    session.loadFile("let y: int = \"hola\";");
+  } catch (const CompileError&) {
+    threw = true;
+  }
+  check(threw, "the failing file is reported");
+  // `y` was not committed, so a later entry can declare it freely.
+  session.entry("let y = 2;");
+  check(session.globalInt("y") == 2, "a failed load commits nothing");
 }
 
 static void testLoadPreservesGlobals() {
@@ -255,6 +342,11 @@ int main() {
   testFailedEntryDoesNotPoisonSession();
   testSessionIsPerCompiler();
   testClearSessionForgets();
+  testLoadMergesSessionState();
+  testLoadSeesSessionTypes();
+  testLoadSeesSessionStructs();
+  testLoadSharesModuleCache();
+  testFailedLoadDoesNotPoisonSession();
   if (g_failures != 0) {
     std::printf("%d test(s) failed\n", g_failures);
     return 1;

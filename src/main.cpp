@@ -296,13 +296,15 @@ bool handleCommand(VM &vm, Compiler &compiler, const std::string &command,
       std::cout << "cannot read file '" << path << "'\n";
       return false;
     }
-    // `:load` compiles the file against its own directory, so its imports
-    // resolve relative to the file, not to the REPL's working directory.
+    // `:load` runs the file *in the current session*: it sees the session's
+    // structs, types and imports, and its own definitions persist for later
+    // entries. Its imports still resolve relative to the file, so the file's
+    // loader is used only for this call.
     try {
-      Compiler loader;
-      loader.setImportLoader(makeImportLoader(resolverFor(path, argv0)));
       Parser parser(lex(source), path);
-      Bytecode bytecode = loader.compile(parser.parseProgram());
+      parser.seedStructNames(compiler.structNames());
+      Bytecode bytecode = compiler.compileLoaded(
+          parser.parseProgram(), makeImportLoader(resolverFor(path, argv0)), path);
       vm.run(bytecode);
     } catch (const CompileError &error) {
       printCompileError(path, source, error, platformPosix());
