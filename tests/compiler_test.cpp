@@ -1113,10 +1113,13 @@ void testSliceBytecode() {
   expectCompiles("let a = [1, 2, 3];\nlet b = a[:2];\n");
   expectCompiles("let a = [1, 2, 3];\nlet b = a[0:2];\n");
   expectCompiles("let s = \"hello\";\nlet t = s[1:3];\n");
+  // An optional step: `[a:b:s]`, `[::s]`, `[::-1]`.
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[0:3:2];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[::2];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[::-1];\n");
 
-  // A slice is read-only and there is no step.
+  // A slice is read-only.
   expectCompileError("let a = [1, 2, 3];\na[0:1] = [9];\n", "assignment to a slice");
-  expectCompileError("let a = [1, 2, 3];\nlet b = a[0:2:1];\n", "slice step");
 }
 
 void testNonNullBytecode() {

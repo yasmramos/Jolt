@@ -1391,16 +1391,19 @@ ExprPtr Parser::parsePostfix() {
       expr = makeExpr(CallExpr{std::move(expr), std::move(args)}, open.line, open.col);
     } else if (match(Tok::LBracket)) {
       const Token& open = previous();
-      // `obj[start:end]` (slicing): a ':' inside the brackets starts a slice.
-      // `obj[:end]` has no start, `obj[start:]` has no end. A second ':' is
-      // rejected: there is no `step`.
+      // `obj[start:end:step]` (slicing): a ':' inside the brackets starts a
+      // slice. `obj[:end]` has no start, `obj[start:]` has no end, and the
+      // `step` after a second ':' may be omitted too (`obj[::2]`).
       ExprPtr first = check(Tok::Colon) ? nullptr : parseExpression();
       if (match(Tok::Colon)) {
-        if (check(Tok::Colon)) error(peek(), "slice does not accept a step ('::')");
-        ExprPtr end = check(Tok::RBracket) ? nullptr : parseExpression();
+        ExprPtr end;
+        if (!check(Tok::RBracket) && !check(Tok::Colon)) end = parseExpression();
+        ExprPtr step;
+        if (match(Tok::Colon) && !check(Tok::RBracket)) step = parseExpression();
         consume(Tok::RBracket, "expected ']' after the slice");
-        expr = makeExpr(SliceExpr{std::move(expr), std::move(first), std::move(end)}, open.line,
-                        open.col);
+        expr = makeExpr(
+            SliceExpr{std::move(expr), std::move(first), std::move(end), std::move(step)},
+            open.line, open.col);
       } else {
         consume(Tok::RBracket, "expected ']' after the index");
         expr = makeExpr(IndexExpr{std::move(expr), std::move(first)}, open.line, open.col);
