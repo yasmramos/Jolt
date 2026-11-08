@@ -1,0 +1,6 @@
+// expect-exit: 65
+// A comma in the for-in header must be followed by a second identifier.
+
+for k, in {a: 1} {
+  print(k);
+}

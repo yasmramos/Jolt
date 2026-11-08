@@ -1,0 +1,62 @@
+// `for k, v in map`: key/value iteration over a map (PHASE 6.5).
+//
+// A second loop variable after a comma binds the value paired with each key,
+// so a map is walked as entries without going through `entries()`. The form
+// also works with parentheses and is only valid for maps.
+
+// --- key and value in insertion order --------------------------------------
+
+let m = {a: 1, b: 2, c: 3};
+
+let seen = [];
+for k, v in m {
+  seen.push("${k}=${v}");
+}
+assertEq(seen, ["a=1", "b=2", "c=3"]);
+
+// --- the parenthesized spelling is equivalent ------------------------------
+
+let parenthesized = [];
+for (k, v in m) {
+  parenthesized.push("${k}=${v}");
+}
+assertEq(parenthesized, seen);
+
+// --- the value is the map's, not a positional index ------------------------
+
+var total = 0;
+for k, v in {x: 10, y: 20, z: 30} {
+  total += v;
+}
+assertEq(total, 60);
+
+// --- each turn gets a fresh pair of cells, so closures capture their turn --
+
+let fns = [];
+for k, v in {a: 1, b: 2} {
+  fns.push(() => "${k}${v}");
+}
+assertEq(fns[0](), "a1");
+assertEq(fns[1](), "b2");
+
+// --- break / continue ------------------------------------------------------
+
+let visited = [];
+for k, v in {a: 1, b: 2, c: 3, d: 4} {
+  if (k == "b") { continue; }
+  if (k == "d") { break; }
+  visited.push(k);
+}
+assertEq(visited, ["a", "c"]);
+
+// --- iteration is live: mutating the map changes what the loop sees --------
+
+let live = {a: 1, b: 2};
+let liveKeys = [];
+for k, v in live {
+  liveKeys.push(k);
+  if (k == "a") { live.c = 3; }
+}
+assertEq(liveKeys, ["a", "b", "c"]);
+
+print("ok");

@@ -194,10 +194,10 @@ static void test_memory_operands() {
   g11.divUnsigned(X64Reg::Rcx);
   checkBytes("unsigned div rcx", g11, "4831D248F7F1");
 
-  // divReg(rcx): cdq; idiv rcx -> 99 48 F7 F9.
+  // divReg(rcx): cqo; idiv rcx -> 48 99 48 F7 F9.
   CodeGen g12;
   g12.divReg(X64Reg::Rcx);
-  checkBytes("signed idiv rcx", g12, "9948F7F9");
+  checkBytes("signed idiv rcx", g12, "489948F7F9");
 
   // lea rax, [rip+label] with the label bound immediately after: the
   // displacement is zero, and the four bytes are the reserved fixup slot.
@@ -350,6 +350,40 @@ static void test_sse() {
   CodeGen g5;
   g5.cvtsi2sd(kXmmBase + 0, X64Reg::Rax);
   checkBytes("cvtsi2sd xmm0, rax", g5, "F2480F2AC0");
+
+  // movq xmm0, rax -> 66 48 0F 6E C0 (REX.W is mandatory: without it the
+  // instruction degrades to the 32-bit `movd`).
+  CodeGen g6;
+  g6.movqToXmm(kXmmBase + 0, X64Reg::Rax);
+  checkBytes("movq xmm0, rax", g6, "66480F6EC0");
+
+  // movq rax, xmm0 -> 66 48 0F 7E C0.
+  CodeGen g7;
+  g7.movqFromXmm(X64Reg::Rax, kXmmBase + 0);
+  checkBytes("movq rax, xmm0", g7, "66480F7EC0");
+
+  // movsd xmm0, xmm1 -> F2 0F 10 C1 (register-register load form).
+  CodeGen g8;
+  g8.movsdReg(kXmmBase + 0, kXmmBase + 1);
+  checkBytes("movsd xmm0, xmm1", g8, "F20F10C1");
+
+  // cvtsd2ss xmm0, xmm0 -> F2 0F 5A C0; cvtss2sd xmm0, xmm0 -> F3 0F 5A C0.
+  CodeGen g9;
+  g9.cvtsd2ss(kXmmBase + 0, kXmmBase + 0);
+  checkBytes("cvtsd2ss xmm0, xmm0", g9, "F20F5AC0");
+  CodeGen g10;
+  g10.cvtss2sd(kXmmBase + 0, kXmmBase + 0);
+  checkBytes("cvtss2sd xmm0, xmm0", g10, "F30F5AC0");
+
+  // shr rax, cl -> 48 D3 E8 (logical shift, extension /5).
+  CodeGen g11;
+  g11.shrCl(X64Reg::Rax);
+  checkBytes("shr rax, cl", g11, "48D3E8");
+
+  // test rax, 1 -> 48 F7 C0 01 00 00 00 (F7 /0 with an imm32).
+  CodeGen g12;
+  g12.testImm32(X64Reg::Rax, 1);
+  checkBytes("test rax, 1", g12, "48F7C001000000");
 }
 
 // Byte-level companion for the backward-jmp fix: `jmp rel32` must encode
@@ -450,7 +484,7 @@ static void test_exec_arithmetic() {
 }
 
 static void test_exec_division() {
-  // int64_t f(void) { rax = 100; cdq; idiv rcx(=7); return rax; } -> 14
+  // int64_t f(void) { rax = 100; cqo; idiv rcx(=7); return rax; } -> 14
   CodeGen g;
   g.movImm(X64Reg::Rax, 100);
   g.cdq();

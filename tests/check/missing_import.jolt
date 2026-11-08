@@ -1,0 +1,6 @@
+// expect-exit: 65
+// `-c` resolves imports, so a missing module is reported without running.
+
+import std.does_not_exist;
+
+print("unreachable");

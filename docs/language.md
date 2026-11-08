@@ -1075,8 +1075,8 @@ for (value in [10, 20, 30]) {
 ```
 
 The two spellings are equivalent. The parenthesized form is told apart from a
-classic `for` header by the lookahead `( name in`, so `for (var i = 0; ...)` is
-unaffected.
+classic `for` header by the lookahead `( name in` (or `( name , name in` for
+the key/value form), so `for (var i = 0; ...)` is unaffected.
 
 You can iterate over:
 
@@ -1096,6 +1096,20 @@ for key in {a: 1, b: 2} {
 
 for n in 1..=3 {
   print(n);
+}
+```
+
+A **map** also accepts a second loop variable after a comma: `for k, v in map`
+binds the key to the first variable and its value to the second, so a map is
+walked as entries without going through `entries()`. The parenthesized form
+`for (k, v in map)` is the same. Key/value iteration is only valid for maps;
+any other iterable raises a runtime error. The first variable is the key that
+the loop already produces, so the value form does not change the iteration
+order or the live-mutation rules below.
+
+```jolt
+for key, value in {a: 1, b: 2} {
+  print("${key} = ${value}");
 }
 ```
 
@@ -1909,7 +1923,7 @@ Process exit codes:
 | `70` | Runtime error. |
 | other | Code given to `exit(n)`. |
 
-`jolt -c file.jolt` only checks the lexer and the parser; it does not run the program.
+`jolt -c file.jolt` compiles the script without running it: the lexer, the parser, the compiler and import resolution all run, so syntax errors, type errors and a missing module are reported, but the VM never starts and no output is produced. Use it to validate a file in CI.
 
 ### 13.1 Recovering from an error: `pcall`
 
@@ -2086,7 +2100,7 @@ jolt> :vars
 jolt                      starts the REPL
 jolt <file.jolt>          runs a script
 jolt -e "<code>"          runs code from the command line
-jolt -c <file.jolt>       checks the syntax without running
+jolt -c <file.jolt>       compiles the script without running it
 ```
 
 | Option | Description |
@@ -2094,7 +2108,7 @@ jolt -c <file.jolt>       checks the syntax without running
 | `-h`, `--help` | Help. |
 | `-v`, `--version` | Version. |
 | `-e`, `--eval <code>` | Code to run. The remaining arguments go to the script. |
-| `-c`, `--check` | Syntax check only. |
+| `-c`, `--check` | Compiles without running; reports syntax, type and import errors. |
 | `--` | End of options; the next argument is the file. |
 
 Options must come before the file. Everything after the file is considered an argument of the script and is obtained with `args()`.

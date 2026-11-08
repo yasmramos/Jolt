@@ -1,0 +1,4 @@
+// expect-exit: 65
+// `-c` runs the type checker, so a type error is reported without running.
+
+let x: int = "not an int";

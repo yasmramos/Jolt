@@ -200,4 +200,26 @@ if(BUILD_TESTING)
     jolt_add_script_test("jolt.errors.${name}" "${script}")
   endforeach()
 
+  # --- tests/check/*.jolt: run under `-c` (compile only, never execute) ---
+  # `-c` must run the whole compiler (types and imports included) and print
+  # nothing; the runner checks the exit code and that stdout is empty.
+  file(GLOB jolt_check_tests CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/check/*.jolt"
+  )
+  foreach(script IN LISTS jolt_check_tests)
+    get_filename_component(name "${script}" NAME_WE)
+    set(expected 0)
+    file(STRINGS "${script}" first_line LIMIT_COUNT 1)
+    string(REGEX MATCH "expect-exit:[ \t]*([0-9]+)" declared_exit "${first_line}")
+    if(declared_exit)
+      set(expected "${CMAKE_MATCH_1}")
+    endif()
+    add_test(NAME "jolt.check.${name}"
+      COMMAND ${CMAKE_COMMAND}
+        "-DJOLT_EXE=$<TARGET_FILE:jolt>"
+        "-DJOLT_SCRIPT=${script}"
+        "-DEXPECTED_EXIT=${expected}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_check_case.cmake")
+  endforeach()
+
 endif()
