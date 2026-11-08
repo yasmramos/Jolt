@@ -1,0 +1,3 @@
+// expect-exit: 65
+// A struct can cross the C boundary, so its fields cannot be unions.
+struct S { value: int | string; }

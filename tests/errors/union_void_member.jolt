@@ -1,0 +1,3 @@
+// expect-exit: 65
+// `void` is a return-only type, so it cannot be a union member.
+fn f(): void | int { return 1; }

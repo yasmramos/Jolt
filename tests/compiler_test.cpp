@@ -789,6 +789,44 @@ void testTypeAnnotationsAccepted() {
   expectCompiles("var x: int?;\nx = 3;\n");
 }
 
+void testUnionTypes() {
+  // PHASE 6.7.4: `T | E` is a compile-time-only type, erased before the
+  // bytecode. The same program with and without the annotation compiles to the
+  // same instructions (the annotation is metadata, like every other type).
+  Bytecode annotated = compileSource("let x: int | string = 1;\n");
+  Bytecode plain = compileSource("let x = 1;\n");
+  assert(annotated.code.size() == plain.code.size());
+
+  // Every alternative is accepted, and `nil` folds into nullability.
+  expectCompiles("let a: int | string = 1;\n");
+  expectCompiles("let a: int | string = \"s\";\n");
+  expectCompiles("let a: int | nil = nil;\n");
+  expectCompiles("let a: int | string | nil = nil;\n");
+  expectCompiles("var a: int | string = 1;\na = \"s\";\n");
+  expectCompiles("fn f(x: int | string) {}\nf(1);\nf(\"s\");\n");
+  expectCompiles("fn f(): int | error { return 1; }\n");
+  // `int` widens to `float`, so a union containing `float` accepts an int.
+  expectCompiles("let a: float | string = 1;\n");
+  // A union is assignable to a wider union that contains all its members.
+  expectCompiles("let a: int | string = 1;\nlet b: int | string | bool = a;\n");
+
+  // A value that fits no alternative is rejected.
+  expectCompileError("let a: int | string = true;\n", "bool into int | string");
+  expectCompileError("let a: int | string = 1.5;\n", "float into int | string");
+  expectCompileError("let a: int | string = nil;\n", "nil into non-nullable union");
+  expectCompileError("fn f(): int | string { return true; }\n", "return not in the union");
+  // A union must fit a narrower target as a whole, not member by member.
+  expectCompileError("let a: int | string = 1;\nlet b: int = a;\n",
+                     "union does not fit a single type");
+
+  // A union has no C representation, so it is rejected at every FFI boundary.
+  expectCompileError("extern \"C\" { fn f(x: int | float): int; }\n", "union extern parameter");
+  expectCompileError("extern \"C\" { fn f(): int | float; }\n", "union extern return");
+  expectCompileError("native fn f(x: int | string): int;\n", "union native parameter");
+  expectCompileError("struct S { v: int | string; }\n", "union struct field");
+  expectCompileError("fn f(): void | int { return 1; }\n", "void union member");
+}
+
 void testTypeMismatchErrors() {
   expectCompileError("let x: int = \"s\";\n", "string into int");
   expectCompileError("let x: int = 1.5;\n", "float into int");
@@ -1254,6 +1292,7 @@ int main() {
   testNestedFunctionDeclarationsAreSupported();
   testTypeAnnotationsAreErased();
   testTypeAnnotationsAccepted();
+  testUnionTypes();
   testTypeMismatchErrors();
   testNullCoalesceBytecode();
   testSafeMemberBytecode();

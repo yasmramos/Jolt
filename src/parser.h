@@ -150,4 +150,6 @@ class Parser {
   // or return type). Returns an empty TypeRef when no `:` is present. Rejects
   // unknown type names at parse time.
   TypeRef parseTypeAnnotation(bool allowVoid = false);
+  // One alternative of a union type (or a whole type when there is no `|`).
+  TypeRef parseTypeAlternative(bool allowVoid);
 };

@@ -1,5 +1,6 @@
 #include "parser.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -333,6 +334,12 @@ StmtPtr Parser::parseVarDecl() {
 // optionally followed by `?` (nullability, used by PHASE 6.5). Unknown type
 // names are rejected here so the compiler only ever sees valid ones.
 //
+// PHASE 6.7.4 adds union types: `T | E | ...` in a type position. Each
+// alternative is a known type name or a struct name, and the special name
+// `nil` folds into the nullable flag rather than becoming a member, so
+// `int | string | nil` is the union `int | string` with `nullable = true` and
+// `string | nil` is simply `string?`.
+//
 // `void` is a return-only annotation (it maps to C's `void` in the FFI, PHASE
 // 6.6), so `allowVoid` is true only in the `fn`/`native fn` return position.
 TypeRef Parser::parseTypeAnnotation(bool allowVoid) {
@@ -357,6 +364,36 @@ TypeRef Parser::parseTypeAnnotation(bool allowVoid) {
     type.callbackReturn = ret.name.empty() ? "void" : ret.name;
     return type;
   }
+
+  TypeRef type = parseTypeAlternative(allowVoid);
+  // Union: `T | E | ...`. A callback is not a union member, so a `fn(...)`
+  // signature (which already consumed its own `: ret`) never reaches here.
+  // `nil` is a keyword token, so it is recognized before an alternative is
+  // parsed; it folds into the nullable flag instead of becoming a member.
+  while (match(Tok::Pipe)) {
+    if (match(Tok::Nil)) {
+      type.nullable = true;
+      continue;
+    }
+    TypeRef member = parseTypeAlternative(/*allowVoid=*/false);
+    if (member.name == type.name ||
+        std::find(type.alternatives.begin(), type.alternatives.end(), member.name) !=
+            type.alternatives.end()) {
+      continue;  // a repeated member is redundant, not an error
+    }
+    type.alternatives.push_back(member.name);
+  }
+  if (type.name == "void" && type.isUnion()) {
+    const Token& where = previous();
+    throw CompileError{"'void' cannot be a member of a union", where.line, where.col};
+  }
+  return type;
+}
+
+// One alternative of a union type (or a whole type when there is no `|`): a
+// known type name or a struct name, with an optional `?`. `nil` is accepted as
+// a pseudo-name here and folded by the caller.
+TypeRef Parser::parseTypeAlternative(bool allowVoid) {
   const Token& typeName = consume(Tok::Ident, "expected a type name after ':'");
   TypeRef type;
   type.name = typeName.lexeme;
