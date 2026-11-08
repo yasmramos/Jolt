@@ -361,7 +361,9 @@ previous one.
 - **Modules: Java-style `import`** — **done** (`import std.math;`,
   `import std.math.*;`, `import std.math as m;`,
   `import { sqrt } from std.math;`) with compile-time
-  conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
+  conflict detection across every import form (not only two `.*` imports: an
+  alias or a namespace root that collides with another import is reported too)
+  and a reserved `std.` prefix. A module is loaded
   once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
   compile error rather than a stack overflow. A module's own imports are
   private to it: a namespace, alias or wildcard name it creates never reaches

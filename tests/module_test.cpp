@@ -357,6 +357,68 @@ void testNestedWildcardDoesNotCreatePhantomAmbiguity() {
   check(!threw, "no phantom ambiguity from a module's internal wildcard import");
 }
 
+// A collision between two import forms other than wildcard-vs-wildcard must
+// also be a compile error (AGENT.md §18.3): the conflict detection used to
+// cover only two `.*` imports, so an alias could silently shadow a wildcard,
+// an alias or a namespace, and vice versa.
+void testImportConflictAcrossForms() {
+  struct Case {
+    const char* source;
+    const char* what;
+  };
+  // `mods.a` and `mods.b` both export `sqrt`.
+  const Case cases[] = {
+      {"import mods.a as x;\nimport mods.b as x;\n",
+       "two aliases with the same name are a compile error"},
+      {"import mods.a.*;\nimport mods.b as sqrt;\n",
+       "an alias shadowing a wildcard name is a compile error"},
+      {"import mods.b as sqrt;\nimport mods.a.*;\n",
+       "a wildcard shadowing an alias is a compile error"},
+      {"import mods.a;\nimport mods.b as mods;\n",
+       "an alias colliding with a namespace root is a compile error"},
+  };
+  for (const Case& c : cases) {
+    ModuleResolver resolver("tests/errors", "std", "");
+    Compiler compiler;
+    compiler.setImportLoader(loaderFor(resolver));
+    bool threw = false;
+    try {
+      compiler.compile(parseSource(c.source));
+    } catch (const CompileError&) {
+      threw = true;
+    }
+    check(threw, c.what);
+  }
+}
+
+// The cases that are *not* conflicts must keep working: re-importing the same
+// binding, sibling modules under one package root, and two aliases of one
+// module (AGENT.md §18.3: "importing the same module twice is not a conflict").
+void testNonConflictingImportCombinations() {
+  {
+    VM vm;
+    compileAndRun("import modules.util;\nimport modules.util;\nlet got = modules.util.answer;\n",
+                  fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 42, "a repeated qualified import is not a conflict");
+  }
+  {
+    VM vm;
+    compileAndRun("import modules.util as u;\nimport modules.util as v;\n"
+                  "let got = u.square(2) + v.square(3);\n",
+                  fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 13, "two aliases of the same module are not a conflict");
+  }
+  {
+    // Two modules under one root share the namespace table (`ns`), so the
+    // second import merges instead of colliding.
+    VM vm;
+    compileAndRun("import ns.deep.leaf;\nimport ns.deep.other;\n"
+                  "let got = ns.deep.leaf.leaf() + ns.deep.other.other();\n",
+                  fixtureResolver(), vm);
+    check(globalInt(vm, "got") == 130, "sibling modules under one root share the namespace");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -381,6 +443,8 @@ int main() {
   testModuleImportDoesNotLeakWildcard();
   testModuleSeesItsOwnImports();
   testNestedWildcardDoesNotCreatePhantomAmbiguity();
+  testImportConflictAcrossForms();
+  testNonConflictingImportCombinations();
 
   if (g_failures != 0) {
     std::printf("%d check(s) failed\n", g_failures);
