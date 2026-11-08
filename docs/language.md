@@ -1881,7 +1881,10 @@ script.jolt:3:11: runtime error: division by zero
   |           ^
 ```
 
-Runtime errors also include a stack trace with the active functions.
+Runtime errors also include a stack trace with the active functions. A deep
+call chain (for example an accidental infinite recursion) builds thousands of
+frames, so the trace prints the outermost ten and the innermost ten and elides
+the middle with a `... N more ...` line; a short trace is printed in full.
 
 A third kind of diagnostic is non-fatal: a **warning**. A warning is reported
 with the same snippet form but does not stop the program, which still compiles
