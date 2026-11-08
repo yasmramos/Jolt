@@ -358,8 +358,9 @@ previous one.
   opcode and no VM support. `defer` is rejected outside a function, and a
   `return`/`break`/`continue` that would leave the deferred block itself is
   rejected. See `docs/language.md` §6.11 and `tests/15_defer.jolt`.
-- **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
-  `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
+- **Modules: Java-style `import`** — **done** (`import std.math;`,
+  `import std.math.*;`, `import std.math as m;`,
+  `import { sqrt } from std.math;`) with compile-time
   conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
   once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
   compile error rather than a stack overflow. A module's own imports are
@@ -368,7 +369,8 @@ previous one.
   wildcard bindings. Resolution tries the project directory first, then the
   packages root (`$JOLT_PACKAGES`, else `~/.jolt/packages`), so a project module
   shadows an installed package of the same path. `require` (Lua-style) is
-  **dropped**: `import` is the only module form.
+  **dropped**: `import` is the only module form. See `docs/language.md` §18,
+  `tests/13_modules.jolt` and `tests/module_test.cpp`.
 - **`struct`** (data only, no methods) — **done**: a named, module-level map
   shape with optional field types. The declaration emits no bytecode and adds
   no opcode; a `Point { x: 1, y: 2 }` literal is checked against the
@@ -642,7 +644,7 @@ Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotatio
 Phase 6.6: 🔶 in progress (type vocabulary, `extern "C"` declarations + marshalling, pointers and structs by value done; callbacks pending)
 Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type and 6.7.3 `try`/`catch` done; 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
-Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
+Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
 **12 bugs fixed** (see `docs/BUGS.md` for the full list).
