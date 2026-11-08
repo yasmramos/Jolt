@@ -134,6 +134,13 @@ void PlatformFreestanding::dealloc(void* /*pointer*/) {
   // Region allocation: individual frees are not part of the model.
 }
 
+void* PlatformFreestanding::lookupSymbol(const char* /*name*/) {
+  // No dynamic linker in a freestanding binary: `extern "C"` symbols are
+  // link-time relocations. Reporting "not found" is the honest answer, and the
+  // caller turns it into a clear error rather than a wild call.
+  return nullptr;
+}
+
 #else  // not Linux x86-64
 
 // The class must compile everywhere the dev library does (Windows and every
@@ -157,5 +164,6 @@ bool PlatformFreestanding::seek(int, std::int64_t, SeekOrigin) { unsupported(); 
 void PlatformFreestanding::exit(int) { unsupported(); }
 void* PlatformFreestanding::alloc(std::size_t, std::size_t) { unsupported(); }
 void PlatformFreestanding::dealloc(void*) { unsupported(); }
+void* PlatformFreestanding::lookupSymbol(const char*) { unsupported(); }
 
 #endif

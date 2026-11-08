@@ -405,11 +405,20 @@ program that only passes them to natives compiles unchanged.
 
 **`extern "C"` blocks.** A C function is declared in an `extern "C" { ... }`
 block (PHASE 6.6). The ABI is a plain string literal and only `"C"` is
-supported. Each entry is a bodyless `fn ...;` and follows the `native fn` path:
-the name binds to the host function of the same name, the signature is checked
-at the call site, and the block emits no bytecode. The declarations are hoisted,
-so a function may call one declared later. Like `import`, `struct` and
-`native fn`, the block is module-level metadata: nesting it is a compile error.
+supported. Each entry is a bodyless `fn ...;`; the compiler validates the
+signature against the FFI type vocabulary (see §4.6) and records it as
+compile-time metadata on the proto, so the block emits no bytecode of its own.
+The declarations are hoisted, so a function may call one declared later. Like
+`import`, `struct` and `native fn`, the block is module-level metadata: nesting
+it is a compile error.
+
+Before a proto runs, the engine resolves each declared name through
+`Platform::lookupSymbol` and binds it to a marshalling native. The call passes
+its arguments and reads its result across the System V AMD64 ABI without
+`libffi`: integers, bools and pointers travel in general-purpose registers and
+`float`/`double` in SSE registers, and the result is read back at the exact
+width the declaration named (so a C `int` is not read as a 64-bit value). A
+symbol the host cannot resolve is a clear runtime error, never a wild call.
 
 ```jolt
 extern "C" {
@@ -422,9 +431,9 @@ print(sqrt(16.0));         // 4
 let n: size_t = strlen("hi");
 ```
 
-In the development engine a declaration binds to the host builtin of the same
-name; lowering a call to a real C symbol (the marshalling without `libffi`) is
-the remaining part of PHASE 6.6.
+A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a `ptr`
+argument accepts `nil` (NULL) and an owned `cstring`/buffer, whose bytes are the
+address the C callee receives.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -1833,7 +1842,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
-- FFI with C is partially implemented (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): each declaration follows the `native fn` path, so the name binds to the host function of the same name and the signature is checked at the call site. The block is compile-time metadata and emits no bytecode. Binding a declaration to a real C function (the marshalling and the call lowering without `libffi`) is the remaining part of PHASE 6.6.
+- FFI with C is implemented for the development engine (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi`. The AOT backend (PHASE 7) will lower the same declarations to link-time relocations.
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.

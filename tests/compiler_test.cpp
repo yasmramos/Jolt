@@ -1041,6 +1041,14 @@ void testFfiTypeVocabulary() {
   expectCompileError("let x: ptr = 5;\n", "int is not a pointer");
   expectCompileError("let x: cstring = \"hi\";\n", "a string is not a cstring");
 
+  // A string is not an owned `cstring` binding, but it is a valid `const char *`
+  // *argument*: it is NUL-terminated and stays alive for the whole call.
+  expectCompiles("native fn strlen(s: cstring): size_t;\nlet n = strlen(\"hi\");\n");
+  expectCompiles("extern \"C\" { fn strlen(s: cstring): size_t; }\nprint(strlen(\"hi\"));\n");
+  // A nullable string is not a valid `cstring` argument: it may be nil.
+  expectCompileError("native fn strlen(s: cstring): size_t;\nlet s: string? = nil;\nstrlen(s);\n",
+                     "argument 1");
+
   // A `native fn` return type feeds inference: the result is a `size_t`.
   expectCompiles("native fn strlen(s: cstring): size_t;\nlet n: int = strlen(nil);\n");
 }

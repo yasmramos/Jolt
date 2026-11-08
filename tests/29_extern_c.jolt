@@ -1,42 +1,45 @@
-// `extern "C" { ... }` blocks (PHASE 6.6, declaration half). A block declares
-// C functions with the FFI type vocabulary; each declaration follows the
-// `native fn` path, so the name binds to the host function of the same name
-// and the signature is checked at the call site. The block emits no bytecode.
+// `extern "C" { ... }` blocks (PHASE 6.6). A declaration binds to a real C
+// symbol resolved from the host, and a call marshals its arguments and its
+// result across the System V AMD64 ABI without `libffi`. The functions below
+// are standard C library names, present in libc/libm on POSIX and in the CRT
+// on Windows, so the test runs on both.
 
 extern "C" {
+  fn strlen(s: cstring): size_t;
+  fn strcmp(a: cstring, b: cstring): int;
+  fn abs(x: int): int;
   fn sqrt(x: double): double;
   fn pow(base: double, exponent: double): double;
-  fn len(v): size_t;
-  fn str(v: any): string;
 }
 
-// A declaration is hoisted, so a function may call one that appears later.
-fn area(r: double): double {
-  return 3.141592653589793 * pow(r, 2.0);
-}
+// A Jolt string is a valid `const char *` argument (it is NUL-terminated and
+// stays alive for the whole call).
+assertEq(strlen("hello"), 5);
+assertEq(strlen(""), 0);
 
+// A `cstring` handle exposes the address of its bytes.
+let s = cstring("hello world");
+assertEq(strlen(s), 11);
+
+// An `int` result is read at its declared width, so it is exact and not
+// polluted by the undefined upper half of the return register.
+assertEq(abs(-7), 7);
+assertEq(abs(7), 7);
+
+// A `double` result comes back from an SSE register.
 assertEq(sqrt(16.0), 4.0);
-assertEq(len([1, 2, 3]), 3);
-assertEq(str(42), "42");
 assertEq(pow(2.0, 10.0), 1024.0);
 
-// The return type feeds inference: `len` yields a `size_t`, which is an int.
-fn lengthOf(a: array): size_t {
-  return len(a);
-}
-let n: int = lengthOf([9, 8, 7]);
-assertEq(n, 3);
+// Two pointer arguments in the same call.
+assertEq(strcmp("abc", "abc"), 0);
+assertEq(strcmp("abc", "abd") < 0, true);
 
-// A C signature can be spelled the way C spells it, using the FFI vocabulary.
-assertEq(area(2.0) > 12.5 && area(2.0) < 12.6, true);
-
-// `ptr` defaults to NULL (`nil`) and accepts `nil` even without `?`.
-// A `void` return type is allowed and maps to C's `void`.
-extern "C" {
-  fn seed(v: size_t): void;
+// A declaration is hoisted, so a function may call one that appears later, and
+// the declared result type feeds inference (`size_t` is an int).
+fn lengthOf(text: cstring): size_t {
+  return strlen(text);
 }
-let handle: ptr = nil;
-assertEq(handle, nil);
-seed(1);   // size_t argument, void result
+let n: int = lengthOf("abcd");
+assertEq(n, 4);
 
 print("extern c ok");

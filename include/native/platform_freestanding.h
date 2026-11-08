@@ -41,6 +41,12 @@ class PlatformFreestanding final : public Platform {
   void* alloc(std::size_t size, std::size_t alignment) override;
   void dealloc(void* pointer) override;
 
+  // The freestanding runtime has no dynamic linker: an `extern "C"` symbol is a
+  // link-time relocation the static linker resolves when the AOT binary is
+  // built, so there is nothing to look up at run time. Returning nullptr lets
+  // the caller report a clear error instead of calling a wrong address.
+  void* lookupSymbol(const char* name) override;
+
  private:
   // Lazily maps the backing region and bumps within it.
   std::uint8_t* cursor_ = nullptr;

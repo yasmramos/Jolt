@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ops.h"
+#include "ffi.h"
 
 // ---------------------------------------------------------------- diagnostics
 
@@ -260,7 +261,30 @@ bool VM::lessThan(const Value& left, const Value& right, int line, int col) {
 
 // ------------------------------------------------------------------ execution
 
+void VM::installExtern(const ExternSymbol& symbol) {
+  // The compiler already validated the signature, so a failure here is about
+  // the symbol, not the types. `defineGlobal` overwrites, so a repeated run
+  // (REPL) simply re-binds the same native.
+  void* address = platform().lookupSymbol(symbol.name.c_str());
+  if (address == nullptr) {
+    fail("extern \"C\" symbol '" + symbol.name + "' was not found in the host");
+  }
+  defineGlobal(symbol.name, ffi::makeExternNative(*this, symbol.name, address, symbol.paramTypes,
+                                                  symbol.returnType));
+}
+
+void VM::installExterns(const Bytecode& proto) {
+  for (const ExternSymbol& symbol : proto.externs) installExtern(symbol);
+  for (const std::shared_ptr<Bytecode>& child : proto.children) {
+    if (child) installExterns(*child);
+  }
+}
+
 Value VM::run(const Bytecode& bytecode) {
+  // Resolve `extern "C"` symbols before executing anything: the module bodies
+  // (children) that declare them run as part of this chunk, so their bindings
+  // must exist first.
+  installExterns(bytecode);
   const int registerCount = bytecode.numRegisters > 0 ? bytecode.numRegisters : 0;
   const int localCount = bytecode.numLocals > 0 ? bytecode.numLocals : 0;
   registers_.assign(static_cast<size_t>(registerCount), Value{});
