@@ -941,10 +941,21 @@ StmtPtr Parser::parseDoWhile() {
 StmtPtr Parser::parseFor() {
   const Token& keyword = previous();
 
-  if (!check(Tok::LParen)) {
+  // `for-in` accepts an optional pair of parentheses around the loop variable
+  // and the iterable: `for x in xs` and `for (x in xs)` are the same. The
+  // parenthesized form is told apart from a classic `for` by the lookahead
+  // `( IDENT in`, which a classic header (`( init; cond; step )`) never starts
+  // with: an initializer is a declaration, an assignment or an expression, none
+  // of which is a bare identifier followed by `in`.
+  const bool parenthesizedForIn =
+      check(Tok::LParen) && peek(1).type == Tok::Ident && peek(2).type == Tok::In;
+
+  if (parenthesizedForIn || !check(Tok::LParen)) {
+    if (parenthesizedForIn) consume(Tok::LParen, "expected '(' after 'for'");
     const Token& var = consume(Tok::Ident, "expected a loop variable or '(' after 'for'");
     consume(Tok::In, "expected 'in' in the for-in loop");
     auto iterable = parseExpression();
+    if (parenthesizedForIn) consume(Tok::RParen, "expected ')' after the for-in iterable");
     auto body = parseBlock();
     match(Tok::Semicolon);
     return makeStmt(ForInStmt{var.lexeme, std::move(iterable), std::move(body)}, keyword.line,

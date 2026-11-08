@@ -1049,13 +1049,21 @@ The variable declared in the initializer lives in a scope of its own for the loo
 
 ### 6.6 `for ... in`
 
-Syntax, without parentheses:
+Syntax, with or without parentheses:
 
 ```jolt
 for value in [10, 20, 30] {
   print(value);
 }
+
+for (value in [10, 20, 30]) {
+  print(value);
+}
 ```
+
+The two spellings are equivalent. The parenthesized form is told apart from a
+classic `for` header by the lookahead `( name in`, so `for (var i = 0; ...)` is
+unaffected.
 
 You can iterate over:
 
@@ -2111,8 +2119,13 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
+<<<<<<< HEAD
 - `for ... in` does not accept parentheses around the variable and the iterable.
 - Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
+=======
+- `for ... in` accepts the loop variable and the iterable with or without parentheses (`for x in xs` and `for (x in xs)`).
+- Slicing syntax `s[start:end]` works for strings and arrays (see §8.1 and §9); there is no step (`s[start:end:step]`), and the methods `substr`/`slice` remain available.
+>>>>>>> 63508e2 (feat(parser): allow parentheses in for-in headers)
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.
