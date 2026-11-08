@@ -20,7 +20,10 @@
 #include "native/arena.h"
 #include "native/entry.h"
 #include "native/elf.h"
+#include "native/lower.h"
 #include "native/platform_freestanding.h"
+#include "native/runtime.h"
+#include "native/value.h"
 
 static int g_failures = 0;
 
@@ -236,6 +239,93 @@ static void test_end_to_end() {
         "the generated binary has no dynamic dependencies");
 }
 
+// Builds a static ELF from a lowered chunk and runs it, returning its stdout
+// and exit code. The chunk already contains `_start` and the runtime.
+static RunResult buildAndRun(const std::string& path, const Bytecode& proto) {
+  LoweredChunk chunk = lowerToX64(Target::linuxX64(), proto, CodeGen{});
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), chunk.code, {}, chunk.processEntry);
+  writeFile(path, elf);
+  return runProgram(path);
+}
+
+static Instruction instr(OpCode op, int a = 0, int b = 0, int c = 0, int jump = 0) {
+  Instruction i;
+  i.op = op;
+  i.a = a;
+  i.b = b;
+  i.c = c;
+  i.jump = jump;
+  return i;
+}
+
+static Bytecode makeProto(const std::vector<Instruction>& code,
+                          const std::vector<Value>& constants, int numRegisters) {
+  Bytecode proto;
+  proto.name = "<freestanding-test>";
+  proto.code = code;
+  proto.constants = constants;
+  proto.numRegisters = numRegisters;
+  return proto;
+}
+
+// Drives the boxed printer directly: the runtime's `jolt_print_value` is what
+// the `print` builtin will call once `CALL` lands (7c.2), so this checks the
+// integer-to-text routine (including the negative case) and the boolean/nil
+// rendering today.
+static void test_boxed_runtime_print() {
+  CodeGen cg(Target::linuxX64());
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label mainLabel = cg.newLabel();
+
+  auto printValue = [&](AotTag tag, std::int64_t payload) {
+    cg.movImm(X64Reg::Rdi, static_cast<std::int64_t>(tag));
+    cg.movImm(X64Reg::Rsi, payload);
+    cg.callLabel(rt.printValue);
+  };
+
+  cg.bind(mainLabel);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  printValue(AotTag::Int, 42);
+  printValue(AotTag::Int, -7);
+  printValue(AotTag::Bool, 1);
+  printValue(AotTag::Bool, 0);
+  printValue(AotTag::Nil, 0);
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t start = emitFreestandingRuntime(cg, entry, mainLabel);
+  emitAotRuntime(cg, rt, entry);
+  cg.finalize();
+
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
+  const std::string path = "/tmp/jolt_boxed_print";
+  writeFile(path, elf);
+  RunResult result = runProgram(path);
+  check(result.output == "42\n-7\ntrue\nfalse\nnil\n",
+        "the boxed runtime prints int, negative int, bool and nil");
+  check(result.exitCode == 0, "the printing program exits 0");
+}
+
+// A type mismatch in a lowered operation must report an error and exit 70,
+// matching the development engine's runtime-error exit code.
+static void test_boxed_runtime_error() {
+  // R0 = true; R1 = false; R0 = R0 - R1 -> subtraction is int-only, so this
+  // must hit the runtime's "unsupported operand types" path and exit 70.
+  Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                              instr(OpCode::SUB, 0, 0, 1), instr(OpCode::HALT)},
+                             {Value(true), Value(false)}, 2);
+  RunResult result = buildAndRun("/tmp/jolt_boxed_error", proto);
+  check(result.exitCode == 70, "a runtime type error exits 70");
+  check(result.output.find("unsupported operand types") != std::string::npos,
+        "the runtime error names the unsupported operand types");
+}
+
 #endif  // FREESTANDING_EXEC_TESTS
 
 int main() {
@@ -243,6 +333,8 @@ int main() {
 #ifdef FREESTANDING_EXEC_TESTS
   test_platform_roundtrip();
   test_end_to_end();
+  test_boxed_runtime_print();
+  test_boxed_runtime_error();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

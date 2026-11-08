@@ -265,12 +265,50 @@ void CodeGen::movImmToMem(X64Reg base, std::int64_t disp, std::int64_t value) {
   emit32(static_cast<std::int32_t>(value));
 }
 
+// mov r/m8, imm8: opcode C6 /0. `storeToMem` covers 64-bit stores only; the
+// integer-to-text routine writes individual characters, so it needs the
+// byte form. No REX.W, but a REX prefix still selects spl/bpl/sil/dil.
+void CodeGen::movImmByteToMem(X64Reg base, std::int64_t disp, std::uint8_t value) {
+  std::uint8_t b = enc(base);
+  if (b >= 8) emitByte(0x41);
+  emitByte(0xC6);
+  modRmDisp(0, b, disp);
+  emitByte(value);
+}
+
+// mov r/m8, r8: opcode 88 /r, the byte-sized counterpart of `movToMem`. A REX
+// prefix is always emitted: it is harmless for the classic byte registers and
+// required to reach spl/bpl/sil/dil (registers 4-7).
+void CodeGen::movByteToMem(X64Reg base, std::int64_t disp, X64Reg src) {
+  std::uint8_t b = enc(base);
+  std::uint8_t s = enc(src);
+  std::uint8_t byte = 0x40;
+  if (s >= 8) byte |= 0x04;  // REX.R selects the byte register
+  if (b >= 8) byte |= 0x01;  // REX.B selects the base
+  emitByte(byte);
+  emitByte(0x88);
+  modRmDisp(s, b, disp);
+}
+
 void CodeGen::leaRip(X64Reg dst, std::int32_t ripDelta) {
   std::uint8_t d = enc(dst);
   rex(true, d, false, 0, 5);  // rm = 101 without SIB => RIP-relative
   emitByte(0x8D);
   emitByte(static_cast<std::uint8_t>((0x00 << 6) | ((d & 0x07) << 3) | 0x05));
   emit32(ripDelta);
+}
+
+// lea dst, [rip + label]. Same encoding as `leaRip`, but the four-byte
+// displacement is a fixup patched by `finalize()`: `recordFixup` measures
+// from the slot's end, which is the next instruction -- exactly the RIP base
+// the CPU uses. `leaRip` cannot express this because the target offset is
+// unknown when the instruction is emitted.
+void CodeGen::leaRipLabel(X64Reg dst, Label label) {
+  std::uint8_t d = enc(dst);
+  rex(true, d, false, 0, 5);
+  emitByte(0x8D);
+  emitByte(static_cast<std::uint8_t>((0x00 << 6) | ((d & 0x07) << 3) | 0x05));
+  recordFixup(label);
 }
 
 void CodeGen::aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src) {
@@ -311,6 +349,17 @@ void CodeGen::orReg(X64Reg dst, X64Reg src) { aluRegOp(0x09, dst, src); }
 void CodeGen::xorReg(X64Reg dst, X64Reg src) { aluRegOp(0x31, dst, src); }
 void CodeGen::cmpReg(X64Reg lhs, X64Reg rhs) { aluRegOp(0x39, lhs, rhs); }
 
+// cmp r/m64, imm32: opcode 0x81 with /7 in the ModRM reg field. The immediate
+// is sign-extended by the CPU, so it is a full 64-bit compare against a small
+// constant -- exactly what a tag check needs.
+void CodeGen::cmpImm32(X64Reg lhs, std::int32_t value) {
+  std::uint8_t d = enc(lhs);
+  rex(true, 7, false, 0, d);
+  emitByte(0x81);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (7 << 3) | (d & 0x07)));
+  emit32(value);
+}
+
 void CodeGen::imulReg(X64Reg dst, X64Reg src) {
   std::uint8_t d = enc(dst);
   std::uint8_t s = enc(src);
@@ -348,6 +397,26 @@ void CodeGen::shiftCl(std::uint8_t ext, X64Reg dst) {
 
 void CodeGen::shlCl(X64Reg dst) { shiftCl(4, dst); }
 void CodeGen::sarCl(X64Reg dst) { shiftCl(7, dst); }
+
+// Signed divide rdx:rax by `divisor`, quotient in rax and remainder in rdx
+// (the `idiv` contract). rax must already hold the dividend; the helper
+// sign-extends it into rdx first, so a caller cannot forget the `cdq`.
+void CodeGen::divReg(X64Reg divisor) {
+  cdq();
+  idiv(divisor);
+}
+
+// Unsigned divide rdx:rax by `divisor`: quotient in rax, remainder in rdx.
+// `rdx` is zeroed first, which is the unsigned contract (no sign extension).
+// The integer-to-text routine divides a magnitude, where a value above
+// INT64_MAX must be treated as unsigned rather than as a negative number.
+void CodeGen::divUnsigned(X64Reg divisor) {
+  xorReg(X64Reg::Rdx, X64Reg::Rdx);
+  std::uint8_t e = enc(divisor);
+  rex(true, 6, false, 0, e);  // F7 /6 is `div`, /7 is `idiv`
+  emitByte(0xF7);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (6 << 3) | (e & 0x07)));
+}
 
 void CodeGen::testReg(X64Reg reg) {
   std::uint8_t r = enc(reg);
