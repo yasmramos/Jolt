@@ -539,6 +539,39 @@ const Compiler::NativeSig* Compiler::nativeSigFor(const std::string& name) const
   return sig;
 }
 
+// Records a non-fatal diagnostic (PHASE 6.7.5).
+void Compiler::warn(const std::string& message, int line, int col) {
+  warnings_.push_back(Warning{message, line, col});
+}
+
+// Whether a call to `name` must use its result (PHASE 6.7.5). Resolution
+// mirrors `nativeSigFor`: a local or upvalue binding shadows the name and
+// carries its own flag, so a shadowing non-mustUse function disables the check.
+bool Compiler::mustUseFor(const std::string& name) const {
+  LocalVar local;
+  if (resolveLocalIn(scopes_, name, local)) return local.isMustUse;
+  for (auto frame = funcStack_.rbegin(); frame != funcStack_.rend(); ++frame) {
+    if (resolveLocalIn(frame->scopes, name, local)) return local.isMustUse;
+  }
+  auto sig = nativeSigs_.find(name);
+  if (sig != nativeSigs_.end() && sig->second.mustUse) return true;
+  return mustUseGlobals_.count(name) != 0;
+}
+
+// A call used as a statement discards its result (PHASE 6.7.5). When the callee
+// is a `@MustUse` function, the discard is a warning, not an error, so the
+// program still runs. `_ = f();` is an assignment, so it does not come here.
+void Compiler::checkDiscardedCall(const Expr& expr) {
+  const auto* call = std::get_if<CallExpr>(&expr.node);
+  if (!call || !call->callee) return;
+  const auto* callee = std::get_if<VariableExpr>(&call->callee->node);
+  if (!callee) return;
+  if (!mustUseFor(callee->name)) return;
+  warn("the result of '@MustUse' function '" + callee->name +
+           "' is discarded; assign it to '_' to acknowledge",
+       expr.line, expr.col);
+}
+
 TypeRef Compiler::inferExprType(const Expr& expr) const {
   if (const auto* literal = std::get_if<LiteralExpr>(&expr.node)) {
     TypeRef type;
@@ -628,6 +661,7 @@ void Compiler::resetChunk(const std::string& name) {
   modulePath_.clear();
   moduleImportNames_.clear();
   loadingStack_.clear();
+  warnings_.clear();
 }
 
 void Compiler::clearSession() {
@@ -636,6 +670,7 @@ void Compiler::clearSession() {
   globalTypes_.clear();
   structDefs_.clear();
   nativeSigs_.clear();
+  mustUseGlobals_.clear();
   loadedModules_.clear();
   materializedModules_.clear();
   namespaces_.clear();
@@ -666,6 +701,9 @@ Bytecode Compiler::compileTopLevelBody(const StmtPtr& program) {
     // Register native signatures too: a hoisted function may call one and must
     // be checked against its signature.
     registerNativeDecls(*block);
+    // Register `@MustUse` flags as well, for the same reason: a hoisted
+    // function is compiled before the declarations that follow it.
+    registerMustUseDecls(*block);
     // Top-level function declarations are hoisted, like `execBlock` does in
     // the interpreter, so a call can appear before the declaration. An
     // `extern "C"` block is hoisted too: its declarations are natives, and a
@@ -733,6 +771,7 @@ Compiler::SessionSnapshot Compiler::snapshotSession() const {
   snapshot.globalTypes = globalTypes_;
   snapshot.structDefs = structDefs_;
   snapshot.nativeSigs = nativeSigs_;
+  snapshot.mustUseGlobals = mustUseGlobals_;
   snapshot.loadedModules = loadedModules_;
   snapshot.materializedModules = materializedModules_;
   snapshot.namespaces = namespaces_;
@@ -747,6 +786,7 @@ void Compiler::restoreSession(SessionSnapshot snapshot) {
   globalTypes_ = std::move(snapshot.globalTypes);
   structDefs_ = std::move(snapshot.structDefs);
   nativeSigs_ = std::move(snapshot.nativeSigs);
+  mustUseGlobals_ = std::move(snapshot.mustUseGlobals);
   loadedModules_ = std::move(snapshot.loadedModules);
   materializedModules_ = std::move(snapshot.materializedModules);
   namespaces_ = std::move(snapshot.namespaces);
@@ -790,6 +830,7 @@ Bytecode Compiler::compileReplEntry(const StmtPtr& program) {
     // Register struct shapes first, then hoist top-level function declarations.
     registerStructDecls(*block);
     registerNativeDecls(*block);
+    registerMustUseDecls(*block);
     for (const auto& child : block->stmts) {
       if (!child) continue;
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
@@ -833,6 +874,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
   // already see them.
   registerStructDecls(block);
   registerNativeDecls(block);
+  registerMustUseDecls(block);
   // Function declarations are hoisted within their block, so a call can appear
   // before the declaration and mutually recursive local functions can resolve
   // each other. Block-local `let`/`var` declarations also need their slots
@@ -851,6 +893,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
     std::unordered_map<std::string, int> blockSlots;
     std::unordered_map<std::string, TypeRef> blockTypes;
     std::unordered_map<std::string, bool> blockNatives;
+    std::unordered_map<std::string, bool> blockMustUse;
     for (const auto& [name, local] : scopes_.back().vars) blockSlots[name] = local.slot;
 
     int nilReg = -1;
@@ -894,6 +937,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
       } else if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         blockTypes[fn->name] = TypeRef{"function", false};
         blockNatives[fn->name] = fn->isNative;
+        blockMustUse[fn->name] = fn->mustUse;
         auto found = blockSlots.find(fn->name);
         int slot;
         if (found != blockSlots.end()) {
@@ -914,7 +958,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
     std::unordered_map<std::string, LocalVar> beforeHoisting = scopes_.back().vars;
     for (const auto& [name, slot] : blockSlots) {
       scopes_.back().vars[name] =
-          LocalVar{name, slot, false, blockTypes[name], blockNatives[name]};
+          LocalVar{name, slot, false, blockTypes[name], blockNatives[name], blockMustUse[name]};
     }
     for (const auto& child : block.stmts) {
       if (!child) continue;
@@ -931,7 +975,7 @@ void Compiler::compileBlockBody(const BlockStmt& block) {
       if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
         int slot = predeclaredFnSlots_[fn];
         scopes_.back().vars[fn->name] =
-            LocalVar{fn->name, slot, false, TypeRef{"function", false}, fn->isNative};
+            LocalVar{fn->name, slot, false, TypeRef{"function", false}, fn->isNative, fn->mustUse};
       }
     }
   } else if (hasHoistedFunction) {
@@ -970,6 +1014,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
   std::visit(
       Overloaded{
           [&](const ExprStmt& s) {
+              checkDiscardedCall(*s.expr);
               compileExpr(*s.expr);
               freeReg();
           },
@@ -1040,6 +1085,8 @@ void Compiler::compileLet(const LetStmt& s) {
     // A global binding replaces a `native fn` of the same name, so its
     // signature no longer applies to calls of the name.
     nativeSigs_.erase(s.name);
+    // The binding is no longer the `@MustUse` function it may have shadowed.
+    mustUseGlobals_.erase(s.name);
   } else {
     // `compileBlockBody` reserved a slot (and created its cell) for every
     // direct declaration of the block. Fill that cell instead of allocating a
@@ -1103,6 +1150,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   auto savedGlobalTypes = std::move(globalTypes_);
   auto savedStructDefs = std::move(structDefs_);
   auto savedNativeSigs = std::move(nativeSigs_);
+  auto savedMustUseGlobals = std::move(mustUseGlobals_);
   std::deque<FuncState> savedFuncStack = std::move(funcStack_);
   // A module's imports are its own: the namespace tables, bound names and
   // wildcard bindings it creates must not be visible to the importing program
@@ -1136,6 +1184,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   globalTypes_.clear();
   structDefs_.clear();
   nativeSigs_.clear();
+  mustUseGlobals_.clear();
   namespaces_.clear();
   boundImports_.clear();
   wildcardBindings_.clear();
@@ -1191,6 +1240,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   globalTypes_ = std::move(savedGlobalTypes);
   structDefs_ = std::move(savedStructDefs);
   nativeSigs_ = std::move(savedNativeSigs);
+  mustUseGlobals_ = std::move(savedMustUseGlobals);
   funcStack_ = std::move(savedFuncStack);
   namespaces_ = std::move(savedNamespaces);
   boundImports_ = std::move(savedBoundImports);
@@ -1491,9 +1541,16 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     // Keep the signature table in step with the binding that actually wins: a
     // native keeps its signature, any other global of the same name drops it.
     if (fn.isNative) {
-      nativeSigs_[fn.name] = NativeSig{fn.params, fn.returnType};
+      nativeSigs_[fn.name] = NativeSig{fn.params, fn.returnType, fn.mustUse};
     } else {
       nativeSigs_.erase(fn.name);
+    }
+    // `@MustUse` (PHASE 6.7.5) is tracked separately from the signature: a
+    // native carries it in `NativeSig`, any other global in this set.
+    if (fn.mustUse) {
+      mustUseGlobals_.insert(fn.name);
+    } else {
+      mustUseGlobals_.erase(fn.name);
     }
   } else {
     // Local declaration: a frame slot holding the closure value (PHASE 6b).
@@ -1504,16 +1561,18 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
       int slot = predeclared->second;
       emit(OpCode::SETLOCAL, reg, slot);
       scopes_.back().vars[fn.name] =
-          LocalVar{fn.name, slot, false, TypeRef{"function", false}, fn.isNative};
+          LocalVar{fn.name, slot, false, TypeRef{"function", false}, fn.isNative, fn.mustUse};
     } else {
       auto existing = scopes_.back().vars.find(fn.name);
       if (existing != scopes_.back().vars.end()) {
         emit(OpCode::SETLOCAL, reg, existing->second.slot);
         existing->second.isNative = fn.isNative;
+        existing->second.isMustUse = fn.mustUse;
       } else {
         int slot = declareLocal(fn.name, false, TypeRef{"function", false});
         emit(OpCode::DECLLOCAL, reg, slot);
         scopes_.back().vars[fn.name].isNative = fn.isNative;
+        scopes_.back().vars[fn.name].isMustUse = fn.mustUse;
       }
     }
   }
@@ -1561,13 +1620,32 @@ void Compiler::registerNativeDecls(const BlockStmt& block) {
   for (const auto& child : block.stmts) {
     if (!child) continue;
     if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
-      if (fn->isNative) nativeSigs_[fn->name] = NativeSig{fn->params, fn->returnType};
+      if (fn->isNative) nativeSigs_[fn->name] = NativeSig{fn->params, fn->returnType, fn->mustUse};
     } else if (const auto* ext = std::get_if<ExternBlockStmt>(&child->node)) {
       // An `extern "C"` declaration is a native, so a hoisted function that
       // calls one is checked against its signature exactly like `native fn`.
       for (const FnDeclStmt& decl : ext->decls) {
         nativeSigs_[decl.name] = NativeSig{decl.params, decl.returnType};
       }
+    }
+  }
+}
+
+// Registers the `@MustUse` flag of every non-native function declared directly
+// in `block`, for the same reason `registerNativeDecls` registers the natives:
+// a function is compiled (and so its calls are checked) before the declarations
+// that appear later in the file, and the flag must already be known then. A
+// later binding of the same name clears the entry (see `compileFnDecl` and
+// `compileLet`), so the pass does not change which binding wins.
+void Compiler::registerMustUseDecls(const BlockStmt& block) {
+  // Only top-level (global) functions live in `mustUseGlobals_`; a block-local
+  // function carries its flag on its `LocalVar`, and a module's functions are
+  // locals of the module frame, so neither belongs in the global set.
+  if (!inGlobalScope()) return;
+  for (const auto& child : block.stmts) {
+    if (!child) continue;
+    if (const auto* fn = std::get_if<FnDeclStmt>(&child->node)) {
+      if (!fn->isNative && fn->mustUse) mustUseGlobals_.insert(fn->name);
     }
   }
 }

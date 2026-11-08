@@ -532,6 +532,8 @@ class Lexer {
         return make(Tok::Pipe, 1);
       case '^':
         return make(Tok::Caret, 1);
+      case '@':
+        return make(Tok::At, 1);
       default:
         break;
     }

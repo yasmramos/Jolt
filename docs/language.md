@@ -16,6 +16,7 @@ This guide describes the syntax and semantics of Jolt as implemented by the inte
 6. [Statements](#6-statements)
 7. [Functions and closures](#7-functions-and-closures)
    - [7.6 `native fn`](#76-native-fn)
+   - [7.7 `@MustUse`](#77-mustuse)
 8. [Arrays](#8-arrays)
 9. [Strings](#9-strings)
 10. [Maps](#10-maps)
@@ -1324,6 +1325,59 @@ expose one to the checker.
 
 ---
 
+### 7.7 `@MustUse`
+
+A function may be declared `@MustUse`: the caller must do something with the
+return value. When a call to it is used as a statement, so its result is thrown
+away, the compiler reports a **warning** (never an error), naming the function:
+
+```jolt
+@MustUse
+fn parse(input: string): int | error { ... }
+
+parse(text);          // warning: the result of '@MustUse' function 'parse' is discarded
+let n = parse(text);  // ok: the result is used
+```
+
+The annotation is compile-time metadata: it emits no bytecode, and the bytecode
+of a program is identical with and without it. It is accepted on `fn` and on
+`native fn` declarations, at the top level and inside a function body.
+
+Discarding the result is sometimes intentional. Assigning it to `_` is the
+explicit acknowledgement, and it never warns:
+
+```jolt
+_ = parse(text);      // ok: the discard is deliberate
+```
+
+A warning is a diagnostic, not a rejection. The program still compiles and
+runs, and the exit code is unchanged, so a `@MustUse` annotation can never turn
+a program that would have run into a failure (AGENT.md §4.6). This mirrors Rust's
+`#[must_use]` and Kotlin's `@CheckReturnValue`, and follows Go's
+`errcheck` convention that a deliberate discard should be visible.
+
+The check is precise about **which** function is called. A local or upvalue that
+shadows a `@MustUse` name is a different function, so it carries its own flag and
+does not inherit the annotation:
+
+```jolt
+@MustUse
+fn parse(input: string): int | error { ... }
+
+fn use() {
+  fn parse(input) => 0;   // a different function
+  parse("x");             // no warning: this `parse` is not `@MustUse`
+}
+```
+
+Only `@MustUse` is a known attribute. An unknown attribute is a compile error
+rather than being silently ignored, so a typo cannot drop the check; and an
+attribute must precede a `fn` or `native fn` declaration. Attribute names are
+`PascalCase` (`@MustUse`), like the future `@Dynamic`, so they are never
+confused with the `camelCase` of ordinary identifiers.
+
+---
+
 ## 8. Arrays
 
 ### 8.1 Literals and indexes
@@ -1744,13 +1798,25 @@ Jolt distinguishes two kinds of errors:
 Both are shown with the location and a code snippet:
 
 ```text
-script.jolt:3:9: runtime error: division by zero
-    |
-  3 | let x = 1 / 0;
-    |         ^
+script.jolt:3:11: runtime error: division by zero
+  |
+3 | let x = 1 / 0;
+  |           ^
 ```
 
 Runtime errors also include a stack trace with the active functions.
+
+A third kind of diagnostic is non-fatal: a **warning**. A warning is reported
+with the same snippet form but does not stop the program, which still compiles
+and runs and keeps its exit code. The only warning today is the discarded result
+of a `@MustUse` function (see §7.7).
+
+```text
+script.jolt:4:6: warning: the result of '@MustUse' function 'parse' is discarded; assign it to '_' to acknowledge
+  |
+4 | parse(text);
+  |      ^
+```
 
 Process exit codes:
 

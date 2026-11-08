@@ -1,0 +1,4 @@
+// expect-exit: 65
+// An attribute annotates a declaration; it cannot precede a `let`.
+@MustUse
+let x = 1;

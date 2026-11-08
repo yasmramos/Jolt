@@ -193,13 +193,16 @@ int runSource(const std::string &source, const std::string &name,
 
   // Imports are resolved during compilation, so `--check` validates them too.
   Bytecode bytecode;
+  Compiler compiler;
   try {
-    Compiler compiler;
     compiler.setImportLoader(makeImportLoader(resolverFor(name, argv0)));
     bytecode = compiler.compile(program);
   } catch (const CompileError &error) {
     printCompileError(name, source, error, platformPosix());
     return 65;
+  }
+  for (const Warning &warning : compiler.warnings()) {
+    printCompileWarning(name, source, warning, platformPosix());
   }
 
   if (checkOnly) return 0;
@@ -218,6 +221,8 @@ int runSource(const std::string &source, const std::string &name,
 }
 
 bool isStatementStart(const std::string &text) {
+  // An attribute (`@MustUse`) always begins a declaration, never an expression.
+  if (!text.empty() && text[0] == '@') return true;
   size_t end = 0;
   while (end < text.size() &&
          (std::isalnum(static_cast<unsigned char>(text[end])) ||
@@ -305,6 +310,8 @@ bool handleCommand(VM &vm, Compiler &compiler, const std::string &command,
       parser.seedStructNames(compiler.structNames());
       Bytecode bytecode = compiler.compileLoaded(
           parser.parseProgram(), makeImportLoader(resolverFor(path, argv0)), path);
+      for (const Warning &warning : compiler.warnings())
+        printCompileWarning(path, source, warning, platformPosix());
       vm.run(bytecode);
     } catch (const CompileError &error) {
       printCompileError(path, source, error, platformPosix());
@@ -448,6 +455,8 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
       }
 
       Bytecode bytecode = compiler.compileRepl(program);
+      for (const Warning &warning : compiler.warnings())
+        printCompileWarning("<repl>", buffer, warning, platformPosix());
       Value value = vm.run(bytecode);
       if (endsWithExpression && tailExpression)
         publishReplValue(vm, value);

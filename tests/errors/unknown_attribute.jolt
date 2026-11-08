@@ -1,0 +1,5 @@
+// expect-exit: 65
+// Only `@MustUse` is a known attribute; anything else is rejected rather than
+// silently ignored, so a typo cannot drop the check.
+@unknown
+fn f() {}

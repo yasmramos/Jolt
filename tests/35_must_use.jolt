@@ -1,0 +1,45 @@
+// PHASE 6.7 slice 5: `@MustUse`.
+//
+// `@MustUse` is compile-time metadata: it tells the compiler that the caller
+// must do something with the return value. Discarding a call to such a function
+// is a *warning*, never an error (AGENT.md §4.6: inference never rejects a
+// program that would have run), so this program still exits 0. `_ = f();`
+// acknowledges the discard on purpose.
+
+@MustUse
+fn compute(): int {
+  return 42;
+}
+
+@MustUse
+fn strict(x: int): int {
+  return x + 1;
+}
+
+fn plain(): int {
+  return 7;
+}
+
+// Used: no warning. `_ = f();` acknowledges the discard: no warning either.
+let a = compute();
+assertEq(a, 42);
+_ = strict(1);
+assertEq(strict(2), 3);
+assertEq(compute(), 42);
+
+// A plain function never warns, whatever the caller does with the result.
+plain();
+assertEq(plain(), 7);
+
+// Discarding a `@MustUse` result is a warning, not an error: the program still
+// runs and exits 0. The warning goes to stderr; only the exit code is checked.
+compute();
+
+// A local `@MustUse` function is tracked like a top-level one.
+fn outer(): int {
+  @MustUse fn inner(): int { return 5; }
+  return inner();
+}
+assertEq(outer(), 5);
+
+print("mustUse ok");

@@ -271,7 +271,7 @@ Current limitations:
 
 Ideas for future versions:
 
-- Union types (`T | E`), `@mustUse` warnings and richer error handling sugar (PHASE 6.7, slices 4-5).
+- Union types (`T | E`), `@MustUse` warnings and richer error handling sugar (PHASE 6.7, slices 4-5).
 - User-defined structs and methods.
 - Better Unicode support (upper/lower case and graphemes).
 - More tooling: formatter and debugger.
