@@ -959,6 +959,49 @@ void testDiagnosticSnippetAlignment() {
   assert(lines[3].find('^') == lines[2].find('|') + 2 + 3);
 }
 
+// The runtime stack trace must stay bounded: a deep (often infinite) recursion
+// builds thousands of frames, and printing them all buries the error. The
+// printer keeps the first and last ten frames and elides the middle.
+void testRuntimeTraceElision() {
+  const std::string source = "fn f() {}\n";
+
+  auto traceFor = [&](std::size_t depth) {
+    RuntimeError error;
+    error.message = "boom";
+    error.line = 1;
+    error.col = 1;
+    // Innermost frame first, matching how the VM records the stack.
+    for (std::size_t i = 0; i < depth; ++i) {
+      error.stack.push_back(Frame{"f" + std::to_string(i), static_cast<int>(i) + 1, 1});
+    }
+    CapturingPlatform platform;
+    printRuntimeError("<test>", source, error, platform);
+    return platform.out;
+  };
+
+  auto countLines = [](const std::string& text, const std::string& needle) {
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+      ++count;
+      pos += needle.size();
+    }
+    return count;
+  };
+
+  // A shallow trace is printed whole: no elision marker, one line per frame.
+  const std::string shallow = traceFor(5);
+  assert(shallow.find("...") == std::string::npos);
+  assert(countLines(shallow, "  at f") == 5);
+
+  // A deep trace keeps 10 + 10 frames and reports the number elided.
+  const std::string deep = traceFor(2000);
+  assert(deep.find("... 1980 more ...") != std::string::npos);
+  assert(countLines(deep, "  at f") == 20);
+  // The outermost frame is printed first and the innermost frame last.
+  assert(deep.find("  at f1999 (") < deep.find("  at f0 ("));
+}
+
 void testMustUse() {
   // PHASE 6.7.5: `@MustUse` is compile-time metadata that produces a warning,
   // never an error, when a call result is discarded. The annotation adds no
@@ -1546,6 +1589,7 @@ int main() {
   testTypeAnnotationsAccepted();
   testUnionTypes();
   testDiagnosticSnippetAlignment();
+  testRuntimeTraceElision();
   testMustUse();
   testTypeMismatchErrors();
   testNullCoalesceBytecode();
