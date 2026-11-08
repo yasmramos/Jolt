@@ -311,6 +311,10 @@ class Compiler {
   // names the target for the message.
   void checkAssignable(const TypeRef& from, const TypeRef& to, const std::string& context,
                        int line, int col);
+  // The non-union part of the assignment rule, as a message ("" means allowed).
+  // The union path in `checkAssignable` probes members with it without failing.
+  std::string assignError(const TypeRef& from, const TypeRef& to,
+                          const std::string& context) const;
 
   // Checks a call to a declared `native fn` against its recorded signature
   // (PHASE 6.5): the arity must match and every argument must be assignable to
@@ -374,6 +378,8 @@ class Compiler {
   void compileExternBlock(const ExternBlockStmt& block, int line, int col);
   // Resolves an `extern "C"` type name to a scalar or struct spec (PHASE 6.6).
   ffi::TypeSpec resolveTypeSpec(const TypeRef& type);
+  // Rejects a union where a type must cross the FFI boundary (PHASE 6.7.4).
+  void rejectUnionForFfi(const TypeRef& type, const std::string& position, int line, int col);
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);

@@ -1,0 +1,3 @@
+// expect-exit: 65
+// A union has no C representation, so it cannot cross the FFI boundary.
+extern "C" { fn abs(x: int | float): int; }

@@ -594,6 +594,56 @@ These operators add no opcode: `??` and `?.` lower to `EQ`/`JMP_IF_*`/`GETTABLE`
 and `!!` to a call to a hidden helper, so the bytecode budget is unchanged
 (AGENT.md §3).
 
+**Union types.** A type may be a union of alternatives, written with `|`. A
+value of the union's type may be any one of the alternatives, and the
+annotation is checked like every other type and then erased, so it adds no
+opcode.
+
+```jolt
+let value: int | string = 1;
+value = "text";                 // the other alternative is accepted too
+let result: int | error = try parse(input);
+```
+
+`nil` is not written as a union member: `int | nil` is the same type as `int?`,
+so `nil` folds into the nullability of the whole annotation. That keeps the two
+spellings interchangeable, and a `?` alone means exactly the same thing.
+
+```jolt
+let a: int | nil = nil;     // same type as `int?`
+let b: int | string | nil = nil;
+```
+
+Assignment follows the same rule as a single type, applied to each alternative:
+
+- A value fits the union when it fits **at least one** alternative. `int`
+  widens to `float`, so `let x: float | string = 1;` is accepted.
+- A union source fits the target only when **every** member fits, so a union is
+  assignable to a wider union that contains all of its members.
+- `nil` needs the union to be nullable (written `| nil` or with a `?`).
+
+```jolt
+let x: int | string = 1;                 // ok
+let y: float | string = 1;               // ok: int widens to float
+let wide: int | string | bool = x;       // ok: every member fits
+let bad: int | string = true;            // compile error: bool fits neither
+let narrow: int = x;                     // compile error: a union is not one type
+```
+
+A union is a compile-time-only construct with **no C representation**, so it is
+rejected wherever a type must cross the FFI boundary: `extern "C"` signatures,
+`native fn` signatures and struct fields (a struct can be passed by value).
+`void` is a return-only type, so it cannot be a union member either.
+
+`catch` produces a union: `e catch d` is either `e` or `d`, so its inferred
+type is the union of the two. That is what lets a fallback of a different type
+type-check without a cast.
+
+```jolt
+fn parse(s: string): int | error { ... }
+let recovered = parse(input) catch 0;    // int
+```
+
 ---
 
 ### 4.7 `struct`

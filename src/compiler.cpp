@@ -185,6 +185,32 @@ bool compoundOpCode(Tok op, OpCode& out) {
   }
 }
 
+// The union of two known types (PHASE 6.7.4), used to type `e catch d`: the
+// result is either the operand or the fallback. `any` or an unknown on either
+// side collapses to unknown, which keeps untyped code unchecked. `nil` folds
+// into the nullable flag instead of becoming a member.
+TypeRef unionOf(const TypeRef& a, const TypeRef& b) {
+  if (!a.isPresent() || !b.isPresent() || a.name == "any" || b.name == "any") {
+    return TypeRef{};
+  }
+  if (a.isCallback() || b.isCallback()) return TypeRef{};
+
+  TypeRef result;
+  result.name = a.name == "nil" ? b.name : a.name;
+  result.nullable = a.nullable || b.nullable || a.name == "nil" || b.name == "nil";
+  result.alternatives = a.name == "nil" ? b.alternatives : a.alternatives;
+  auto push = [&result](const std::string& name) {
+    if (name.empty() || name == "nil" || name == result.name) return;
+    if (std::find(result.alternatives.begin(), result.alternatives.end(), name) ==
+        result.alternatives.end()) {
+      result.alternatives.push_back(name);
+    }
+  };
+  for (const std::string& member : a.members()) push(member);
+  for (const std::string& member : b.members()) push(member);
+  return result;
+}
+
 }  // namespace
 
 // ------------------------------------------------------------ registers and pools
@@ -355,47 +381,90 @@ bool Compiler::lookupGlobalType(const std::string& name, TypeRef& out) const {
 // parameters.
 void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
                                const std::string& context, int line, int col) {
-  if (!to.isPresent() || !from.isPresent()) return;  // any / unknown
-  if (to.name == "any" || from.name == "any") return;
+  // Union source (PHASE 6.7.4): every alternative must fit the target, so a
+  // value read out of the union never surprises the destination. Recursing per
+  // member also makes union-to-union fall out for free.
+  if (from.isUnion()) {
+    for (const std::string& member : from.members()) {
+      checkAssignable(TypeRef{member, from.nullable}, to, context, line, col);
+    }
+    return;
+  }
+
+  // Union target: the value may take any alternative, so it fits when it fits
+  // at least one. `nil` fits only when the union is nullable, and a nullable
+  // source needs a nullable target (the `?` of one member does not cover the
+  // whole union), so both are decided before probing.
+  if (to.isUnion()) {
+    if (from.name == "nil") {
+      if (to.nullable) return;
+      fail("cannot assign 'nil' to '" + describeType(to) + "' in " + context +
+               ": a nullable value is not allowed here (add '| nil' or '?')",
+           line, col);
+    }
+    if (from.nullable && !to.nullable) {
+      fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
+               context + ": a nullable value is not allowed here (add '| nil' or '?')",
+           line, col);
+    }
+    TypeRef plain = from;
+    plain.nullable = false;
+    for (const std::string& member : to.members()) {
+      if (assignError(plain, TypeRef{member, false}, context).empty()) return;
+    }
+    fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
+             context,
+         line, col);
+  }
+
+  std::string error = assignError(from, to, context);
+  if (!error.empty()) fail(error, line, col);
+}
+
+// The single-assignment rule without the union case, as a message ("" means the
+// assignment is allowed). Kept separate so the union path can probe members
+// without aborting the compilation on the first miss.
+std::string Compiler::assignError(const TypeRef& from, const TypeRef& to,
+                                  const std::string& context) const {
+  if (!to.isPresent() || !from.isPresent()) return "";  // any / unknown
+  if (to.name == "any" || from.name == "any") return "";
 
   // `void` is a return-only type: it is never a value, so nothing can be
   // stored into it and a `void` expression cannot be used where a value is
   // expected (PHASE 6.6 maps it to C's `void`).
   if (to.name == "void") {
-    fail("cannot store a value into '" + describeType(to) + "' in " + context +
-             ": 'void' is only a return type",
-         line, col);
+    return "cannot store a value into '" + describeType(to) + "' in " + context +
+           ": 'void' is only a return type";
   }
   if (from.name == "void") {
-    fail("cannot use a 'void' expression as a value in " + context, line, col);
+    return "cannot use a 'void' expression as a value in " + context;
   }
 
   // `nil` fits any nullable target, whatever its type. It is also the NULL of
   // the FFI pointer types, so it is assignable to `ptr`/`cstring` even when the
   // annotation is not written nullable (`native fn free(p: ptr); free(nil);`).
   if (from.name == "nil") {
-    if (to.nullable || isPointerTypeName(to.name) || to.isCallback()) return;
-    fail("cannot assign 'nil' to '" + describeType(to) + "' in " + context +
-             ": a nullable value is not allowed here (use '" + to.name + "?')",
-         line, col);
+    if (to.nullable || isPointerTypeName(to.name) || to.isCallback()) return "";
+    return "cannot assign 'nil' to '" + describeType(to) + "' in " + context +
+           ": a nullable value is not allowed here (use '" + to.name + "?')";
   }
 
   // A Jolt function is the value behind a callback (`fn(int, int): int`): any
   // function is accepted, because the trampoline marshals the arguments at run
   // time against the declared signature. The exact arity/types are checked when
   // the callback is invoked, not here.
-  if (to.isCallback() && from.name == "function") return;
-  if (from.isCallback() && to.name == "function") return;
+  if (to.isCallback() && from.name == "function") return "";
+  if (from.isCallback() && to.name == "function") return "";
 
   if (from.name == to.name) {
     // Same type; a nullable value does not fit a non-nullable slot unless the
     // value is provably non-nil (which `from.nullable` already encodes).
     if (from.nullable && !to.nullable) {
-      fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
-               context + ": a nullable value is not allowed here (use '" + to.name + "?')",
-           line, col);
+      return "cannot assign '" + describeType(from) + "' to '" + describeType(to) +
+             "' in " + context + ": a nullable value is not allowed here (use '" +
+             to.name + "?')";
     }
-    return;
+    return "";
   }
 
   // FFI pointers (PHASE 6.6): a `cstring` is also a `ptr` (upcast to `void*`);
@@ -404,21 +473,20 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
   // string to it would leave a dangling pointer once the string is collected.
   // Passing a string as a `cstring` *argument* is allowed instead, because the
   // string stays alive for the whole call (see `checkNativeCall`).
-  if (from.name == "cstring" && to.name == "ptr") return;
+  if (from.name == "cstring" && to.name == "ptr") return "";
 
   // Every integer spelling is one numeric family at compile time (the runtime
   // holds an `int64`), so `int`, the fixed-width types, `uint` and `size_t`
   // are mutually assignable.
-  if (isIntegerTypeName(from.name) && isIntegerTypeName(to.name)) return;
+  if (isIntegerTypeName(from.name) && isIntegerTypeName(to.name)) return "";
 
   // Numeric widening follows Java: int -> float -> double. Narrowing
   // (double -> float, float -> int) is not implicit; use an explicit conversion.
-  if (isIntegerTypeName(from.name) && (to.name == "float" || to.name == "double")) return;
-  if (from.name == "float" && to.name == "double") return;
+  if (isIntegerTypeName(from.name) && (to.name == "float" || to.name == "double")) return "";
+  if (from.name == "float" && to.name == "double") return "";
 
-  fail("cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
-           context,
-       line, col);
+  return "cannot assign '" + describeType(from) + "' to '" + describeType(to) + "' in " +
+         context;
 }
 
 // A `native fn` declares the arity and the argument types the host function
@@ -515,11 +583,15 @@ TypeRef Compiler::inferExprType(const Expr& expr) const {
   if (const auto* attempt = std::get_if<TryExpr>(&expr.node)) {
     return inferExprType(*attempt->operand);
   }
-  // `e catch d` (PHASE 6.7.3): the result is either the operand or the
-  // fallback. Without the union types of PHASE 6.7.4 there is no type to give
-  // it, so it stays unknown and no assignment check is applied.
-  if (std::holds_alternative<CatchExpr>(expr.node)) {
-    return TypeRef{};
+  // `e catch d` (PHASE 6.7.3, typed in 6.7.4): the result is either the operand
+  // or the fallback, so its type is the union of the two. When either side is
+  // unknown the result stays unknown, which keeps untyped Jolt functions
+  // (`f() catch 0`) unchecked as before.
+  if (const auto* caught = std::get_if<CatchExpr>(&expr.node)) {
+    TypeRef left = inferExprType(*caught->operand);
+    TypeRef right = inferExprType(*caught->fallback);
+    if (!left.isPresent() || !right.isPresent()) return TypeRef{};
+    return unionOf(left, right);
   }
   // A call to a declared `native fn` has its declared return type, so
   // `let y: float = sqrt(x)` is checked like any other annotated binding.
@@ -1397,7 +1469,12 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
     // registered under the same name (the registry `registerBuiltins` fills).
     // `GETGLOBAL` reports a clear error at run time when the host does not
     // provide it, which for a module means when the module is loaded. No
-    // opcode is added and no proto is compiled.
+    // opcode is added and no proto is compiled. Its signature must be a host
+    // signature, so a union (PHASE 6.7.4) is rejected here.
+    for (const Param& param : fn.params) {
+      rejectUnionForFfi(param.type, "parameter of native function '" + fn.name + "'", line, col);
+    }
+    rejectUnionForFfi(fn.returnType, "return type of native function '" + fn.name + "'", line, col);
     emit(OpCode::GETGLOBAL, reg, addString(fn.name));
   } else {
     int child = compileFunctionProto(fn.name, fn.params, fn.body, line, col, fn.returnType);
@@ -1449,8 +1526,18 @@ void Compiler::compileFnDecl(const FnDeclStmt& fn, int line, int col) {
 // parser rejects a nested one), so a plain insert is enough; a duplicate name
 // is already rejected by the parser.
 void Compiler::compileStructDecl(const StructDeclStmt& decl, int line, int col) {
-  (void)line;
-  (void)col;
+  // A struct is an FFI-crossable data type, so a field cannot be a union: the
+  // union has no C representation and `resolveTypeSpec` reads only the primary
+  // name, which would silently marshal the wrong width. Rejected here, at the
+  // declaration, so the error names the field rather than surfacing later in an
+  // extern signature (PHASE 6.7.4).
+  for (const StructField& field : decl.fields) {
+    if (field.type.isUnion()) {
+      fail("field '" + field.name + "' of struct '" + decl.name + "' cannot have union type '" +
+               describeType(field.type) + "': a struct can cross the C boundary",
+           line, col);
+    }
+  }
   structDefs_[decl.name] = decl.fields;
 }
 
@@ -1500,8 +1587,12 @@ void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int co
     std::vector<ffi::TypeSpec> paramTypes;
     paramTypes.reserve(fn.params.size());
     for (const Param& param : fn.params) {
+      rejectUnionForFfi(param.type, "parameter of extern \"C\" function '" + fn.name + "'", line,
+                        col);
       paramTypes.push_back(resolveTypeSpec(param.type));
     }
+    rejectUnionForFfi(fn.returnType, "return type of extern \"C\" function '" + fn.name + "'",
+                      line, col);
     const ffi::TypeSpec returnType = resolveTypeSpec(fn.returnType);
     std::string problem = ffi::validateSignature(paramTypes, returnType);
     if (!problem.empty()) {
@@ -1511,6 +1602,19 @@ void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int co
     // thunk; the compiler stays free of any host/ABI dependency (§2 boundary).
     bc_.externs.push_back(ExternSymbol{fn.name, std::move(paramTypes), returnType});
     compileFnDecl(fn, line, col);
+  }
+}
+
+// A union type is a compile-time-only construct (PHASE 6.7.4). It has no C
+// representation, so it is rejected wherever a type must cross the FFI
+// boundary: `extern "C"` signatures and struct fields that an extern passes by
+// value. The message names the position so the fix is obvious.
+void Compiler::rejectUnionForFfi(const TypeRef& type, const std::string& position, int line,
+                                 int col) {
+  if (type.isUnion()) {
+    fail("union type '" + describeType(type) + "' cannot be used as " + position +
+             ": it has no C representation",
+         line, col);
   }
 }
 

@@ -1,0 +1,3 @@
+// expect-exit: 65
+// `nil` needs the union to include `nil` (or a `?`): a non-nullable union rejects it.
+let x: int | string = nil;

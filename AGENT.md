@@ -551,9 +551,19 @@ Slices, each independently shippable:
   hidden `$isError` helper keeps the lowering independent of a shadowed public
   `isError`. Tested by `tests/25_try_catch.jolt`, the `try_*` error cases and
   `testTryCatchBytecode`/`testTryCatchErrors` in `compiler_test.cpp`.
-- **6.7.4 unions `T | E`** — a real type lattice, not an extension of
-  nullability (`T?` is a `bool`, and `string | nil` does not parse). `|` is
-  accepted only in type position; in expression position it stays `BOR`.
+- **6.7.4 unions `T | E` (done)** — `|` is accepted only in type position; in
+  expression position it stays `BOR`, so no token changes. `TypeRef` gains an
+  `alternatives` list; `nil` is **not** stored as a member, it folds into the
+  existing `nullable` flag, so `int | nil` is exactly `int?` and the two
+  spellings stay interchangeable. Assignment applies the single-type rule per
+  alternative: a value fits the union when it fits **at least one** member
+  (`int` still widens to `float`), and a union source fits the target only when
+  **every** member fits. `catch` now infers the union of its two sides, which
+  is what makes a fallback of a different type check without a cast. A union is
+  compile-time only and has no C representation, so it is rejected in `extern
+  "C"`/`native fn` signatures and in struct fields (`void` cannot be a member
+  either). Tested by `tests/34_unions.jolt`, the `union_*` error cases and
+  `testUnionTypes` in `compiler_test.cpp`.
 - **6.7.5 `@mustUse`** — a warning (never a hard error) when a `@mustUse`
   return is discarded, matching Rust `#[must_use]` and Kotlin
   `@CheckReturnValue`. A hard error would violate the §4.6 principle that
@@ -680,7 +690,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
-Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type and 6.7.3 `try`/`catch` done; 6.7.4 unions, 6.7.5 `@mustUse` pending)
+Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch` and 6.7.4 unions `T | E` done; 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)

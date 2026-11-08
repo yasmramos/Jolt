@@ -1,0 +1,3 @@
+// expect-exit: 65
+// A value must fit one of the union's alternatives; `bool` fits neither.
+let x: int | string = true;
