@@ -1,0 +1,6 @@
+// expect-exit: 70
+// The key/value form needs a map; another iterable is a runtime error.
+
+for k, v in [1, 2, 3] {
+  print(k, v);
+}

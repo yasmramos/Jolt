@@ -421,7 +421,11 @@ struct ForInStmt {
   // Iterates arrays, strings (by UTF-8 char), maps (by key) and ranges.
   // Ranges are consumed lazily from their bounds instead of being expanded
   // into a temporary vector, so `for i in 0..1_000_000 {}` stays O(1) memory.
+  // `valueVar` is empty for the single-variable form; when it is set
+  // (`for k, v in map`) the first variable receives the key and the second the
+  // matching value, so a map is walked as key/value pairs.
   std::string var;
+  std::string valueVar;
   ExprPtr iterable;
   StmtPtr body;
 };
