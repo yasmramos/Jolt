@@ -1,0 +1,76 @@
+// `for ... in` with optional parentheses (PHASE 6.5).
+//
+// The loop variable and the iterable may be wrapped in parentheses:
+// `for (x in xs)` is exactly `for x in xs`. The parenthesized form is told
+// apart from a classic `for` header, which keeps working unchanged.
+
+// --- both spellings give the same result -----------------------------------
+
+let a = [10, 20, 30];
+
+let without = [];
+for x in a { without.push(x); }
+
+let with = [];
+for (x in a) { with.push(x); }
+
+assertEq(without, [10, 20, 30]);
+assertEq(with, without);
+
+// --- ranges, strings and maps ----------------------------------------------
+
+var rangeSum = 0;
+for (n in 1..4) { rangeSum += n; }   // 1 + 2 + 3
+assertEq(rangeSum, 6);
+
+var chars = "";
+for (c in "abc") { chars += c; }
+assertEq(chars, "abc");
+
+let keys = [];
+for (k in {a: 1, b: 2}) { keys.push(k); }
+assertEq(len(keys), 2);
+
+// --- the classic `for` is unaffected ---------------------------------------
+
+var classic = 0;
+for (var i = 0; i < 3; i += 1) { classic += i; }
+assertEq(classic, 3);
+
+// A parenthesized header whose initializer is not `IDENT in` stays classic.
+var classic2 = 0;
+for (var j = 0; j < 2; j += 1) { classic2 += 1; }
+assertEq(classic2, 2);
+
+// --- break / continue and nested loops -------------------------------------
+
+var stopped = 0;
+for (x in [1, 2, 3, 4]) {
+  if (x == 3) { break; }
+  stopped += x;
+}
+assertEq(stopped, 1 + 2);
+
+var odds = 0;
+for (x in [1, 2, 3, 4, 5]) {
+  if (x % 2 == 0) { continue; }
+  odds += x;
+}
+assertEq(odds, 1 + 3 + 5);
+
+let pairs = [];
+for (i in 0..2) {
+  for (j in 0..2) {
+    pairs.push(i * 10 + j);
+  }
+}
+assertEq(pairs, [0, 1, 10, 11]);
+
+// --- each iteration still gets a fresh loop-variable cell ------------------
+
+var fns = [];
+for (v in [10, 20]) { fns.push(() => v); }
+assertEq(fns[0](), 10);
+assertEq(fns[1](), 20);
+
+print("ok");

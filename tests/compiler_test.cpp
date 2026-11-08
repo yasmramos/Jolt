@@ -787,8 +787,11 @@ void testPhase6ConstructsCompile() {
   expectCompiles("let m = {a: 1};\n");
   expectCompiles("let s = \"a${b}\";\n");
   expectCompiles("let r = 1..2;\n");
-  // No parentheses: `for (x in ...)` would be rejected by the parser instead.
+  // `for-in` accepts an optional pair of parentheses; the classic `for` header
+  // is unaffected.
   expectCompiles("for x in 1..2 { print(x); }\n");
+  expectCompiles("for (x in 1..2) { print(x); }\n");
+  expectCompiles("for (var i = 0; i < 2; i += 1) { print(i); }\n");
   expectCompiles("let x = 1 in 2;\n");
   expectCompiles("let a = 1;\nlet x = a[0];\n");
   expectCompiles("let m = 1;\nlet x = m.a;\n");
