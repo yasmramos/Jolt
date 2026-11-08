@@ -412,6 +412,37 @@ void testDoWhileBackpatch() {
   expectCompiles("do { } while (false);\n");
 }
 
+void testBracelessBodies() {
+  // A brace-less body compiles to the exact bytecode of the brace form: the
+  // single statement is wrapped in a block, so nothing downstream changes.
+  auto sameCode = [](const std::string& braced, const std::string& braceless) {
+    Bytecode a = compileSource(braced);
+    Bytecode b = compileSource(braceless);
+    assert(a.code.size() == b.code.size());
+    for (size_t i = 0; i < a.code.size(); ++i) {
+      assert(a.code[i].op == b.code[i].op);
+      assert(a.code[i].a == b.code[i].a);
+      assert(a.code[i].b == b.code[i].b);
+      assert(a.code[i].c == b.code[i].c);
+      assert(a.code[i].jump == b.code[i].jump);
+    }
+  };
+
+  sameCode("if (true) { print(1); }\n", "if (true) print(1);\n");
+  sameCode("if (true) { print(1); } else { print(2); }\n",
+           "if (true) print(1); else print(2);\n");
+  sameCode("while (false) { print(1); }\n", "while (false) print(1);\n");
+  sameCode("for (var i = 0; i < 3; i += 1) { print(i); }\n",
+           "for (var i = 0; i < 3; i += 1) print(i);\n");
+  sameCode("for i in 0..3 { print(i); }\n", "for i in 0..3 print(i);\n");
+
+  // A brace-less `else if` chain still parses, and `else` binds to the nearest
+  // `if` (C dangling-else semantics): the `else` belongs to the inner `if`.
+  expectCompiles("if (true) if (false) print(1); else print(2);\n");
+  // A brace-less body must still be a single, complete statement.
+  expectCompileError("if (true) print(1) print(2);\n", "missing ';' in brace-less body");
+}
+
 void testSwitchBytecode() {
   // `switch (2) { case 1: {...} case 2: {...} }` compiles the subject once,
   // compares each label with EQ, jumps to the matching body and skips the rest.
@@ -1489,6 +1520,8 @@ int main() {
   testForBackpatch();
   testBreakAndContinueBackpatch();
   testDoWhileBackpatch();
+
+  testBracelessBodies();
   testSwitchBytecode();
   testSwitchRangeUsesIn();
   testSwitchErrors();

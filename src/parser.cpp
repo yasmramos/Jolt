@@ -900,13 +900,13 @@ StmtPtr Parser::parseIf() {
   consume(Tok::LParen, "expected '(' after 'if'");
   auto condition = parseExpression();
   consume(Tok::RParen, "expected ')' after the condition");
-  auto thenBranch = parseBlock();
+  auto thenBranch = parseBody();
   StmtPtr elseBranch;
   if (match(Tok::Else)) {
     if (match(Tok::If)) {
       elseBranch = parseIf();
     } else {
-      elseBranch = parseBlock();
+      elseBranch = parseBody();
     }
   }
   match(Tok::Semicolon);
@@ -919,7 +919,7 @@ StmtPtr Parser::parseWhile() {
   consume(Tok::LParen, "expected '(' after 'while'");
   auto condition = parseExpression();
   consume(Tok::RParen, "expected ')' after the condition");
-  auto body = parseBlock();
+  auto body = parseBody();
   match(Tok::Semicolon);
   return makeStmt(WhileStmt{std::move(condition), std::move(body)}, keyword.line, keyword.col);
 }
@@ -956,7 +956,7 @@ StmtPtr Parser::parseFor() {
     consume(Tok::In, "expected 'in' in the for-in loop");
     auto iterable = parseExpression();
     if (parenthesizedForIn) consume(Tok::RParen, "expected ')' after the for-in iterable");
-    auto body = parseBlock();
+    auto body = parseBody();
     match(Tok::Semicolon);
     return makeStmt(ForInStmt{var.lexeme, std::move(iterable), std::move(body)}, keyword.line,
                     keyword.col);
@@ -983,7 +983,7 @@ StmtPtr Parser::parseFor() {
   if (!check(Tok::RParen)) step = parseExpression();
   consume(Tok::RParen, "expected ')' after the for-loop clauses");
 
-  auto body = parseBlock();
+  auto body = parseBody();
   match(Tok::Semicolon);
   return makeStmt(ForStmt{std::move(init), std::move(condition), std::move(step), std::move(body)},
                   keyword.line, keyword.col);
@@ -1011,6 +1011,19 @@ StmtPtr Parser::parseDefer() {
   StmtPtr body = parseBlock();
   match(Tok::Semicolon);
   return makeStmt(DeferStmt{std::move(body)}, keyword.line, keyword.col);
+}
+
+StmtPtr Parser::parseBody() {
+  if (check(Tok::LBrace)) return parseBlock();
+  // Brace-less body: exactly one statement. Wrapping it in a block keeps the
+  // AST, the compiler and the bytecode identical to the brace form, so the
+  // single statement is a scope of its own (a `let` declared in it does not
+  // leak) and a `defer` in it runs when the body exits.
+  const Token& start = peek();
+  auto statement = parseStatement();
+  std::vector<StmtPtr> statements;
+  statements.push_back(std::move(statement));
+  return makeStmt(BlockStmt{std::move(statements)}, start.line, start.col);
 }
 
 StmtPtr Parser::parseBlock() {

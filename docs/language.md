@@ -986,7 +986,7 @@ Blocks create a new scope. An empty `;` statement is also valid.
 
 ### 6.3 `if` / `else`
 
-The condition goes in parentheses and the body **must** be in braces:
+The condition goes in parentheses. The body is usually a block:
 
 ```jolt
 if (age >= 18) {
@@ -998,7 +998,20 @@ if (age >= 18) {
 }
 ```
 
-The brace-less form (`if (x) print(x);`) is not supported.
+A body may also be a single statement without braces. It is wrapped in a
+block, so its bytecode is the same as the brace form, it is a scope of its own
+(a `let` in it does not leak) and a `defer` in it runs when the body exits:
+
+```jolt
+if (x > 0) print("positive"); else print("non-positive");
+
+if (n >= 90) return "A";
+else if (n >= 70) return "B";
+else return "C";
+```
+
+The dangling `else` binds to the nearest `if`, like C. The same brace-less form
+works for `while`, `for` and `for-in` (§6.4, §6.5, §6.6).
 
 ### 6.4 `while` and `do`/`while`
 
@@ -2118,14 +2131,9 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
-- The bodies of `if`, `while` and `for` require braces.
-<<<<<<< HEAD
-- `for ... in` does not accept parentheses around the variable and the iterable.
-- Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
-=======
+- A body of `if`, `while`, `for` or `for-in` may be a block or a single statement without braces; a brace-less body is wrapped in a block, so its bytecode and scoping match the brace form. `switch` arms always require braces.
 - `for ... in` accepts the loop variable and the iterable with or without parentheses (`for x in xs` and `for (x in xs)`).
-- Slicing syntax `s[start:end]` works for strings and arrays (see §8.1 and §9); there is no step (`s[start:end:step]`), and the methods `substr`/`slice` remain available.
->>>>>>> 63508e2 (feat(parser): allow parentheses in for-in headers)
+- Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.

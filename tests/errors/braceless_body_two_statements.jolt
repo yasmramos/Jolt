@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A brace-less body is a single statement; two statements need braces.
+
+if (true) print(1) print(2);
