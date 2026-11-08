@@ -1471,8 +1471,8 @@ void Compiler::registerNativeDecls(const BlockStmt& block) {
     } else if (const auto* ext = std::get_if<ExternBlockStmt>(&child->node)) {
       // An `extern "C"` declaration is a native, so a hoisted function that
       // calls one is checked against its signature exactly like `native fn`.
-      for (const FnDeclStmt& fn : ext->decls) {
-        nativeSigs_[fn.name] = NativeSig{fn.params, fn.returnType};
+      for (const FnDeclStmt& decl : ext->decls) {
+        nativeSigs_[decl.name] = NativeSig{decl.params, decl.returnType};
       }
     }
   }
