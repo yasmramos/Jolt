@@ -948,6 +948,70 @@ void testTypeMismatchErrors() {
   expectCompileError("let x: integer = 1;\n", "unknown type name");
 }
 
+void testLogicalAssignmentBytecode() {
+  // `x ??= v` (PHASE 6.5 operators, compound form): read the target once,
+  // compare against nil with NEQ, and short-circuit with JMP_IF_TRUE. No new
+  // opcode: the same `LOADK nil` + `NEQ` + jump shape as `??`.
+  Bytecode coalesce = compileSource("var x = nil;\nx ??= 1;\n");
+  bool sawNeq = false;
+  bool sawJmpIfTrue = false;
+  bool sawSetGlobal = false;
+  for (const Instruction& ins : coalesce.code) {
+    if (ins.op == OpCode::NEQ) sawNeq = true;
+    if (ins.op == OpCode::JMP_IF_TRUE) sawJmpIfTrue = true;
+    if (ins.op == OpCode::SETGLOBAL) sawSetGlobal = true;
+  }
+  assert(sawNeq && "??= must compare the target against nil");
+  assert(sawJmpIfTrue && "??= must skip the write-back when the target is not nil");
+  assert(sawSetGlobal && "??= must write the target back");
+
+  // `x ||= v` tests truthiness: JMP_IF_TRUE skips the assignment.
+  Bytecode orAssign = compileSource("var x = 0;\nx ||= 1;\n");
+  bool orJmpIfTrue = false;
+  for (const Instruction& ins : orAssign.code) {
+    if (ins.op == OpCode::JMP_IF_TRUE) orJmpIfTrue = true;
+  }
+  assert(orJmpIfTrue && "||= must skip the write-back when the target is truthy");
+
+  // `x &&= v` tests truthiness: JMP_IF_FALSE skips the assignment.
+  Bytecode andAssign = compileSource("var x = 1;\nx &&= 0;\n");
+  bool andJmpIfFalse = false;
+  for (const Instruction& ins : andAssign.code) {
+    if (ins.op == OpCode::JMP_IF_FALSE) andJmpIfFalse = true;
+  }
+  assert(andJmpIfFalse && "&&= must skip the write-back when the target is falsy");
+
+  // On an index target the element is read once (GETTABLE) and written back
+  // once (SETTABLE). The array literal `[nil]` itself contributes one SETTABLE,
+  // so the assignment adds exactly one of each.
+  Bytecode indexed = compileSource("var a = [nil];\na[0] ??= 1;\n");
+  int getTable = 0;
+  int setTable = 0;
+  for (const Instruction& ins : indexed.code) {
+    if (ins.op == OpCode::GETTABLE) ++getTable;
+    if (ins.op == OpCode::SETTABLE) ++setTable;
+  }
+  assert(getTable == 1 && "the index target must be read once");
+  assert(setTable == 2 && "one SETTABLE for the literal plus one write-back");
+
+  // The target is read once on the variable path too: one GETGLOBAL.
+  int getGlobal = 0;
+  for (const Instruction& ins : coalesce.code) {
+    if (ins.op == OpCode::GETGLOBAL) ++getGlobal;
+  }
+  assert(getGlobal == 1 && "the variable target must be read once");
+
+  expectCompiles("var x = nil;\nx ??= 1;\n");
+  expectCompiles("var x = false;\nx ||= true;\n");
+  expectCompiles("var x = true;\nx &&= false;\n");
+}
+
+void testLogicalAssignmentErrors() {
+  // The target must be assignable and mutable, exactly like `=`.
+  expectCompileError("let x = 1;\nx ||= 2;\n", "||= on an immutable binding");
+  expectCompileError("let m = {a: nil};\nm?.a ??= 2;\n", "??= on a safe member access");
+}
+
 void testNullCoalesceBytecode() {
   // PHASE 6.5: `a ?? b` lowers to existing opcodes only (no new opcode).
   // LOADK a; LOADK nil; EQ isNil, a, nil; JMP_IF_FALSE isNil -> end;
@@ -1408,6 +1472,8 @@ int main() {
   testMustUse();
   testTypeMismatchErrors();
   testNullCoalesceBytecode();
+  testLogicalAssignmentBytecode();
+  testLogicalAssignmentErrors();
   testSafeMemberBytecode();
   testNonNullBytecode();
   testSliceBytecode();

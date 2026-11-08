@@ -1,0 +1,89 @@
+// Logical compound assignment: `&&=`, `||=` and `??=`.
+//
+// Each operator short-circuits like its binary counterpart and writes the
+// target back only when it does not. `&&=`/`||=` test truthiness (only `false`
+// and `nil` are falsy); `??=` tests nil only, so `false` and `0` are kept.
+
+// `??=` assigns only when the target is nil.
+var a = nil;
+a ??= 5;
+assertEq(a, 5);
+a ??= 9;
+assertEq(a, 5);
+
+// `||=` assigns when the target is falsy.
+var b = false;
+b ||= 7;
+assertEq(b, 7);
+b ||= 3;
+assertEq(b, 7);
+
+// `&&=` assigns when the target is truthy.
+var c = 1;
+c &&= 42;
+assertEq(c, 42);
+c &&= 0;
+assertEq(c, 0);
+
+// `??=` ignores falsy-but-not-nil values; `||=` does not.
+var d = false;
+d ??= "x";
+assertEq(d, false);
+var e = false;
+e ||= "y";
+assertEq(e, "y");
+
+// Like the plain assignment, the expression yields the target's final value.
+var f = nil;
+let g = (f ??= 3);
+assertEq(g, 3);
+assertEq(f, 3);
+
+// They work on indexes and members, reading the target once.
+let arr = [nil, false, 5];
+arr[0] ??= 10;
+arr[1] ||= 20;
+arr[2] &&= 30;
+assertEq(arr, [10, 20, 30]);
+
+let obj = {x: nil, y: false, z: 1};
+obj.x ??= 1;
+obj.y ||= 2;
+obj.z &&= 3;
+assertEq(obj.x, 1);
+assertEq(obj.y, 2);
+assertEq(obj.z, 3);
+obj["y"] ||= 99;
+assertEq(obj.y, 2);
+
+// The right-hand side is not evaluated when the operator short-circuits.
+var calls = 0;
+fn bump() {
+  calls += 1;
+  return 99;
+}
+var h = 1;
+h ||= bump();
+assertEq(h, 1);
+assertEq(calls, 0);
+h &&= bump();
+assertEq(h, 99);
+assertEq(calls, 1);
+
+// Inside a function, the target is a local (or a captured upvalue).
+fn localCase() {
+  var z = nil;
+  z ??= 4;
+  return z;
+}
+assertEq(localCase(), 4);
+
+fn counter() {
+  var n = false;
+  fn step() {
+    n ||= 100;
+  }
+  step();
+  return n;
+}
+assertEq(counter(), 100);

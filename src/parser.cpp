@@ -187,6 +187,9 @@ bool isAssignOp(Tok type) {
     case Tok::SlashEq:
     case Tok::PercentEq:
     case Tok::StarStarEq:
+    case Tok::AmpAmpEq:
+    case Tok::PipePipeEq:
+    case Tok::QuestionQuestionEq:
       return true;
     default:
       return false;

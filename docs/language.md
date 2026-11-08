@@ -738,7 +738,7 @@ From highest to lowest precedence:
 | 15 | `??` | left |
 | 16 | `catch` | left |
 | 17 | `?:` | right |
-| 18 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
+| 18 | `=` `+=` `-=` `*=` `/=` `%=` `**=` `&&=` `\|\|=` `??=` | right |
 
 Notes:
 
@@ -931,6 +931,32 @@ let person = {age: 36};
 person.age += 1;
 person["age"] *= 2;
 ```
+
+The logical operators have a compound form too. Each one short-circuits exactly
+like its binary counterpart and writes the target back only when it does not,
+so the right-hand side is evaluated at most once:
+
+```jolt
+var name = nil;
+name ??= "anon";  // assigns only when `name` is nil
+
+var count = 0;    // 0 is truthy in Jolt
+count ||= 10;     // not assigned: `count` is already truthy
+
+var flag = true;
+flag &&= check(); // calls `check()` and assigns its result
+```
+
+- `a ??= b` is `a = a ?? b`: assign `b` only when `a` is nil (`false` and `0`
+  are kept).
+- `a ||= b` is `a = a || b`: assign `b` only when `a` is falsy (`false` or
+  `nil`).
+- `a &&= b` is `a = a && b`: assign `b` only when `a` is truthy.
+
+Like the other compound operators, they work on indexes and members
+(`data[0] ??= 1`, `obj.name ||= "x"`) and yield the target's final value. They
+read the target once and lower to the existing opcodes (`EQ`/`NEQ`,
+`JMP_IF_FALSE`/`JMP_IF_TRUE`, `MOVE`), so no opcode is added.
 
 There are no `++` or `--`; use `+= 1` and `-= 1`.
 

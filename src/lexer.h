@@ -59,6 +59,7 @@ enum class Tok {
   Question,
   QuestionDot,
   QuestionQuestion,
+  QuestionQuestionEq,
   Arrow,
   // operators
   Plus,
@@ -77,7 +78,9 @@ enum class Tok {
   Gt,
   GtEq,
   AmpAmp,
+  AmpAmpEq,
   PipePipe,
+  PipePipeEq,
   Amp,
   Pipe,
   Caret,

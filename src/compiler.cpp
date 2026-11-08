@@ -185,6 +185,14 @@ bool compoundOpCode(Tok op, OpCode& out) {
   }
 }
 
+// The short-circuiting compound assignments `&&=`, `||=` and `??=`. Unlike
+// `+=` and friends they cannot reuse the plain binary opcode: the target must
+// be read once, written back only on the non-short-circuiting branch, and the
+// result expression must still yield the target's final value.
+bool isLogicalAssignOp(Tok op) {
+  return op == Tok::AmpAmpEq || op == Tok::PipePipeEq || op == Tok::QuestionQuestionEq;
+}
+
 // The union of two known types (PHASE 6.7.4), used to type `e catch d`: the
 // result is either the operand or the fallback. `any` or an unknown on either
 // side collapses to unknown, which keeps untyped code unchecked. `nil` folds
@@ -2268,6 +2276,28 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
       return value;
     }
 
+    // `&&=`, `||=` and `??=`: the target is read once and written back only
+    // when the operator does not short-circuit (see compileLogicalAssign).
+    if (isLogicalAssignOp(assign.op)) {
+      int current = allocReg();
+      if (isLocal) {
+        emit(OpCode::GETLOCAL, current, local.slot);
+      } else if (upvalueSlot >= 0) {
+        emit(OpCode::GETUPVAL, current, upvalueSlot);
+      } else {
+        emit(OpCode::GETGLOBAL, current, addString(importBindingName(name)));
+      }
+      return compileLogicalAssign(assign, current, [&] {
+        if (isLocal) {
+          emit(OpCode::SETLOCAL, current, local.slot);
+        } else if (upvalueSlot >= 0) {
+          emit(OpCode::SETUPVAL, current, upvalueSlot);
+        } else {
+          emit(OpCode::SETGLOBAL, current, addString(importBindingName(name)));
+        }
+      });
+    }
+
     OpCode op;
     if (!compoundOpCode(assign.op, op)) {
       fail("unsupported compound assignment operator", assign.opLine, assign.opCol);
@@ -2319,6 +2349,20 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     return object;
   }
 
+  // `a[k] &&= v`, `a.k ||= v`, `a[k] ??= v`: read the element once, then
+  // short-circuit. The receiver and key are already in `object`/`key`, so the
+  // write-back is a SETTABLE of the same target.
+  if (isLogicalAssignOp(assign.op)) {
+    int current = allocReg();
+    emit(OpCode::GETTABLE, current, object, key);
+    int result = compileLogicalAssign(assign, current, [&] {
+      emit(OpCode::SETTABLE, current, object, key);
+    });
+    emit(OpCode::MOVE, object, result);
+    freeReg(nextReg_ - object - 1);
+    return object;
+  }
+
   OpCode op;
   if (!compoundOpCode(assign.op, op)) {
     fail("unsupported compound assignment operator", assign.opLine, assign.opCol);
@@ -2333,6 +2377,37 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   emit(OpCode::MOVE, object, current);
   freeReg(nextReg_ - object - 1);
   return object;
+}
+
+int Compiler::compileLogicalAssign(const AssignExpr& assign, int targetReg,
+                                   const std::function<void()>& store) {
+  // `targetReg` holds the target's current value. The test matches the plain
+  // binary operator: `&&=` and `||=` test truthiness (like `&&`/`||`), `??=`
+  // tests only nil (like `??`). On short-circuit the write-back is skipped and
+  // the expression yields the value already read; otherwise the right-hand
+  // side is evaluated into `targetReg` and written back once.
+  //
+  // `store` emits the write-back, so a variable target stores to its local,
+  // upvalue or global slot and an index/member target emits SETTABLE.
+  int skipJump;
+  if (assign.op == Tok::QuestionQuestionEq) {
+    int nilReg = allocReg();
+    emit(OpCode::LOADK, nilReg, addConstant(Value()));
+    int isNotNil = allocReg();
+    emit(OpCode::NEQ, isNotNil, targetReg, nilReg);
+    skipJump = emitJump(OpCode::JMP_IF_TRUE, isNotNil);
+    freeReg(2);
+  } else {
+    skipJump = emitJump(assign.op == Tok::AmpAmpEq ? OpCode::JMP_IF_FALSE : OpCode::JMP_IF_TRUE,
+                        targetReg);
+  }
+
+  int right = compileExpr(*assign.value);
+  emit(OpCode::MOVE, targetReg, right);
+  freeReg();
+  store();
+  patchJump(skipJump, currentOffset());
+  return targetReg;
 }
 
 int Compiler::compileTernary(const TernaryExpr& ternary) {
