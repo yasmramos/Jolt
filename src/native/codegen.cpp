@@ -376,7 +376,14 @@ void CodeGen::idiv(X64Reg divisor) {
   emitByte(static_cast<std::uint8_t>(0xC0 | (7 << 3) | (e & 0x07)));
 }
 
-void CodeGen::cdq() { emitByte(0x99); }
+void CodeGen::cdq() {
+  // 64-bit sign-extension (CQO, REX.W + 0x99): sign-extend rax into rdx:rax.
+  // The bare 0x99 form (CDQ) only widens eax, so a dividend outside the 32-bit
+  // range would be divided with a wrong high half. Jolt's integers are 64-bit
+  // (`Value` stores `int64_t`), so the widening must be 64-bit too.
+  rex(true, 0, false, 0, 0);
+  emitByte(0x99);
+}
 
 void CodeGen::unaryAlu(std::uint8_t ext, X64Reg dst) {
   std::uint8_t d = enc(dst);
@@ -396,6 +403,7 @@ void CodeGen::shiftCl(std::uint8_t ext, X64Reg dst) {
 }
 
 void CodeGen::shlCl(X64Reg dst) { shiftCl(4, dst); }
+void CodeGen::shrCl(X64Reg dst) { shiftCl(5, dst); }
 void CodeGen::sarCl(X64Reg dst) { shiftCl(7, dst); }
 
 // Signed divide rdx:rax by `divisor`, quotient in rax and remainder in rdx
@@ -423,6 +431,16 @@ void CodeGen::testReg(X64Reg reg) {
   rex(true, r, false, 0, r);
   emitByte(0x85);
   emitByte(static_cast<std::uint8_t>(0xC0 | ((r & 0x07) << 3) | (r & 0x07)));
+}
+
+void CodeGen::testImm32(X64Reg reg, std::int32_t value) {
+  // F7 /0: test r/m64, imm32. The /0 extension sits in the reg field, the
+  // operand in rm; REX.W makes it a 64-bit test.
+  std::uint8_t r = enc(reg);
+  rex(true, 0, false, 0, r);
+  emitByte(0xF7);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (0 << 3) | (r & 0x07)));
+  emit32(value);
 }
 
 // setcc r/m8: 0F 90+cc /0. The condition code is the low nibble of the Jcc
@@ -479,8 +497,39 @@ void CodeGen::addsd(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x58, dstXmm, srcXm
 void CodeGen::subsd(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x5C, dstXmm, srcXmm); }
 void CodeGen::mulsd(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x59, dstXmm, srcXmm); }
 void CodeGen::divsd(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x5E, dstXmm, srcXmm); }
+void CodeGen::movsdReg(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x10, dstXmm, srcXmm); }
+void CodeGen::cvtsd2ss(int dstXmm, int srcXmm) { sseRegOp(0xF2, 0x5A, dstXmm, srcXmm); }
+void CodeGen::cvtss2sd(int dstXmm, int srcXmm) { sseRegOp(0xF3, 0x5A, dstXmm, srcXmm); }
 void CodeGen::ucomisd(int a, int b) { sseRegOp(0x66, 0x2E, a, b); }
 void CodeGen::xorps(int dstXmm, int srcXmm) { sseRegOp(0x00, 0x57, dstXmm, srcXmm); }
+
+void CodeGen::movqToXmm(int xmm, X64Reg src) {
+  // 66 REX.W 0F 6E /r: reg field = xmm (REX.R), rm field = GPR (REX.B).
+  std::uint8_t d = static_cast<std::uint8_t>(xmm - kXmmBase);
+  std::uint8_t s = enc(src);
+  std::uint8_t byte = 0x40 | 0x08;  // W=1
+  if (d >= 8) byte |= 0x04;
+  if (s >= 8) byte |= 0x01;
+  emitByte(0x66);
+  if (byte != 0x40) emitByte(byte);
+  emitByte(0x0F);
+  emitByte(0x6E);
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
+}
+
+void CodeGen::movqFromXmm(X64Reg dst, int xmm) {
+  // 66 REX.W 0F 7E /r: reg field = xmm (REX.R), rm field = GPR (REX.B).
+  std::uint8_t d = enc(dst);
+  std::uint8_t s = static_cast<std::uint8_t>(xmm - kXmmBase);
+  std::uint8_t byte = 0x40 | 0x08;  // W=1
+  if (s >= 8) byte |= 0x04;
+  if (d >= 8) byte |= 0x01;
+  emitByte(0x66);
+  if (byte != 0x40) emitByte(byte);
+  emitByte(0x0F);
+  emitByte(0x7E);
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((s & 0x07) << 3) | (d & 0x07)));
+}
 
 void CodeGen::sseMemOp(std::uint8_t prefix, std::uint8_t opcode, int xmm, X64Reg base,
                        std::int64_t disp) {

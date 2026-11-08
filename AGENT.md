@@ -54,14 +54,14 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1a |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
 | `native/arena.cpp` | block + size | aligned allocations | ✅ PHASE 7c.0 |
 | `native/platform_freestanding.cpp` | `Platform` ops | direct Linux syscalls | ✅ PHASE 7c.0 |
 | `native/entry.cpp` | program entry label | `_start` + runtime prelude | ✅ PHASE 7c.0 |
-| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1a |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1a |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1b |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
 
 ### Toolchain binaries and the compiler boundary
 
@@ -657,10 +657,27 @@ Slices, each independently shippable:
       a backward loop, 40 registers) and end to end in
       `tests/freestanding_test.cpp` (a real static ELF that prints
       `42`, `-7`, `true`, `false`, `nil`, and a type error that exits 70).
-    - **7c.1b** — floats and strings over the arena: the `Float` and `Str` tags
-      (`LOADK` of a float/string), `DIV`/`MOD`/`POW` with the division-by-zero
-      error path, `SHL`/`SHR` (the shift count needs `cl`, now that registers
-      live in memory), and float-to-text for `print`.
+    - **7c.1b** (done) — floats and integers division/shift over the boxed
+      model. The `AotValue` gains the `Double` tag next to `Float`
+      (`include/native/value.h`); a float/double payload is the IEEE-754
+      bit pattern of a binary64 value, so a `Float` stores a binary32 value
+      widened exactly the way the hosted `Value` does. `LOADK` of a
+      float/double constant now lowers to a `movabs` of the bit pattern.
+      `jolt_arith` implements `+`/`-`/`*`/`/`/`%` with the int/float/double
+      promotion of `ops::binary`: int/int uses 64-bit wrapping arithmetic
+      (with the `INT64_MIN / -1` overflow special-cased), anything with a
+      float promotes to double and a float/float result rounds back to
+      binary32, so `0.1f + 0.2f == 0.3f` holds. Division by zero (int and
+      float) reports an error and exits 70. `jolt_shift` lowers `SHL`/`SHR`
+      (arithmetic `>>`, count range-checked to 0..63), `jolt_pow` lowers
+      integer `**` with a non-negative exponent (`intPow`), and `jolt_negate`
+      negates a float by flipping the sign bit. Numeric equality and ordering
+      are numeric across int/float/double (`1 == 1.0` is true), matching
+      `Value::equals`/`lessThan`. Float `%`, float `**` (libm `fmod`/`pow`)
+      and float-to-text for `print` stay deferred to 7c.1c.
+    - **7c.1c** — strings over the arena (the `Str` tag, `LOADK` of a string
+      constant, `+` concatenation), `MOD`/`POW` on floats (libm `fmod`/`pow`)
+      and float-to-text for `print` (own dtoa).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -688,9 +705,11 @@ Slices, each independently shippable:
   `tests/freestanding_test.cpp`. 7c.1a adds the boxed value model
   (`include/native/value.h`) and the embedded runtime
   (`include/native/runtime.cpp`): a register is a 16-byte `AotValue` slot in a
-  stack register file, and the integer/bitwise/unary/compare/truthiness
-  helpers plus the int/bool/nil printer are emitted as machine code into the
-  program's own buffer. Still missing: floats and strings (7c.1b), the
+  stack register file, and the integer/float arithmetic, bitwise/shift, unary,
+  comparison and truthiness helpers plus the int/bool/nil printer are emitted
+  as machine code into the program's own buffer. 7c.1b adds floats and doubles
+  (`Double` tag, `jolt_arith`/`jolt_shift`/`jolt_pow`), with the int/float/double
+  promotion of the hosted engine. Still missing: strings (7c.1c), the
   embedded runtime calls (7c.2/7c.3) and `jolt build` (7d).
 
 ### Post-1.0 — UI library
@@ -728,7 +747,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0 and 7c.1a done; 7c.1b+, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a and 7c.1b done; 7c.1c+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

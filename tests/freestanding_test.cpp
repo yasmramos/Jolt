@@ -326,6 +326,18 @@ static void test_boxed_runtime_error() {
         "the runtime error names the unsupported operand types");
 }
 
+// A division by zero in a lowered operation must report an error and exit 70,
+// exercising the new error path in a real static ELF.
+static void test_boxed_runtime_div_zero() {
+  Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                              instr(OpCode::DIV, 0, 0, 1), instr(OpCode::HALT)},
+                             {Value(static_cast<int64_t>(1)), Value(static_cast<int64_t>(0))}, 2);
+  RunResult result = buildAndRun("/tmp/jolt_boxed_divzero", proto);
+  check(result.exitCode == 70, "a division by zero exits 70");
+  check(result.output.find("division by zero") != std::string::npos,
+        "the runtime error names the division by zero");
+}
+
 #endif  // FREESTANDING_EXEC_TESTS
 
 int main() {
@@ -335,6 +347,7 @@ int main() {
   test_end_to_end();
   test_boxed_runtime_print();
   test_boxed_runtime_error();
+  test_boxed_runtime_div_zero();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif
