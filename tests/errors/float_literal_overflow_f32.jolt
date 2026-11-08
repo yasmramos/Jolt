@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A `float` literal is narrowed to binary32, so a value that is a valid
+// `double` but overflows binary32 (`1e40f`) is out of range.
+print(1e40f);

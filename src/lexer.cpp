@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -257,13 +258,31 @@ class Lexer {
     token.col = startCol;
     token.lexeme = raw;
     if (isFloat || singlePrecision) {
+      // Parse at the literal's own width so the range check matches the type: a
+      // `float` literal is checked against binary32, a `double` against
+      // binary64. `strtof`/`strtod` report ERANGE both for overflow (the result
+      // is infinity) and for underflow, but a representable subnormal is a
+      // valid literal, so only a nonzero literal that underflows all the way to
+      // zero is out of range. `4.9e-324` and `1e-45f` are accepted; `1e400`,
+      // `1e-400`, `1e40f` and `1e-320f` are rejected. A zero mantissa is never
+      // out of range, however large the exponent (`0e400` is `0.0`).
       errno = 0;
       char* end = nullptr;
-      double value = std::strtod(text.c_str(), &end);
-      if (errno == ERANGE) error("float literal is out of range", startLine, startCol);
-      if (end == nullptr || *end != '\0') error("malformed float literal", startLine, startCol);
-      token.type = singlePrecision ? Tok::Float : Tok::Double;
-      token.floatValue = value;
+      if (singlePrecision) {
+        float value = std::strtof(text.c_str(), &end);
+        if (end == nullptr || *end != '\0') error("malformed float literal", startLine, startCol);
+        if (std::isinf(value) || (errno == ERANGE && value == 0.0f))
+          error("float literal is out of range", startLine, startCol);
+        token.type = Tok::Float;
+        token.floatValue = value;
+      } else {
+        double value = std::strtod(text.c_str(), &end);
+        if (end == nullptr || *end != '\0') error("malformed float literal", startLine, startCol);
+        if (std::isinf(value) || (errno == ERANGE && value == 0.0))
+          error("float literal is out of range", startLine, startCol);
+        token.type = Tok::Double;
+        token.floatValue = value;
+      }
     } else {
       errno = 0;
       char* end = nullptr;
