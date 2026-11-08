@@ -12,6 +12,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -73,12 +74,42 @@ void testPointersAreNotTracked() {
 
 }  // namespace
 
+// `str(double)` must print enough digits to round-trip through binary64. With a
+// fixed 15-digit format `1.0 / 3.0` printed "0.333333333333333", which parses
+// back to a different double.
+void testDoubleFormattingRoundTrips() {
+  const double thirds = 1.0 / 3.0;
+  Value v(thirds);
+  assert(v.isDouble());
+  const std::string text = v.toString();
+  assert(text == "0.3333333333333333");
+  assert(std::strtod(text.c_str(), nullptr) == thirds);
+
+  const double sum = 0.1 + 0.2;
+  Value s(sum);
+  assert(s.toString() == "0.30000000000000004");
+  assert(std::strtod(s.toString().c_str(), nullptr) == sum);
+
+  // Values that fit in fewer digits keep the shortest form.
+  assert(Value(1.5).toString() == "1.5");
+  assert(Value(0.1).toString() == "0.1");
+}
+
+// A `float` prints with the binary32 shortest round-trip text.
+void testFloatFormattingRoundTrips() {
+  Value v = Value::fromFloat(0.1f);
+  assert(v.isFloat());
+  assert(v.toString() == "0.1");
+}
+
 int main() {
   testCStringKindAndBytes();
   testVoidPointerReportsPtr();
   testPtrsCompareByIdentity();
   testStringRendering();
   testPointersAreNotTracked();
+  testDoubleFormattingRoundTrips();
+  testFloatFormattingRoundTrips();
   std::puts("value tests passed");
   return 0;
 }
