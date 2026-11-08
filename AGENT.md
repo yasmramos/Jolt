@@ -358,15 +358,19 @@ previous one.
   opcode and no VM support. `defer` is rejected outside a function, and a
   `return`/`break`/`continue` that would leave the deferred block itself is
   rejected. See `docs/language.md` §6.11 and `tests/15_defer.jolt`.
-- **Modules: Java-style `import`** (`import std.math;`, `import std.math.*;`,
-  `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time
+- **Modules: Java-style `import`** — **done** (`import std.math;`,
+  `import std.math.*;`, `import std.math as m;`,
+  `import { sqrt } from std.math;`) with compile-time
   conflict detection for `.*` and a reserved `std.` prefix. A module is loaded
   once, eagerly; a cyclic import (`a -> b -> a`, including a self-import) is a
   compile error rather than a stack overflow. A module's own imports are
   private to it: a namespace, alias or wildcard name it creates never reaches
   the importing program's globals, and never collides with the importer's own
-  wildcard bindings. `require` (Lua-style) is **dropped**: `import` is the only
-  module form.
+  wildcard bindings. Resolution tries the project directory first, then the
+  packages root (`$JOLT_PACKAGES`, else `~/.jolt/packages`), so a project module
+  shadows an installed package of the same path. `require` (Lua-style) is
+  **dropped**: `import` is the only module form. See `docs/language.md` §18,
+  `tests/13_modules.jolt` and `tests/module_test.cpp`.
 - **`struct`** (data only, no methods) — **done**: a named, module-level map
   shape with optional field types. The declaration emits no bytecode and adds
   no opcode; a `Point { x: 1, y: 2 }` literal is checked against the
@@ -413,7 +417,9 @@ previous one.
 
 - `extern "C" { ... }` blocks.
 - Compile-time stubs (like Zig/Rust).
-- **No `libffi`**.
+- **No `libffi` in the AOT backend.** The development engine (`jolt`) may use
+  libffi for callbacks; the freestanding AOT runtime never does (callbacks are
+  compile-time stubs there).
 - Support for ints, floats, strings, structs, callbacks.
 - **FFI type vocabulary (done)** — the type names needed to *spell* a C
   signature: `ptr` (`void *`), `cstring` (`const char *`), the fixed-width
@@ -440,17 +446,59 @@ previous one.
   ordinary host natives. The AOT backend (PHASE 7) lowers the same handles to
   real C pointers. See `docs/language.md` §4.6, `tests/30_ffi_ptr.jolt` and
   `tests/value_test.cpp`.
-- **`extern "C"` blocks (declaration half, done)** — `extern "C" { fn ...; }`
+- **`extern "C"` blocks and marshalling (done)** — `extern "C" { fn ...; }`
   declares C functions. The ABI is a plain string literal and only `"C"` is
   accepted. Each entry is a bodyless `fn ...;` stored as a `FnDeclStmt` with
   `isNative`, so it follows exactly the `native fn` path: the name binds to the
   host function of the same name and the signature is checked at the call site.
   The block emits no bytecode (a block compiles to the bytecode of the
   equivalent `native fn` declarations), the declarations are hoisted, and the
-  block is module-level metadata (nesting it is a compile error). Binding a
-  declaration to a real C symbol — lowering the call to a real `extern` symbol
-  rather than a host builtin of the same name — is the remaining part of the
-  phase. See `docs/language.md` §4.6 and `tests/29_extern_c.jolt`.
+  block is module-level metadata (nesting it is a compile error). The engine
+  resolves each declared name through `Platform::lookupSymbol` and binds it to a
+  marshalling native that passes the arguments and reads the result across the
+  System V AMD64 ABI **without `libffi`** (the scalar/struct call path uses
+  compile-time thunks; only callbacks use libffi, and only in the development
+  engine): integers, bools and pointers in
+  general-purpose registers, `float`/`double` in SSE registers, and the result
+  read back at the exact declared width. See `docs/language.md` §4.6 and
+  `tests/29_extern_c.jolt`.
+- **Structs by value (done)** — a `struct` (see §4.7) crosses the C boundary as
+  a parameter and as a return value. The compiler resolves the struct's fields
+  from its declaration into a `ffi::TypeSpec` on the proto's `ExternSymbol`, and
+  `ffi_types.h` computes the C layout (natural alignment, field offsets) and the
+  System V classification into up to two eightbytes, each INTEGER (a GPR) or SSE
+  (an xmm register). A struct argument is flattened to those eightbytes and
+  passed in the registers the ABI assigns them (an INTEGER eightbyte as an
+  `int64_t`, an SSE eightbyte as a `double`, both bit-for-bit), so the callee
+  reads back the exact bytes; a struct return is captured through a fixed POD
+  whose members land in `rax`/`rdx`/`xmm0`/`xmm1` and rebuilt as a map. Only
+  structs of **16 bytes or fewer** are supported: a larger one is class MEMORY
+  (passed on the stack), which the register thunks cannot express, so the
+  declaration is rejected at compile time, as is a nested (non-scalar) field.
+  No new opcode and no compiler-side ABI logic: the layout is the single source
+  of truth in `ffi_types.h`, shared by the compiler and the runtime across the
+  §2 boundary. See `docs/language.md` §4.6 and `tests/31_ffi_struct.jolt`.
+- **Callbacks (done)** — a parameter typed `fn(P...): R` is a C function
+  pointer. `fn` is a keyword, so `parseTypeAnnotation` reads the signature
+  before the ordinary type-name path; the parameters and return are scalar FFI
+  names (a nested callback or a struct by value is out of scope). A callback is
+  only meaningful as a parameter: a callback return type is rejected at compile
+  time, as is a non-scalar callback parameter. In the development engine the
+  callback is a `libffi` closure (`ffi_closure_alloc`/`ffi_prep_closure_loc`):
+  the trampoline re-enters the VM through `Runtime::call`, boxing the C
+  arguments as Jolt values and writing the result back in the declared C type.
+  The closure lives in a reference-counted `CallbackObj` held for the whole
+  extern call, so the trampoline address stays valid while C runs (a callback C
+  stores for a later call is out of scope for this phase). An error raised
+  inside a callback cannot unwind through the C frame, so the extern call
+  captures it and re-raises it once C returns; `pcall` catches it like any other
+  runtime error. `nil` is the NULL function pointer. `libffi` is a
+  **development-engine-only** dependency (§5.1/§8): the AOT backend lowers
+  callbacks to compile-time stubs and never links it. The boundary check
+  (`tests/check_compiler_boundary.cmake`) forbids the compiler and the native
+  backend from including `ffi_marshal.h` or `libffi`, so the split cannot
+  regress. See `docs/language.md` §4.6, `tests/32_ffi_callback.jolt` and
+  `tests/vm_test.cpp`.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 
@@ -616,10 +664,10 @@ Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
-Phase 6.6: 🔶 in progress (FFI type vocabulary + `extern "C"` declaration half)
+Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type and 6.7.3 `try`/`catch` done; 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
-Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)
+Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
 **12 bugs fixed** (see `docs/BUGS.md` for the full list).
@@ -636,8 +684,12 @@ parity gate and is deleted in PHASE 4.
 ## 5. Code rules
 
 1. **Pure C++17**, no external dependencies **except optional AsmJIT** (for
-   JIT) and **optional ELFIO** (for ELF emitter). The AOT product (`joltc`)
-   uses AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight.
+   JIT), **optional ELFIO** (for ELF emitter) and **optional libffi** (for FFI
+   callbacks, **development engine only**). The AOT product (`joltc`) uses
+   AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight. libffi
+   is never linked into an AOT product: the freestanding backend lowers
+   callbacks to compile-time stubs, so the end-user binary stays dependency
+   free.
 2. **Names**: `camelCase` for functions, variables and members (private data
    members end with `_`), `PascalCase` for types, `UPPER_CASE` for opcodes
    and constants.
@@ -707,16 +759,16 @@ Without this checklist complete and approved, **do not proceed to code**.
 | Migrating the core to pure C | The core stays in C++17 |
 | Adding features without testing the previous one | Breaks incremental development |
 | Skipping the 7-point checklist | Creates architectural debt |
-| **External libraries beyond AsmJIT/ELFIO** | AsmJIT and ELFIO are the only allowed dependencies |
+| **External libraries beyond AsmJIT/ELFIO/libffi** | AsmJIT, ELFIO and libffi are the only allowed dependencies (libffi is development-engine only) |
 | Superinstructions | Violate the 40-opcode ceiling |
 | Inline caching | Changes the bytecode contract |
 | Runtime specialization | Changes the bytecode contract |
 | `async`/`await`, generics, full pattern matching, generators, transactions | Out of scope |
 
-**Note**: AsmJIT and ELFIO are **optional** dependencies. The AOT product
-(`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
-development VM (`jolt`) may use AsmJIT JIT. **The end-user binary (`hello.exe`)
-contains neither.**
+**Note**: AsmJIT, ELFIO and libffi are **optional** dependencies. The AOT
+product (`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
+development VM (`jolt`) may use AsmJIT JIT and libffi (callbacks). **The
+end-user binary (`hello.exe`) contains none of them.**
 
 ---
 

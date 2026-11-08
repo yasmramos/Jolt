@@ -372,6 +372,8 @@ class Compiler {
   // Compiles an `extern "C" { ... }` block (PHASE 6.6): each declaration
   // follows the `native fn` path, so the block emits no bytecode of its own.
   void compileExternBlock(const ExternBlockStmt& block, int line, int col);
+  // Resolves an `extern "C"` type name to a scalar or struct spec (PHASE 6.6).
+  ffi::TypeSpec resolveTypeSpec(const TypeRef& type);
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);

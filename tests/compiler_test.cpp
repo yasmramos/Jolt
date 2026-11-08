@@ -1091,6 +1091,41 @@ void testExternBlock() {
   expectCompileError("extern \"C${1}\" { fn f(): int; }\n", "interpolated ABI");
 }
 
+void testExternCallbackSignatureIsRecordedOnTheProto() {
+  // A callback parameter is recorded as an `isCallback` spec with its scalar
+  // parameter and return names, so the runtime can build the trampoline and the
+  // AOT backend (PHASE 7) can read the same shape off the proto to emit a
+  // compile-time stub. `void` is the default return when none is written.
+  Bytecode bc = compileSource(
+      "extern \"C\" {\n"
+      "  fn apply(f: fn(int, double): int, x: int): int;\n"
+      "  fn visit(f: fn(int): void): void;\n"
+      "}\n");
+  assert(bc.externs.size() == 2);
+
+  const ExternSymbol& apply = bc.externs[0];
+  assert(apply.name == "apply");
+  assert(apply.paramTypes.size() == 2);
+  assert(apply.paramTypes[0].isCallback);
+  assert(apply.paramTypes[0].callbackParams.size() == 2);
+  assert(apply.paramTypes[0].callbackParams[0] == "int");
+  assert(apply.paramTypes[0].callbackParams[1] == "double");
+  assert(apply.paramTypes[0].callbackReturn == "int");
+  assert(!apply.paramTypes[1].isCallback);
+
+  const ExternSymbol& visit = bc.externs[1];
+  assert(visit.paramTypes.size() == 1);
+  assert(visit.paramTypes[0].isCallback);
+  assert(visit.paramTypes[0].callbackParams.size() == 1);
+  assert(visit.paramTypes[0].callbackReturn == "void");
+
+  // A callback is a parameter only; as a return type it is rejected, and a
+  // non-scalar inside a callback signature too.
+  expectCompileError("extern \"C\" { fn get(): fn(int): int; }\n", "callback return type");
+  expectCompileError("extern \"C\" { fn apply(f: fn(map): int): int; }\n",
+                     "non-scalar callback parameter");
+}
+
 void testCyclicImportIsRejected() {
   // A cycle (a -> b -> a) must be reported as a compile error instead of
   // recursing until the compiler overflows the stack. The loader maps dotted
@@ -1197,6 +1232,7 @@ int main() {
   testVoidErrors();
   testFfiTypeVocabulary();
   testExternBlock();
+  testExternCallbackSignatureIsRecordedOnTheProto();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

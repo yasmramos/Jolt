@@ -1,0 +1,6 @@
+// expect-exit: 65
+// A callback signature only carries scalar FFI types: a struct by value (or any
+// other non-scalar) inside the callback is rejected at compile time.
+extern "C" {
+  fn apply(f: fn(map): int): int;
+}

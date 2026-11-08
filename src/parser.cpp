@@ -337,6 +337,26 @@ StmtPtr Parser::parseVarDecl() {
 // 6.6), so `allowVoid` is true only in the `fn`/`native fn` return position.
 TypeRef Parser::parseTypeAnnotation(bool allowVoid) {
   if (!match(Tok::Colon)) return TypeRef{};
+  // A callback signature (PHASE 6.6): `fn(int, int): int`. `fn` is a keyword,
+  // so it cannot be read as an ordinary type name; the parameter and return
+  // types are scalar FFI names (a nested callback or a struct is rejected by
+  // the FFI signature validation, not here).
+  if (match(Tok::Fn)) {
+    TypeRef type;
+    type.name = "fn";
+    consume(Tok::LParen, "expected '(' after 'fn' in a callback type");
+    if (!check(Tok::RParen)) {
+      while (true) {
+        const Token& paramType = consume(Tok::Ident, "expected a parameter type in the callback");
+        type.callbackParams.push_back(paramType.lexeme);
+        if (!match(Tok::Comma)) break;
+      }
+    }
+    consume(Tok::RParen, "expected ')' to close the callback parameter list");
+    TypeRef ret = parseTypeAnnotation(/*allowVoid=*/true);
+    type.callbackReturn = ret.name.empty() ? "void" : ret.name;
+    return type;
+  }
   const Token& typeName = consume(Tok::Ident, "expected a type name after ':'");
   TypeRef type;
   type.name = typeName.lexeme;

@@ -345,6 +345,7 @@ vocabulary (PHASE 6.6) adds pointers and fixed-width/unsigned integers:
 | `uint8` `uint16` `uint32` `uint64` | `uint8_t` … `uint64_t` | Unsigned, fixed width. |
 | `uint` | `unsigned int` | Unsigned. |
 | `size_t` | `size_t` | Unsigned size. |
+| `fn(P...): R` | `R (*)(P...)` | C function pointer (callback). Only scalar types in `P`; `void` return allowed. |
 
 These are **compile-time annotations**: the integer family is erased before the
 bytecode (the runtime value is still an `int`) and `type()` keeps reporting the
@@ -434,6 +435,74 @@ let n: size_t = strlen("hi");
 A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a `ptr`
 argument accepts `nil` (NULL) and an owned `cstring`/buffer, whose bytes are the
 address the C callee receives.
+
+**Structs by value.** A `struct` (see §4.7) can also cross the C boundary, both
+as a parameter and as a return value. A struct is a map at runtime, so the
+compiler records its field layout from the declaration and the marshalling
+moves the bytes across the ABI in registers:
+
+```jolt
+struct DivResult {
+  quot: int32;
+  rem: int32;
+}
+extern "C" {
+  fn div(numerator: int, denominator: int): DivResult;
+}
+
+let d = div(17, 5);
+print(d.quot);   // 3
+print(d.rem);    // 2
+```
+
+The ABI classifies a small struct as up to two **eightbytes**, each INTEGER (a
+general-purpose register) or SSE (an xmm register); a `{int; int}` struct comes
+back wholly in `rax`, a `{double; double}` in `xmm0`/`xmm1`, and a mixed
+`{int; double}` in `rax` + `xmm0`. A struct argument is flattened to the same
+eightbytes and passed in the registers the ABI assigns it, so the callee reads
+back the exact bytes of the struct.
+
+Only structs of **16 bytes or fewer** are supported (the register case). A
+larger struct is passed in memory, a shape the register marshalling cannot
+express, so the declaration is rejected at compile time with a clear message
+instead of a wrong call. A struct field must be an FFI scalar type (an integer,
+`float`/`double`, `ptr`/`cstring` or `bool`); a nested struct field is rejected
+for the same reason.
+
+**Callbacks.** A parameter typed `fn(paramTypes): returnType` is a C function
+pointer. A Jolt function (or a closure) passed for it is callable from C, and a
+callback signature only carries scalar FFI types:
+
+```jolt
+extern "C" {
+  fn qsort(base: ptr, nmemb: size_t, size: size_t, compar: fn(ptr, ptr): int): void;
+  fn memcmp(a: ptr, b: ptr, n: size_t): int;
+}
+
+fn ascending(a: ptr, b: ptr): int {
+  return memcmp(a, b, 1);
+}
+
+let data = buffer(4);
+storeByte(data, 0, 50);
+storeByte(data, 1, 10);
+storeByte(data, 2, 90);
+storeByte(data, 3, 30);
+qsort(data, 4, 1, ascending);
+```
+
+In the development engine the callback is a `libffi` closure: the trampoline
+re-enters the VM with the C arguments boxed as Jolt values and writes the Jolt
+result back in the declared C type. The callback runs while the C function is on
+the stack, so the trampoline is alive for the whole call; storing the function
+pointer for a later call is out of scope for this phase. `nil` is the NULL
+function pointer.
+
+A callback can only be a **parameter**; a C function that returns a function
+pointer is not supported. An error raised inside a callback cannot unwind
+through the C frame, so the extern call captures it and re-raises it once C
+returns: `pcall` catches it like any other runtime error. The AOT backend
+(PHASE 7) will lower callbacks to compile-time stubs and never links `libffi`.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -1842,7 +1911,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
-- FFI with C is implemented for the development engine (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi`. The AOT backend (PHASE 7) will lower the same declarations to link-time relocations.
+- FFI with C is implemented for the development engine (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi` for scalars and structs by value. A `fn(P...): R` parameter is a callback: the development engine builds a `libffi` closure that re-enters the VM, while the AOT backend (PHASE 7) lowers callbacks to compile-time stubs and never links `libffi`.
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.

@@ -1,0 +1,14 @@
+// expect-exit: 65
+// A nested struct field is not a scalar member, so it cannot cross the C
+// boundary; the declaration is rejected at compile time.
+struct Inner {
+  a: int;
+  b: int;
+}
+struct Outer {
+  p: Inner;
+  q: int;
+}
+extern "C" {
+  fn bad(x: Outer): int;
+}

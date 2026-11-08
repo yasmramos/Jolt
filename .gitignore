@@ -43,3 +43,8 @@ full_example_output.txt
 # Local cmake build directory
 cmake-build/
 build-stress/
+
+# Downloaded dependency tarballs (never vendored)
+*.tar.gz
+*.tar.xz
+*.tar.bz2
