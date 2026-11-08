@@ -1,0 +1,5 @@
+// expect-exit: 65
+// A logical compound assignment respects immutability like the plain `=`:
+// `let` bindings cannot be written back, even on the short-circuiting path.
+let x = 1;
+x ||= 2;

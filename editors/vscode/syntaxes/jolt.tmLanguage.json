@@ -236,7 +236,7 @@
       "patterns": [
         {
           "name": "keyword.operator.assignment.compound.jolt",
-          "match": "\\*\\*=|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^="
+          "match": "\\*\\*=|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|&&=|\\|\\|=|\\?\\?="
         },
         {
           "comment": "Shifts before comparison so `a << b` is one token, not two `<`. `<<=`/`>>=` are already consumed above.",

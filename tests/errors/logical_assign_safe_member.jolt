@@ -1,0 +1,5 @@
+// expect-exit: 65
+// A safe member access (`a?.b`) stays read-only under a logical compound
+// assignment: the target is not assignable.
+let m: map? = {a: nil};
+m?.a ??= 2;

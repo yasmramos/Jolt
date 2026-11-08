@@ -378,6 +378,11 @@ class Compiler {
   int compileVariable(const std::string& name);
   int compileLambda(const LambdaExpr& lambda, int line, int col);
   int compileAssign(const AssignExpr& assign, int line, int col);
+  // `&&=`, `||=` and `??=`: short-circuiting compound assignment. `targetReg`
+  // already holds the target's current value (read once by the caller) and
+  // `store` emits the write-back of `targetReg` for that target's shape.
+  int compileLogicalAssign(const AssignExpr& assign, int targetReg,
+                           const std::function<void()>& store);
   int compileTernary(const TernaryExpr& expr);
   int compileTry(const TryExpr& node, int line, int col);
   int compileCatch(const CatchExpr& node, int line, int col);
