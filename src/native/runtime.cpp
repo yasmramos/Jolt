@@ -13,12 +13,14 @@ namespace {
 constexpr X64Reg Rax = X64Reg::Rax;
 constexpr X64Reg Rcx = X64Reg::Rcx;
 constexpr X64Reg Rdx = X64Reg::Rdx;
+constexpr X64Reg Rbx = X64Reg::Rbx;
 constexpr X64Reg Rsi = X64Reg::Rsi;
 constexpr X64Reg Rdi = X64Reg::Rdi;
 constexpr X64Reg R8 = X64Reg::R8;
 constexpr X64Reg R9 = X64Reg::R9;
 constexpr X64Reg R10 = X64Reg::R10;
 constexpr X64Reg R11 = X64Reg::R11;
+constexpr X64Reg R12 = X64Reg::R12;
 constexpr X64Reg Rbp = X64Reg::Rbp;
 constexpr X64Reg Rsp = X64Reg::Rsp;
 
@@ -27,6 +29,11 @@ constexpr std::int64_t kTagBool = static_cast<std::int64_t>(AotTag::Bool);
 constexpr std::int64_t kTagInt = static_cast<std::int64_t>(AotTag::Int);
 constexpr std::int64_t kTagFloat = static_cast<std::int64_t>(AotTag::Float);
 constexpr std::int64_t kTagDouble = static_cast<std::int64_t>(AotTag::Double);
+constexpr std::int64_t kTagStr = static_cast<std::int64_t>(AotTag::Str);
+
+// Byte offset of a string's first byte from its `AotString` header (see
+// `native/value.h`): the length is an 8-byte word, the bytes follow.
+constexpr std::int64_t kStringDataOffset = static_cast<std::int64_t>(kAotStringHeaderSize);
 
 // The sign bit of an IEEE-754 binary64, used to negate a float by flipping it.
 constexpr std::int64_t kDoubleSignBit = static_cast<std::int64_t>(0x8000000000000000ULL);
@@ -155,8 +162,9 @@ void emitTruthy(CodeGen& cg, CodeGen::Label label) {
   epilogue(cg);
 }
 
-// `void jolt_print_value(AotValue v)`: prints int/bool/nil followed by a
-// newline. Floats and strings are not representable yet (PHASE 7c.1c).
+// `void jolt_print_value(AotValue v)`: prints the value followed by a newline.
+// int, bool, nil and str are representable; a float/double needs its own dtoa
+// and lands in a later slice.
 void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                     CodeGen::Label fail, CodeGen::Label writeInt,
                     const DataBlob& badValue, const DataBlob& textTrue,
@@ -165,6 +173,7 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
   CodeGen::Label asInt = cg.newLabel();
   CodeGen::Label asBool = cg.newLabel();
   CodeGen::Label asNil = cg.newLabel();
+  CodeGen::Label asStr = cg.newLabel();
   CodeGen::Label boolFalse = cg.newLabel();
   CodeGen::Label newline = cg.newLabel();
 
@@ -177,6 +186,8 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
   cg.jcc(Jcc::Eq, asBool);
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagNil));
   cg.jcc(Jcc::Eq, asNil);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, asStr);
   emitFailCall(cg, fail, badValue);
 
   cg.bind(asInt);
@@ -200,6 +211,17 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
   cg.bind(asNil);
   cg.leaRipLabel(Rdi, textNil.label);
   cg.movImm(Rsi, static_cast<std::int64_t>(textNil.text.size()));
+  inlineWriteStdout(cg, writeLabel);
+  cg.jmp(newline);
+
+  // A string is its bytes verbatim: print writes the payload's `length` bytes
+  // starting right after the header. No quoting, matching `Value::toString`.
+  // `inlineWriteStdout` takes (rdi = buffer, rsi = length).
+  cg.bind(asStr);
+  cg.movFromMem(Rcx, Rsi, 0);  // length
+  cg.addImm32(Rsi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.movReg(Rdi, Rsi);         // buffer = payload + 8
+  cg.movReg(Rsi, Rcx);         // length
   inlineWriteStdout(cg, writeLabel);
 
   cg.bind(newline);
@@ -269,13 +291,15 @@ void emitWriteInt(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel) 
 // and `%` with the int/float/double promotion of `ops::binary`. int/int uses
 // 64-bit wrapping arithmetic; anything with a float promotes to double, and a
 // float/float result rounds back to binary32 so `0.1f + 0.2f == 0.3f` holds,
-// exactly like the hosted engine. `%` on floats needs `fmod` (libm) and is
-// deferred to PHASE 7c.1c.
+// exactly like the hosted engine. `Add` on two strings concatenates (7c.1c);
+// `%` on floats needs `fmod` (libm) and stays deferred.
 void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
-               const DataBlob& msgTypes, const DataBlob& msgDivZero) {
+               const DataBlob& msgTypes, const DataBlob& msgDivZero,
+               CodeGen::Label concatLabel) {
   CodeGen::Label bad = cg.newLabel();
   CodeGen::Label intPath = cg.newLabel();
   CodeGen::Label floatPath = cg.newLabel();
+  CodeGen::Label arithNumbers = cg.newLabel();
   CodeGen::Label intDone = cg.newLabel();
   CodeGen::Label intAdd = cg.newLabel();
   CodeGen::Label intSub = cg.newLabel();
@@ -300,10 +324,21 @@ void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.bind(label);
   prologue(cg);
 
-  // Both operands must be numbers.
+  // Both operands numbers -> numeric arithmetic (below). Both strings with `+`
+  // -> concatenation. Anything else is an unsupported operand pair.
   emitIsNumberFlag(cg, Rdi);
   cg.testReg(Rax);
-  cg.jcc(Jcc::Eq, bad);
+  cg.jcc(Jcc::Ne, arithNumbers);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, bad);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, bad);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(AotArithOp::Add));
+  cg.jcc(Jcc::Ne, bad);
+  cg.callLabel(concatLabel);  // returns an AotValue in rax:rdx
+  epilogue(cg);
+
+  cg.bind(arithNumbers);
   emitIsNumberFlag(cg, Rdx);
   cg.testReg(Rax);
   cg.jcc(Jcc::Eq, bad);
@@ -640,6 +675,7 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   CodeGen::Label boolResult = cg.newLabel();
   CodeGen::Label orderInt = cg.newLabel();
   CodeGen::Label orderMixed = cg.newLabel();
+  CodeGen::Label orderNonNumeric = cg.newLabel();
   CodeGen::Label orderBool = cg.newLabel();
   CodeGen::Label orderSelect = cg.newLabel();
   CodeGen::Label selLt = cg.newLabel();
@@ -654,8 +690,18 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   CodeGen::Label baDoneBool = cg.newLabel();
   CodeGen::Label eqHelper = cg.newLabel();
   CodeGen::Label eqNonNumeric = cg.newLabel();
+  CodeGen::Label eqIdentity = cg.newLabel();
   CodeGen::Label eqFloat = cg.newLabel();
   CodeGen::Label eqReturn = cg.newLabel();
+  CodeGen::Label strEquals = cg.newLabel();
+  CodeGen::Label strEqualsLoop = cg.newLabel();
+  CodeGen::Label strEqualsSame = cg.newLabel();
+  CodeGen::Label strEqualsDone = cg.newLabel();
+  CodeGen::Label strOrder = cg.newLabel();
+  CodeGen::Label strOrderLoop = cg.newLabel();
+  CodeGen::Label strOrderByteDiffers = cg.newLabel();
+  CodeGen::Label strOrderAExhausted = cg.newLabel();
+  CodeGen::Label strOrderBExhausted = cg.newLabel();
 
   cg.bind(label);
   prologue(cg);
@@ -683,10 +729,10 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.bind(order);
   emitIsNumberFlag(cg, Rdi);
   cg.testReg(Rax);
-  cg.jcc(Jcc::Eq, orderBool);
+  cg.jcc(Jcc::Eq, orderNonNumeric);
   emitIsNumberFlag(cg, Rdx);
   cg.testReg(Rax);
-  cg.jcc(Jcc::Eq, orderBool);
+  cg.jcc(Jcc::Eq, orderNonNumeric);
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagInt));
   cg.jcc(Jcc::Ne, orderMixed);
   cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagInt));
@@ -719,6 +765,16 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.jcc(Jcc::Ae, baDone);
   cg.movImm(R11, 1);
   cg.bind(baDone);
+  cg.jmp(orderSelect);
+
+  // --- non-numeric ordering: strings compare lexicographically, bools by
+  // value; any other pair cannot be ordered. ---
+  cg.bind(orderNonNumeric);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, orderBool);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, badCompare);
+  cg.callLabel(strOrder);
   cg.jmp(orderSelect);
 
   cg.bind(orderBool);
@@ -803,6 +859,15 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.movImm(Rax, 1);
   cg.jmp(eqReturn);
   cg.bind(eqNonNumeric);
+  // Two strings compare by content, not by pointer; every other non-numeric
+  // pair is identity (nil == nil, bool == bool, same object).
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, eqIdentity);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, eqIdentity);
+  cg.callLabel(strEquals);
+  cg.jmp(eqReturn);
+  cg.bind(eqIdentity);
   cg.xorReg(Rax, Rax);
   cg.cmpReg(Rdi, Rdx);
   cg.jcc(Jcc::Ne, eqReturn);
@@ -811,6 +876,156 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.movImm(Rax, 1);
   cg.bind(eqReturn);
   cg.retInsn();
+
+  // --- internal subroutine: rax = (a == b) for two strings ---
+  // rsi/rcx hold the two `AotString` pointers. Equal lengths and equal bytes.
+  cg.bind(strEquals);
+  cg.movFromMem(R8, Rsi, 0);   // lenA
+  cg.movFromMem(R9, Rcx, 0);   // lenB
+  cg.xorReg(Rax, Rax);         // result = 0
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ne, strEqualsDone);
+  cg.xorReg(R10, R10);         // index
+  cg.bind(strEqualsLoop);
+  cg.cmpReg(R10, R8);
+  cg.jcc(Jcc::Ae, strEqualsSame);  // index >= len -> equal
+  cg.movReg(R11, R10);
+  cg.addReg(R11, Rsi);
+  cg.movzxFromMem(R11, R11, kStringDataOffset);  // a byte
+  cg.movReg(R9, R10);
+  cg.addReg(R9, Rcx);
+  cg.movzxFromMem(R9, R9, kStringDataOffset);    // b byte
+  cg.cmpReg(R11, R9);
+  cg.jcc(Jcc::Ne, strEqualsDone);  // a byte differs -> not equal
+  cg.addImm32(R10, 1);
+  cg.jmp(strEqualsLoop);
+  cg.bind(strEqualsSame);
+  cg.movImm(Rax, 1);
+  cg.bind(strEqualsDone);
+  cg.retInsn();
+
+  // --- internal subroutine: rax = (a < b), r11 = (b < a) for two strings ---
+  // Lexicographic over unsigned bytes; a proper prefix is smaller. rsi/rcx hold
+  // the two `AotString` pointers. The selector in r8 must survive (orderSelect
+  // reads it), so this uses only r9/rdi/rdx/r10/r11 as scratch.
+  cg.bind(strOrder);
+  cg.movFromMem(R9, Rsi, 0);   // lenA
+  cg.movFromMem(Rdi, Rcx, 0);  // lenB
+  cg.xorReg(R10, R10);         // index
+  cg.bind(strOrderLoop);
+  cg.cmpReg(R10, R9);
+  cg.jcc(Jcc::Ae, strOrderAExhausted);  // index >= lenA
+  cg.cmpReg(R10, Rdi);
+  cg.jcc(Jcc::Ae, strOrderBExhausted);  // index >= lenB
+  cg.movReg(Rdx, R10);
+  cg.addReg(Rdx, Rcx);
+  cg.movzxFromMem(Rdx, Rdx, kStringDataOffset);  // b byte
+  cg.movReg(R11, R10);
+  cg.addReg(R11, Rsi);
+  cg.movzxFromMem(R11, R11, kStringDataOffset);  // a byte
+  cg.cmpReg(R11, Rdx);
+  cg.jcc(Jcc::Ne, strOrderByteDiffers);
+  cg.addImm32(R10, 1);
+  cg.jmp(strOrderLoop);
+  cg.bind(strOrderByteDiffers);
+  // A byte at `index` differs (the loop only reaches here on inequality), so
+  // the bytes are ordered one way or the other. Set `ab` from the unsigned
+  // comparison, then `ba = !ab`. `setcc` reads the flags, so nothing may
+  // clobber them between the `cmp` and the `setcc`.
+  cg.xorReg(Rax, Rax);
+  cg.cmpReg(R11, Rdx);
+  cg.setcc(Jcc::B, Rax);   // ab = aByte < bByte
+  cg.movzx(Rax, Rax);
+  cg.xorReg(R11, R11);
+  cg.testReg(Rax);
+  cg.setcc(Jcc::Eq, R11);  // ba = !ab (the bytes differ)
+  cg.movzx(R11, R11);
+  cg.retInsn();
+  cg.bind(strOrderAExhausted);
+  // a ran out first: a < b iff b has bytes left, i.e. lenA < lenB.
+  cg.xorReg(Rax, Rax);
+  cg.cmpReg(R9, Rdi);
+  cg.setcc(Jcc::B, Rax);   // ab = lenA < lenB
+  cg.movzx(Rax, Rax);
+  cg.xorReg(R11, R11);
+  cg.retInsn();
+  cg.bind(strOrderBExhausted);
+  // b ran out first (and a has bytes left): b < a.
+  cg.xorReg(Rax, Rax);
+  cg.movImm(R11, 1);
+  cg.retInsn();
+}
+
+// `void* jolt_alloc(long size)`: bump allocation from the arena seeded by
+// `jolt_init_arena`. The cursor and end live in r13/r14 (see `native/entry.h`);
+// this helper reads and advances the cursor only. Returns an 8-byte-aligned
+// pointer, or null when the region is exhausted (mirroring `Arena::allocate`).
+void emitAlloc(CodeGen& cg, CodeGen::Label label) {
+  CodeGen::Label exhausted = cg.newLabel();
+
+  cg.bind(label);
+  cg.movReg(Rax, kAotArenaCursor);
+  cg.addImm32(Rax, 7);
+  cg.movImm(R10, -8);
+  cg.andReg(Rax, R10);      // rax = cursor aligned up to 8
+  cg.movReg(R11, Rax);
+  cg.addReg(R11, Rdi);      // r11 = new cursor
+  cg.jcc(Jcc::B, exhausted);        // wrapped: size was absurd
+  cg.cmpReg(R11, kAotArenaEnd);
+  cg.jcc(Jcc::A, exhausted);        // past the end
+  cg.movReg(kAotArenaCursor, R11);
+  cg.retInsn();
+  cg.bind(exhausted);
+  cg.xorReg(Rax, Rax);
+  cg.retInsn();
+}
+
+// `AotValue jolt_concat(AotValue a, AotValue b)`: allocate lenA+lenB+8 bytes,
+// write the combined length and the two byte runs, and return a Str value
+// (payload = the new `AotString`). `a` is rdi:rsi, `b` is rdx:rcx. rbx and r12
+// are callee-saved, so they are preserved across the helper.
+void emitConcat(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label oom = cg.newLabel();
+
+  cg.bind(label);
+  cg.push(Rbp);
+  cg.movReg(Rbp, Rsp);
+  cg.push(Rbx);
+  cg.push(R12);
+
+  cg.movReg(Rbx, Rcx);            // rbx = b's AotString
+  cg.movFromMem(R12, Rsi, 0);     // r12 = lenA
+  cg.movFromMem(Rax, Rbx, 0);     // lenB
+  cg.addReg(R12, Rax);            // r12 = lenA + lenB
+  cg.movReg(Rdi, R12);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.callLabel(allocLabel);       // rax = result pointer (or null)
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rax, 0, R12);       // store the combined length
+  // Copy A's bytes: dst = ptr + 8, src = a's bytes, count = lenA.
+  cg.movReg(Rdi, Rax);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.movFromMem(Rcx, Rsi, 0);     // lenA
+  cg.addImm32(Rsi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.repMovsb();
+  // Copy B's bytes: dst = current rdi, src = b's bytes, count = lenB.
+  cg.movReg(Rsi, Rbx);
+  cg.addImm32(Rsi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.movFromMem(Rcx, Rbx, 0);     // lenB
+  cg.repMovsb();
+  // The result value: tag Str, payload = the pointer (still in rax).
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagStr);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  cg.movReg(Rsp, Rbp);
+  cg.pop(Rbp);
+  cg.retInsn();
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
 }
 
 }  // namespace
@@ -835,6 +1050,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob msgBitNot = addText("jolt: unsupported operand type for unary '~'\n");
   DataBlob msgCompare = addText("jolt: cannot compare these values\n");
   DataBlob msgPrint = addText("jolt: cannot print this value\n");
+  DataBlob msgOom = addText("jolt: out of memory\n");
   DataBlob textTrue = addText("true");
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
@@ -845,10 +1061,12 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
 
   emitFail(cg, fail, entry.write, entry.exit);
   emitWriteInt(cg, writeInt, entry.write);
+  emitAlloc(cg, handles.alloc);
+  emitConcat(cg, handles.concat, handles.alloc, fail, msgOom);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt, msgPrint,
                  textTrue, textFalse, textNil, textNewline);
   emitTruthy(cg, handles.truthy);
-  emitArith(cg, handles.arithValues, fail, msgTypes, msgDivZero);
+  emitArith(cg, handles.arithValues, fail, msgTypes, msgDivZero, handles.concat);
   emitPow(cg, handles.powValues, fail, msgPow);
   emitShift(cg, handles.shiftValues, fail, msgShift);
   emitBitwise(cg, handles.bitwiseValues, fail, msgBit);

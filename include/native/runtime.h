@@ -44,13 +44,21 @@ struct AotRuntimeHandles {
   CodeGen::Label bitNotValue;    // AotValue jolt_bit_not(AotValue a)
   CodeGen::Label compareValues;  // AotValue jolt_compare(AotValue a, AotValue b, long op)
   CodeGen::Label truthy;         // long      jolt_truthy(AotValue a)
+  // Bump allocation from the arena seeded by `jolt_init_arena`: returns an
+  // 8-byte-aligned pointer, or null when the region is exhausted. The size is
+  // in rdi.
+  CodeGen::Label alloc;          // void* jolt_alloc(long size)
+  // String concatenation: allocates `lenA + lenB + 8` bytes, writes the
+  // combined length and bytes, and returns an `AotValue` (tag Str). Used by
+  // `jolt_arith` for `Add` when both operands are strings.
+  CodeGen::Label concat;         // AotValue jolt_concat(AotValue a, AotValue b)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
   return AotRuntimeHandles{
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
-      code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
   };
 }
 

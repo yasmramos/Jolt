@@ -120,6 +120,10 @@ class CodeGen {
   void shlCl(X64Reg dst);   // dst <<= cl
   void shrCl(X64Reg dst);   // dst >>= cl (logical)
   void sarCl(X64Reg dst);   // dst >>= cl (arithmetic)
+  // `rep movsb`: copy rcx bytes from [rsi] to [rdi], advancing both. Assumes
+  // DF=0 (the ABI guarantees it). The string concatenation uses it to join two
+  // byte ranges without a per-byte loop.
+  void repMovsb();
 
   // SSE scalar double helpers (used by the float fast paths).
   void movsdToXmm(int xmm, X64Reg base, std::int64_t disp);    // movsd xmm, [base+disp]
@@ -154,6 +158,10 @@ class CodeGen {
   void testImm32(X64Reg reg, std::int32_t value);  // test r/m64, imm32 (F7 /0)
   void setcc(Jcc cc, X64Reg dst);          // setcc r/m8: dst low byte = 0/1
   void movzx(X64Reg dst, X64Reg src);      // movzx r64, r/m8 (zero-extend)
+  // movzx r64, byte [base+disp]: loads one byte and zero-extends it. The
+  // string helpers walk bytes with this; a plain `mov` would need a separate
+  // mask to clear the upper bits.
+  void movzxFromMem(X64Reg dst, X64Reg base, std::int64_t disp);
   void jmp(Label label);
   void jcc(Jcc cc, Label label);
   void callRel(std::int32_t offsetBytes);  // call rel32 (caller resolves the target)
