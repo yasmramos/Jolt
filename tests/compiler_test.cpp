@@ -1113,6 +1113,21 @@ void testExternBlock() {
   expectCompileError("extern \"C${1}\" { fn f(): int; }\n", "interpolated ABI");
 }
 
+void testExternStructByValueIsAbiGated() {
+  // A struct by value crosses the C boundary only where the marshalling's ABI
+  // holds: the System V AMD64 register classification. On a target whose ABI
+  // passes a struct through memory (the Microsoft x64 ABI on Windows) the
+  // declaration is rejected at compile time instead of crashing at the call.
+  const char* source =
+      "struct Pair { a: int; b: int; }\n"
+      "extern \"C\" { fn f(p: Pair): int; }\n";
+  if (ffi::kStructByValueSupported) {
+    expectCompiles(source);
+  } else {
+    expectCompileError(source, "struct cannot cross the C boundary by value");
+  }
+}
+
 void testExternCallbackSignatureIsRecordedOnTheProto() {
   // A callback parameter is recorded as an `isCallback` spec with its scalar
   // parameter and return names, so the runtime can build the trampoline and the
@@ -1254,6 +1269,7 @@ int main() {
   testVoidErrors();
   testFfiTypeVocabulary();
   testExternBlock();
+  testExternStructByValueIsAbiGated();
   testExternCallbackSignatureIsRecordedOnTheProto();
   testCyclicImportIsRejected();
 
