@@ -175,7 +175,7 @@ Value readStructField(Runtime& rt, const char* bytes, std::size_t offset,
   scalarFieldLayout(type, size, alignment, cls);
   std::int64_t raw = 0;
   std::memcpy(&raw, bytes + offset, size);
-  if (type == "ptr" || type == "cstring") return wrapPointerValue(type, raw);
+  if (type == "ptr" || isFfiCStringTypeName(type)) return wrapPointerValue(type, raw);
   return wrapInteger(rt, type.empty() ? "int" : type, raw);
 }
 
@@ -304,7 +304,7 @@ ffi_type* libffiTypeFor(const std::string& typeName) {
   if (typeName == "uint64" || typeName == "size_t") return &ffi_type_uint64;
   if (typeName == "float") return &ffi_type_float;
   if (typeName == "double") return &ffi_type_double;
-  if (typeName == "ptr" || typeName == "cstring") return &ffi_type_pointer;
+  if (typeName == "ptr" || isFfiCStringTypeName(typeName)) return &ffi_type_pointer;
   return &ffi_type_sint32;
 }
 
@@ -342,7 +342,7 @@ struct CallbackObj : RefCounted {
 Value readCallbackArg(Runtime& rt, const std::string& typeName, void* slot) {
   if (typeName == "float") return Value::fromFloat(*static_cast<float*>(slot));
   if (typeName == "double") return Value(*static_cast<double*>(slot));
-  if (typeName == "ptr" || typeName == "cstring") {
+  if (typeName == "ptr" || isFfiCStringTypeName(typeName)) {
     auto raw = reinterpret_cast<std::int64_t>(*static_cast<void**>(slot));
     return wrapPointerValue(typeName, raw);
   }
@@ -368,7 +368,7 @@ void writeCallbackResult(const std::string& typeName, const Value& value, void* 
     *static_cast<double*>(ret) = value.isNumber() ? value.number() : 0.0;
     return;
   }
-  if (typeName == "ptr" || typeName == "cstring") {
+  if (typeName == "ptr" || isFfiCStringTypeName(typeName)) {
     std::int64_t raw = 0;
     if (value.isStr()) {
       raw = reinterpret_cast<std::int64_t>(value.asStr().c_str());

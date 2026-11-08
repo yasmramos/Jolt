@@ -95,8 +95,11 @@ class Parser {
   // `native fn name(params): ret;` (PHASE 6.5): a bodyless declaration that
   // binds a name to a host-registered native function.
   StmtPtr parseNativeDecl();
-  // `extern "C" { fn ...; }` (PHASE 6.6): a block of C declarations.
+  // `extern "C" { fn ...; }` or `extern fn ...;` (PHASE 6.6): C declarations.
   StmtPtr parseExternDecl();
+  // One bodyless `fn name(params): ret;` in an `extern` declaration. The caller
+  // has already consumed the `fn`.
+  FnDeclStmt parseExternFnDecl();
   // `struct Name { field: T; ... }` (PHASE 6.5). A data-only declaration.
   StmtPtr parseStructDecl();
   // Body that follows a `=>`: a `{ ... }` block, or a single expression that

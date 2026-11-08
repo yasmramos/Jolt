@@ -369,6 +369,11 @@ is not implicit. The integer family (`int`, the fixed-width types, `uint`,
 `size_t`) is mutually assignable at compile time and widens to `float`/`double`,
 following the same numeric rule as `int`.
 
+A C function's `const char *` **parameter** may also be spelled `string`: a Jolt
+string is NUL-terminated and stays alive for the whole call, so its bytes are a
+valid `const char *` (`extern fn strlen(s: string): int;`). A `string` is not a
+valid *return* type — a C function that returns text returns a `cstring`.
+
 **Pointer values.** A `ptr`/`cstring` is an **opaque handle**, never a machine
 address: the program can pass it to a native and read it back, but it can never
 dereference an arbitrary location. This keeps Jolt memory-safe and keeps the
@@ -404,14 +409,21 @@ free(buf);
 The AOT backend (PHASE 7) lowers the same handles to real C pointers, so a
 program that only passes them to natives compiles unchanged.
 
-**`extern "C"` blocks.** A C function is declared in an `extern "C" { ... }`
-block (PHASE 6.6). The ABI is a plain string literal and only `"C"` is
-supported. Each entry is a bodyless `fn ...;`; the compiler validates the
-signature against the FFI type vocabulary (see §4.6) and records it as
-compile-time metadata on the proto, so the block emits no bytecode of its own.
-The declarations are hoisted, so a function may call one declared later. Like
-`import`, `struct` and `native fn`, the block is module-level metadata: nesting
-it is a compile error.
+**`extern "C"` blocks.** A C function is declared with `extern` (PHASE 6.6). Two
+spellings are accepted and compile to the same thing:
+
+```jolt
+extern "C" { fn sqrt(x: float): float; }   // block: explicit ABI
+extern fn sqrt(x: float): float;           // single: implicit "C" ABI
+```
+
+The single-line form is sugar for a one-entry block; the ABI is implicitly
+`"C"`. The block's ABI is a plain string literal and only `"C"` is supported.
+Each entry is a bodyless `fn ...;`; the compiler validates the signature against
+the FFI type vocabulary (see §4.6) and records it as compile-time metadata on
+the proto, so a declaration emits no bytecode of its own. Declarations are
+hoisted, so a function may call one declared later. Like `import`, `struct` and
+`native fn`, they are module-level metadata: nesting one is a compile error.
 
 Before a proto runs, the engine resolves each declared name through
 `Platform::lookupSymbol` and binds it to a marshalling native. The call passes
@@ -432,9 +444,12 @@ print(sqrt(16.0));         // 4
 let n: size_t = strlen("hi");
 ```
 
-A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a `ptr`
-argument accepts `nil` (NULL) and an owned `cstring`/buffer, whose bytes are the
-address the C callee receives.
+A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a parameter
+may be spelled `string` directly: a Jolt string is NUL-terminated and stays alive
+for the whole call, so its bytes are a valid `const char *`. A `string` is not a
+valid *return* type; a C function returns a `cstring`. A `ptr` argument accepts
+`nil` (NULL) and an owned `cstring`/buffer, whose bytes are the address the C
+callee receives.
 
 **Structs by value.** A `struct` (see §4.7) can also cross the C boundary, both
 as a parameter and as a return value. A struct is a map at runtime, so the
@@ -1911,7 +1926,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
-- FFI with C is implemented for the development engine (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi` for scalars and structs by value. A `fn(P...): R` parameter is a callback: the development engine builds a `libffi` closure that re-enters the VM, while the AOT backend (PHASE 7) lowers callbacks to compile-time stubs and never links `libffi`.
+- FFI with C is implemented for the development engine (PHASE 6.6). C functions are declared with `extern "C" { ... }` blocks or the single-line `extern fn ...;` form (implicit `"C"` ABI); both desugar to the same representation. The FFI type vocabulary is documented in §4.6: the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi` for scalars and structs by value. A `fn(P...): R` parameter is a callback: the development engine builds a `libffi` closure that re-enters the VM, while the AOT backend (PHASE 7) lowers callbacks to compile-time stubs and never links `libffi`.
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.

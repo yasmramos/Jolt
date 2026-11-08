@@ -1,0 +1,3 @@
+// expect-exit: 65
+// The single-line `extern fn` form declares a C function, so it has no body.
+extern fn f(): int { return 1; }
