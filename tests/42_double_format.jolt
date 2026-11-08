@@ -1,0 +1,29 @@
+// `str(double)` prints the shortest text that round-trips through binary64, so
+// parsing the printed form back yields exactly the same value. Before the fix a
+// `double` printed with 15 significant digits, which is not enough for binary64:
+// `1.0 / 3.0` printed "0.333333333333333" and read back as a different number.
+
+// The shortest round-trip text, not a 15-digit truncation.
+assertEq(str(1.0 / 3.0), "0.3333333333333333");
+assertEq(str(0.1 + 0.2), "0.30000000000000004");
+assertEq(str(2.0 ** 0.5), "1.4142135623730951");
+
+// The printed form parses back to the exact same value.
+assertEq(double(str(1.0 / 3.0)) == 1.0 / 3.0, true);
+assertEq(double(str(0.1 + 0.2)) == 0.1 + 0.2, true);
+assertEq(double(str(2.0 ** 0.5)) == 2.0 ** 0.5, true);
+assertEq(double(str(1.7976931348623157e308)) == 1.7976931348623157e308, true);
+
+// A `float` keeps the binary32 shortest form (unchanged).
+assertEq(str(0.1f), "0.1");
+assertEq(str(1.0f / 3.0f), "0.33333334");
+
+// Values that fit in 15 digits are unaffected, and the special forms stay.
+assertEq(str(1.5), "1.5");
+assertEq(str(0.1), "0.1");
+assertEq(str(1000000.0), "1e+06");
+assertEq(str(double("inf")), "inf");
+assertEq(str(double("-inf")), "-inf");
+assertEq(str(double("nan")), "nan");
+
+print("double formatting ok");

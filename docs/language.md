@@ -1775,6 +1775,8 @@ assertEq(len(5..0), 5);
 
 `int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error.
 
+A floating-point value prints with the shortest decimal text that round-trips through its type: parsing the printed form back yields exactly the same value. A `double` uses binary64 precision (`str(1.0 / 3.0)` is `"0.3333333333333333"`) and a `float` uses binary32 (`str(0.1f)` is `"0.1"`). Values that fit in fewer digits keep the shortest form (`str(1.5)` is `"1.5"`).
+
 `str` of an array or map uses the representation of its elements, with inner strings in quotes:
 
 ```jolt

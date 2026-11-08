@@ -102,7 +102,10 @@ static std::string formatFloat(double d) {
   if (std::isnan(d)) return "nan";
   if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
   char buffer[64];
-  auto result = std::to_chars(buffer, buffer + sizeof(buffer), d, std::chars_format::general, 15);
+  // Shortest text that round-trips through binary64 (Java-style): `1.0/3.0`
+  // prints "0.3333333333333333", not a truncated "0.333333333333333" that would
+  // read back as a different value.
+  auto result = std::to_chars(buffer, buffer + sizeof(buffer), d);
   if (result.ec != std::errc()) return "nan";
   return std::string(buffer, result.ptr);
 }
