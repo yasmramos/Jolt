@@ -54,12 +54,14 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
-| `native/lower.cpp` | bytecode | x86-64 | 🔶 PHASE 7b |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1a |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
 | `native/arena.cpp` | block + size | aligned allocations | ✅ PHASE 7c.0 |
 | `native/platform_freestanding.cpp` | `Platform` ops | direct Linux syscalls | ✅ PHASE 7c.0 |
 | `native/entry.cpp` | program entry label | `_start` + runtime prelude | ✅ PHASE 7c.0 |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1a |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1a |
 
 ### Toolchain binaries and the compiler boundary
 
@@ -634,15 +636,36 @@ Slices, each independently shippable:
       `tests/freestanding_test.cpp`: the test emits a program, wraps it in an
       ELF, writes it to disk, runs it and checks its stdout, exit code and
       that `ldd` reports no dynamic dependencies.
+    - **7c.1a** (done) — the boxed value model. A bytecode register is no
+      longer a physical CPU register: it is a 16-byte slot in a register file
+      on the stack (`[rbp - 16*(i+1)]`), holding an `AotValue { tag; payload }`
+      (`include/native/value.h`). Sixteen bytes is the System V ABI's
+      two-register size (rdi:rsi in, rax:rdx out), so a helper takes and
+      returns a value without touching memory, and the old 12-register ceiling
+      is gone. The embedded runtime (`include/native/runtime.h`,
+      `src/native/runtime.cpp`) emits, as machine code in the same buffer as
+      the program, the helpers the opcodes call: integer arithmetic
+      (`+`/`-`/`*`), bitwise (`&`/`|`/`^`), unary (`-`/`!`/`~`), comparison
+      (equality for any pair, ordering for int/int and bool/bool, all
+      type-aware) and truthiness. `jolt_print_value` renders int/bool/nil with
+      an integer-to-text routine of our own (no libc); a type mismatch reports
+      "unsupported operand types" on stderr and exits 70, matching the
+      development engine. `lowerToX64` now returns a `LoweredChunk` (the code
+      image plus the chunk and `_start` offsets) and emits the entry prelude
+      and the runtime alongside the program. Verified in `tests/lower_test.cpp`
+      (execution: loads, arithmetic, bitwise, comparisons, truthiness, jumps,
+      a backward loop, 40 registers) and end to end in
+      `tests/freestanding_test.cpp` (a real static ELF that prints
+      `42`, `-7`, `true`, `false`, `nil`, and a type error that exits 70).
+    - **7c.1b** — floats and strings over the arena: the `Float` and `Str` tags
+      (`LOADK` of a float/string), `DIV`/`MOD`/`POW` with the division-by-zero
+      error path, `SHL`/`SHR` (the shift count needs `cl`, now that registers
+      live in memory), and float-to-text for `print`.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
-      collections and functions. **Open architectural question**: the hosted
-      `Value` is reference counted and cycle collected (`gc.cpp`), which cannot
-      live in a no-libc binary; the AOT runtime needs its own boxed value and
+      collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
-      code. `PlatformFreestanding` currently pulls `operator delete` through
-      `Platform`'s virtual destructor, so linking it into a `-nostdlib` binary
-      needs either a tiny shim or a `-fno-exceptions`-friendly base — to be
-      settled when 7c.1 first links the runtime into a generated binary.
+      code, because the hosted `Value` is reference counted and cycle
+      collected (`gc.cpp`), which cannot live in a no-libc binary.
   - **7d** — `jolt build` wired into the CLI.
 - Deferred: per-instruction type annotations for fast paths without dynamic
   dispatch (bridge toward the speculative work in
@@ -656,13 +679,19 @@ Slices, each independently shippable:
   `push`/`pop`, `call rel32`, `syscall` and `ret`, covered by the byte-exact
   tests in `tests/codegen_test.cpp` (the mmap/execution checks run on Linux
   x86-64 only). The 7b lowering (`include/native/lower.h`,
-  `src/native/lower.cpp`) turns the runtime-free, integer-only opcodes into
-  machine code, tested byte-exactly and by execution in `tests/lower_test.cpp`.
+  `src/native/lower.cpp`) turned the runtime-free, integer-only opcodes into
+  machine code, and 7c.1a replaced it with the boxed value model; both are
+  tested by execution in `tests/lower_test.cpp`.
   7c.0 adds the freestanding substrate: the static ELF64 and PE32+ emitters,
   the arena, `PlatformFreestanding` (direct syscalls, no libc) and the
   `_start`/prelude, exercised end to end (a real generated binary is run) in
-  `tests/freestanding_test.cpp`. Still missing: the boxed `Value` runtime
-  (7c.1), the embedded runtime calls (7c.2/7c.3) and `jolt build` (7d).
+  `tests/freestanding_test.cpp`. 7c.1a adds the boxed value model
+  (`include/native/value.h`) and the embedded runtime
+  (`include/native/runtime.cpp`): a register is a 16-byte `AotValue` slot in a
+  stack register file, and the integer/bitwise/unary/compare/truthiness
+  helpers plus the int/bool/nil printer are emitted as machine code into the
+  program's own buffer. Still missing: floats and strings (7c.1b), the
+  embedded runtime calls (7c.2/7c.3) and `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -699,7 +728,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0 and 7c.1a done; 7c.1b+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

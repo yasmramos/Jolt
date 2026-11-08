@@ -1,12 +1,14 @@
-// Tests for the x86-64 bytecode lowering (PHASE 7b).
+// Tests for the x86-64 bytecode lowering (PHASE 7c.1).
 //
-// Byte-exact tests verify the encoding of instruction sequences against
-// hand-computed reference bytes. Execution tests (Linux x86-64 only) run the
-// generated code and check the value it leaves in rax (R0).
+// The lowering no longer maps bytecode registers to physical CPU registers:
+// each register is a 16-byte slot in a register file on the stack, holding a
+// boxed `AotValue`. The tests therefore run the generated code (Linux x86-64
+// only) and read the `AotValue` the chunk returns in rax:rdx, instead of
+// comparing bytes. Byte-exact coverage of the encoders lives in
+// `codegen_test.cpp`; here the subject is the lowering's behaviour.
 //
-// PHASE 7b lowers only the runtime-free, integer-only subset. Every other
-// opcode must raise a LoweringError instead of emitting wrong code, so the
-// deferred cases are tested too.
+// Every opcode the slice does not lower must raise a LoweringError rather than
+// emit wrong code, so the deferred cases are tested too.
 
 #include <cstdint>
 #include <cstdio>
@@ -18,6 +20,7 @@
 #include "native/codegen.h"
 #include "native/lower.h"
 #include "native/target.h"
+#include "native/value.h"
 
 #if defined(__linux__) && defined(__x86_64__)
 #define LOWER_EXEC_TESTS 1
@@ -34,16 +37,6 @@ static void check(bool condition, const char* what) {
   } else {
     std::printf("ok: %s\n", what);
   }
-}
-
-static std::string toHex(const std::vector<std::uint8_t>& bytes) {
-  static const char* digits = "0123456789ABCDEF";
-  std::string out;
-  for (std::uint8_t b : bytes) {
-    out += digits[b >> 4];
-    out += digits[b & 0x0F];
-  }
-  return out;
 }
 
 static Bytecode makeProto(const std::vector<Instruction>& code,
@@ -66,7 +59,7 @@ static Instruction instr(OpCode op, int a = 0, int b = 0, int c = 0, int jump = 
   return i;
 }
 
-static std::vector<std::uint8_t> lower(const Bytecode& proto) {
+static LoweredChunk lower(const Bytecode& proto) {
   return lowerToX64(Target::linuxX64(), proto, CodeGen{});
 }
 
@@ -79,57 +72,18 @@ static bool loweringThrows(const Bytecode& proto, const char* needle) {
   return false;
 }
 
-// --- Byte-exact tests ---
+// --- Structural tests ---
 
-static void testLoadKInt() {
-  // R0 = 42; HALT -> mov rax, 42; ret
-  auto code = lower(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
-                              {Value(static_cast<int64_t>(42))}, 1));
-  check(toHex(code) == "48C7C02A000000C3", "LOADK int: mov rax, 42; ret");
-}
-
-static void testLoadKBool() {
-  // true -> 1, false -> 0.
-  auto t = lower(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
-                           {Value(true)}, 1));
-  check(toHex(t) == "48C7C001000000C3", "LOADK true: mov rax, 1; ret");
-  auto f = lower(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
-                           {Value(false)}, 1));
-  check(toHex(f) == "48C7C000000000C3", "LOADK false: mov rax, 0; ret");
-}
-
-static void testMove() {
-  // R1 = R0; HALT -> mov rcx, rax; ret
-  auto code = lower(makeProto({instr(OpCode::MOVE, 1, 0), instr(OpCode::HALT)}, {}, 2));
-  check(toHex(code) == "4889C1C3", "MOVE: mov rcx, rax; ret");
-}
-
-static void testAddSameReg() {
-  // R0 = R0 + R1 (a == b, the shape the compiler emits) -> add rax, rcx; ret
-  auto code = lower(makeProto({instr(OpCode::ADD, 0, 0, 1), instr(OpCode::HALT)}, {}, 2));
-  check(toHex(code) == "4801C8C3", "ADD a==b: add rax, rcx; ret");
-}
-
-static void testAddDistinctDest() {
-  // R2 = R0 + R1 -> mov rdx, rax; add rdx, rcx; ret
-  auto code = lower(
-      makeProto({instr(OpCode::ADD, 2, 0, 1), instr(OpCode::HALT)}, {}, 3));
-  check(toHex(code) == "4889C24801CAC3", "ADD a!=b: mov rdx, rax; add rdx, rcx; ret");
-}
-
-static void testCompareAsValue() {
-  // R0 = R0 == R1 -> cmp rax, rcx; sete al; movzx rax, al; ret
-  auto code = lower(makeProto({instr(OpCode::EQ, 0, 0, 1), instr(OpCode::HALT)}, {}, 2));
-  check(toHex(code) == "4839C80F94C0480FB6C0C3",
-        "EQ: cmp; sete; movzx; ret (materialized boolean)");
-}
-
-static void testUnopNotBytes() {
-  // R0 = !R0 -> test rax, rax; sete al; movzx rax, al; ret
-  auto code = lower(makeProto(
-      {instr(OpCode::UNOP, 0, 0, static_cast<int>(UnaryOp::Not)), instr(OpCode::HALT)},
-      {}, 1));
-  check(toHex(code) == "4885C00F94C0480FB6C0C3", "UNOP Not: test; sete; movzx; ret");
+static void testImageIsSelfContained() {
+  // The image carries the program, the runtime and `_start`, so it is larger
+  // than the program alone and both entry points are inside it.
+  LoweredChunk chunk =
+      lower(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                      {Value(static_cast<int64_t>(1))}, 1));
+  check(!chunk.code.empty(), "the lowered image is not empty");
+  check(chunk.programEntry < chunk.code.size(), "the chunk entry is inside the image");
+  check(chunk.processEntry < chunk.code.size(), "the _start entry is inside the image");
+  check(chunk.programEntry != chunk.processEntry, "the chunk and _start entries differ");
 }
 
 // --- Error tests: the deferred opcodes must be rejected, not miscompiled ---
@@ -144,6 +98,9 @@ static void testDeferredOpcodesThrow() {
   check(loweringThrows(makeProto({instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)}, {}, 2),
                        "CALL/RETURN"),
         "CALL raises a LoweringError");
+  check(loweringThrows(makeProto({instr(OpCode::NEWTABLE, 0, 0), instr(OpCode::HALT)}, {}, 2),
+                       "NEWTABLE"),
+        "NEWTABLE raises a LoweringError");
   check(loweringThrows(
             makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
                       {Value(std::string("hi"))}, 1),
@@ -153,27 +110,30 @@ static void testDeferredOpcodesThrow() {
             makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
                       {Value(1.5)}, 1),
             "LOADK"),
-        "LOADK of a float raises a LoweringError (deferred to 7c)");
-}
-
-static void testRegisterLimitThrows() {
-  Bytecode proto = makeProto({instr(OpCode::HALT)}, {}, 13);
-  check(loweringThrows(proto, "up to 12"), "more than 12 registers raises a LoweringError");
+        "LOADK of a float raises a LoweringError");
 }
 
 static void testBadJumpTargetThrows() {
-  // A jump past the end of the code must be rejected, not encoded blindly.
   auto proto = makeProto({instr(OpCode::JMP, 0, 0, 0, 99), instr(OpCode::HALT)}, {}, 1);
   check(loweringThrows(proto, "outside the code"), "an out-of-range jump target throws");
+}
+
+static void testInvalidUnopSelectorThrows() {
+  auto proto = makeProto(
+      {instr(OpCode::UNOP, 0, 0, 99), instr(OpCode::HALT)}, {}, 1);
+  check(loweringThrows(proto, "UNOP selector"), "an invalid UNOP selector throws");
 }
 
 // --- Execution tests (Linux x86-64 only) ---
 
 #ifdef LOWER_EXEC_TESTS
 
-static void* emitExecutable(const std::vector<std::uint8_t>& code) {
+// Maps the image executable and returns a pointer to `offset` inside it.
+static void* emitExecutable(const std::vector<std::uint8_t>& code,
+                            std::uint64_t offset) {
   long pageSize = sysconf(_SC_PAGESIZE);
   std::size_t span = static_cast<std::size_t>(pageSize);
+  while (span < code.size()) span += static_cast<std::size_t>(pageSize);
   void* mem = mmap(nullptr, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mem == MAP_FAILED) {
     std::perror("mmap");
@@ -184,47 +144,99 @@ static void* emitExecutable(const std::vector<std::uint8_t>& code) {
     std::perror("mprotect");
     std::exit(1);
   }
-  return mem;
+  return static_cast<std::uint8_t*>(mem) + offset;
 }
 
-static std::int64_t run(const Bytecode& proto) {
-  auto code = lower(proto);
-  auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(code));
+// Runs the chunk and returns the `AotValue` it leaves in rax:rdx (R0). A chunk
+// that hits a runtime error exits the process, so the error path is exercised
+// end-to-end in `freestanding_test.cpp`, not here.
+static AotValue run(const Bytecode& proto) {
+  LoweredChunk chunk = lower(proto);
+  auto fn = reinterpret_cast<AotValue (*)()>(
+      emitExecutable(chunk.code, chunk.programEntry));
   return fn();
 }
 
-static void testExecBinaryDistinctDest() {
-  // R0=2; R1=3; R2=R0+R1; R0=R2; HALT -> 5. Exercises the mov+op path.
-  auto proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
-                          instr(OpCode::ADD, 2, 0, 1), instr(OpCode::MOVE, 0, 2),
-                          instr(OpCode::HALT)},
-                         {Value(static_cast<int64_t>(2)), Value(static_cast<int64_t>(3))}, 3);
-  check(run(proto) == 5, "exec: R2 = R0 + R1 (distinct destination)");
+static void checkInt(const Bytecode& proto, std::int64_t expected, const char* what) {
+  AotValue value = run(proto);
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == expected;
+  check(ok, what);
+  if (!ok) {
+    std::printf("      got tag=%llu payload=%lld, expected Int %lld\n",
+                static_cast<unsigned long long>(value.tag),
+                static_cast<long long>(static_cast<std::int64_t>(value.payload)),
+                static_cast<long long>(expected));
+  }
 }
 
-static void testExecBinaryDestIsRightOperand() {
-  // R0=2; R1=3; R0 = R1 + R0; HALT -> 5. a==c, so the operand is stashed.
-  auto proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
-                          instr(OpCode::ADD, 0, 1, 0), instr(OpCode::HALT)},
-                         {Value(static_cast<int64_t>(2)), Value(static_cast<int64_t>(3))}, 2);
-  check(run(proto) == 5, "exec: R0 = R1 + R0 (destination aliases right operand)");
+static void checkBool(const Bytecode& proto, bool expected, const char* what) {
+  AotValue value = run(proto);
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Bool) &&
+            (value.payload != 0) == expected;
+  check(ok, what);
+}
+
+static void testExecLoads() {
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(42))}, 1),
+           42, "exec: LOADK int 42");
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(-7))}, 1),
+           -7, "exec: LOADK int -7");
+  checkBool(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                      {Value(true)}, 1),
+            true, "exec: LOADK true");
+  checkBool(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                      {Value(false)}, 1),
+            false, "exec: LOADK false");
+
+  AotValue nil = run(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                               {Value()}, 1));
+  check(nil.tag == static_cast<std::uint64_t>(AotTag::Nil), "exec: LOADK nil");
+}
+
+static void testExecMove() {
+  // R1 = R0; R0 = R1 -> the value moves through the register file.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::MOVE, 1, 0),
+                      instr(OpCode::MOVE, 0, 1), instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(9))}, 2),
+           9, "exec: MOVE preserves tag and payload");
 }
 
 static void testExecArithmetic() {
+  auto add = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                        instr(OpCode::ADD, 0, 0, 1), instr(OpCode::HALT)},
+                       {Value(static_cast<int64_t>(2)), Value(static_cast<int64_t>(3))}, 2);
+  checkInt(add, 5, "exec: 2 + 3 == 5");
+
   auto sub = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
                         instr(OpCode::SUB, 0, 0, 1), instr(OpCode::HALT)},
                        {Value(static_cast<int64_t>(10)), Value(static_cast<int64_t>(3))}, 2);
-  check(run(sub) == 7, "exec: 10 - 3 == 7");
+  checkInt(sub, 7, "exec: 10 - 3 == 7");
 
   auto mul = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
                         instr(OpCode::MUL, 0, 0, 1), instr(OpCode::HALT)},
                        {Value(static_cast<int64_t>(6)), Value(static_cast<int64_t>(7))}, 2);
-  check(run(mul) == 42, "exec: 6 * 7 == 42");
+  checkInt(mul, 42, "exec: 6 * 7 == 42");
 
-  auto band = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
-                         instr(OpCode::BAND, 0, 0, 1), instr(OpCode::HALT)},
-                        {Value(static_cast<int64_t>(12)), Value(static_cast<int64_t>(10))}, 2);
-  check(run(band) == 8, "exec: 12 & 10 == 8");
+  // Distinct destination: R2 = R0 + R1, then R0 = R2.
+  auto distinct = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                             instr(OpCode::ADD, 2, 0, 1), instr(OpCode::MOVE, 0, 2),
+                             instr(OpCode::HALT)},
+                            {Value(static_cast<int64_t>(20)), Value(static_cast<int64_t>(22))}, 3);
+  checkInt(distinct, 42, "exec: R2 = R0 + R1 (distinct destination)");
+}
+
+static void testExecBitwise() {
+  auto mk = [](OpCode op, std::int64_t x, std::int64_t y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 0, 0, 1), instr(OpCode::HALT)},
+                     {Value(x), Value(y)}, 2);
+  };
+  checkInt(mk(OpCode::BAND, 12, 10), 8, "exec: 12 & 10 == 8");
+  checkInt(mk(OpCode::BOR, 12, 10), 14, "exec: 12 | 10 == 14");
+  checkInt(mk(OpCode::BXOR, 12, 10), 6, "exec: 12 ^ 10 == 6");
 }
 
 static void testExecComparisonsAsValues() {
@@ -233,14 +245,21 @@ static void testExecComparisonsAsValues() {
                       instr(op, 2, 0, 1), instr(OpCode::MOVE, 0, 2), instr(OpCode::HALT)},
                      {Value(x), Value(y)}, 3);
   };
-  check(run(mk(OpCode::EQ, 5, 5)) == 1, "exec: (5 == 5) == 1");
-  check(run(mk(OpCode::EQ, 5, 6)) == 0, "exec: (5 == 6) == 0");
-  check(run(mk(OpCode::NEQ, 5, 6)) == 1, "exec: (5 != 6) == 1");
-  check(run(mk(OpCode::LT, 5, 9)) == 1, "exec: (5 < 9) == 1");
-  check(run(mk(OpCode::LT, 9, 5)) == 0, "exec: (9 < 5) == 0");
-  check(run(mk(OpCode::LTE, 5, 5)) == 1, "exec: (5 <= 5) == 1");
-  check(run(mk(OpCode::GT, 9, 5)) == 1, "exec: (9 > 5) == 1");
-  check(run(mk(OpCode::GTE, 5, 9)) == 0, "exec: (5 >= 9) == 0");
+  checkBool(mk(OpCode::EQ, 5, 5), true, "exec: (5 == 5) is true");
+  checkBool(mk(OpCode::EQ, 5, 6), false, "exec: (5 == 6) is false");
+  checkBool(mk(OpCode::NEQ, 5, 6), true, "exec: (5 != 6) is true");
+  checkBool(mk(OpCode::LT, 5, 9), true, "exec: (5 < 9) is true");
+  checkBool(mk(OpCode::LT, 9, 5), false, "exec: (9 < 5) is false");
+  checkBool(mk(OpCode::LTE, 5, 5), true, "exec: (5 <= 5) is true");
+  checkBool(mk(OpCode::GT, 9, 5), true, "exec: (9 > 5) is true");
+  checkBool(mk(OpCode::GTE, 5, 9), false, "exec: (5 >= 9) is false");
+
+  // Equality is type-aware: an int never equals a bool with the same payload.
+  auto mixed = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                          instr(OpCode::EQ, 2, 0, 1), instr(OpCode::MOVE, 0, 2),
+                          instr(OpCode::HALT)},
+                         {Value(static_cast<int64_t>(1)), Value(true)}, 3);
+  checkBool(mixed, false, "exec: 1 == true is false (tags differ)");
 }
 
 static void testExecUnop() {
@@ -248,64 +267,63 @@ static void testExecUnop() {
       {instr(OpCode::LOADK, 0, 0),
        instr(OpCode::UNOP, 0, 0, static_cast<int>(UnaryOp::Negate)), instr(OpCode::HALT)},
       {Value(static_cast<int64_t>(7))}, 1);
-  check(run(neg) == -7, "exec: -7");
+  checkInt(neg, -7, "exec: -7");
 
   auto bitNot = makeProto(
       {instr(OpCode::LOADK, 0, 0),
        instr(OpCode::UNOP, 0, 0, static_cast<int>(UnaryOp::BitNot)), instr(OpCode::HALT)},
       {Value(static_cast<int64_t>(0))}, 1);
-  check(run(bitNot) == -1, "exec: ~0 == -1");
+  checkInt(bitNot, -1, "exec: ~0 == -1");
 
-  // !0 -> 1 (zero is truthy in Jolt, but here it is the integer 0 -> not 0 == 1).
+  // !0 -> false: the integer 0 is truthy, so its negation is false.
   auto notZero = makeProto(
       {instr(OpCode::LOADK, 0, 0),
        instr(OpCode::UNOP, 0, 0, static_cast<int>(UnaryOp::Not)), instr(OpCode::HALT)},
       {Value(static_cast<int64_t>(0))}, 1);
-  check(run(notZero) == 1, "exec: !0 == 1");
+  checkBool(notZero, false, "exec: !0 is false (0 is truthy)");
 
-  auto notFive = makeProto(
+  auto notNil = makeProto(
       {instr(OpCode::LOADK, 0, 0),
        instr(OpCode::UNOP, 0, 0, static_cast<int>(UnaryOp::Not)), instr(OpCode::HALT)},
-      {Value(static_cast<int64_t>(5))}, 1);
-  check(run(notFive) == 0, "exec: !5 == 0");
+      {Value()}, 1);
+  checkBool(notNil, true, "exec: !nil is true");
 }
 
 static void testExecJumps() {
-  // R0=1; JMP +2; R0=99 (skipped); HALT -> 1
+  // R0=1; JMP +3; R0=99 (skipped); HALT -> 1
   auto jmp = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::JMP, 0, 0, 0, 3),
                         instr(OpCode::LOADK, 0, 1), instr(OpCode::HALT)},
                        {Value(static_cast<int64_t>(1)), Value(static_cast<int64_t>(99))}, 1);
-  check(run(jmp) == 1, "exec: JMP skips an instruction");
+  checkInt(jmp, 1, "exec: JMP skips an instruction");
 
-  // R0=0; R1=1; R0=R0+R1 (=1); JMP_IF_FALSE R0,+2; R0=99; HALT -> 99
-  auto jif = makeProto(
-      {instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1), instr(OpCode::ADD, 0, 0, 1),
-       instr(OpCode::JMP_IF_FALSE, 0, 0, 0, 5), instr(OpCode::LOADK, 0, 2),
-       instr(OpCode::HALT)},
-      {Value(static_cast<int64_t>(0)), Value(static_cast<int64_t>(1)),
-       Value(static_cast<int64_t>(99))},
-      2);
-  check(run(jif) == 99, "exec: JMP_IF_FALSE does not jump when truthy");
+  // The integer 0 is truthy, so JMP_IF_FALSE does not jump and R0 becomes 99.
+  auto truthyZero = makeProto({instr(OpCode::LOADK, 0, 0),
+                               instr(OpCode::JMP_IF_FALSE, 0, 0, 0, 3),
+                               instr(OpCode::LOADK, 0, 1), instr(OpCode::HALT)},
+                              {Value(static_cast<int64_t>(0)), Value(static_cast<int64_t>(99))}, 1);
+  checkInt(truthyZero, 99, "exec: JMP_IF_FALSE does not jump on integer 0 (truthy)");
 
-  // R0=0; JMP_IF_FALSE R0,+2; R0=99; HALT -> 0
-  auto jift = makeProto({instr(OpCode::LOADK, 0, 0),
-                         instr(OpCode::JMP_IF_FALSE, 0, 0, 0, 3),
-                         instr(OpCode::LOADK, 0, 1), instr(OpCode::HALT)},
-                        {Value(static_cast<int64_t>(0)), Value(static_cast<int64_t>(99))}, 1);
-  check(run(jift) == 0, "exec: JMP_IF_FALSE jumps when falsy");
+  // nil is falsy, so JMP_IF_FALSE jumps over the assignment and R0 stays nil.
+  auto nilFalse = makeProto({instr(OpCode::LOADK, 0, 0),
+                             instr(OpCode::JMP_IF_FALSE, 0, 0, 0, 3),
+                             instr(OpCode::LOADK, 0, 1), instr(OpCode::HALT)},
+                            {Value(), Value(static_cast<int64_t>(99))}, 1);
+  AotValue nilResult = run(nilFalse);
+  check(nilResult.tag == static_cast<std::uint64_t>(AotTag::Nil),
+        "exec: JMP_IF_FALSE jumps on nil (falsy)");
 
-  // R0=1; JMP_IF_TRUE R0,+2; R0=99; HALT -> 1
-  auto jtrue = makeProto({instr(OpCode::LOADK, 0, 0),
-                          instr(OpCode::JMP_IF_TRUE, 0, 0, 0, 3),
-                          instr(OpCode::LOADK, 0, 1), instr(OpCode::HALT)},
-                         {Value(static_cast<int64_t>(1)), Value(static_cast<int64_t>(99))}, 1);
-  check(run(jtrue) == 1, "exec: JMP_IF_TRUE jumps when truthy");
+  // true is truthy, so JMP_IF_TRUE jumps over the assignment.
+  auto trueJump = makeProto({instr(OpCode::LOADK, 0, 0),
+                             instr(OpCode::JMP_IF_TRUE, 0, 0, 0, 3),
+                             instr(OpCode::LOADK, 0, 1), instr(OpCode::HALT)},
+                            {Value(true), Value(static_cast<int64_t>(99))}, 1);
+  checkBool(trueJump, true, "exec: JMP_IF_TRUE jumps on true");
 }
 
 static void testExecBackwardJumpLoop() {
   // A countdown: R0 = 3; R1 = 1; R2 = 0;
   //   top(3): R0 = R0 - R1; R3 = (R0 != R2); if R3 goto top; HALT.
-  // 3 -> 2 -> 1 -> 0, then NEQ yields 0, JMP_IF_TRUE does not jump and the
+  // 3 -> 2 -> 1 -> 0, then NEQ yields false, JMP_IF_TRUE does not jump and the
   // loop exits with 0 in R0. Exercises a backward jump and a comparison value.
   auto proto = makeProto(
       {instr(OpCode::LOADK, 0, 0),             // 0: R0 = 3
@@ -318,31 +336,37 @@ static void testExecBackwardJumpLoop() {
       {Value(static_cast<int64_t>(3)), Value(static_cast<int64_t>(1)),
        Value(static_cast<int64_t>(0))},
       4);
-  check(run(proto) == 0, "exec: countdown loop terminates at 0");
+  checkInt(proto, 0, "exec: countdown loop terminates at 0");
+}
+
+static void testExecManyRegisters() {
+  // The register file is on the stack, so the old 12-register ceiling is gone:
+  // 40 registers must work. R39 = 5 + 6.
+  auto proto = makeProto({instr(OpCode::LOADK, 38, 0), instr(OpCode::LOADK, 39, 1),
+                          instr(OpCode::ADD, 39, 38, 39), instr(OpCode::MOVE, 0, 39),
+                          instr(OpCode::HALT)},
+                         {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(6))}, 40);
+  checkInt(proto, 11, "exec: 40 registers are usable (no physical-register ceiling)");
 }
 
 #endif  // LOWER_EXEC_TESTS
 
 int main() {
-  testLoadKInt();
-  testLoadKBool();
-  testMove();
-  testAddSameReg();
-  testAddDistinctDest();
-  testCompareAsValue();
-  testUnopNotBytes();
+  testImageIsSelfContained();
   testDeferredOpcodesThrow();
-  testRegisterLimitThrows();
   testBadJumpTargetThrows();
+  testInvalidUnopSelectorThrows();
 
 #ifdef LOWER_EXEC_TESTS
-  testExecBinaryDistinctDest();
-  testExecBinaryDestIsRightOperand();
+  testExecLoads();
+  testExecMove();
   testExecArithmetic();
+  testExecBitwise();
   testExecComparisonsAsValues();
   testExecUnop();
   testExecJumps();
   testExecBackwardJumpLoop();
+  testExecManyRegisters();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

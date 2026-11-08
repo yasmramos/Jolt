@@ -55,6 +55,15 @@ enum class Jcc : std::uint8_t {
   Gt = 0x8F,
   Le = 0x8E,
   Ge = 0x8D,
+  // Unsigned forms, needed when a comparison is on pointers or on a
+  // magnitude that must not be read as a signed value (the integer-to-text
+  // routine compares buffer cursors).
+  B = 0x82,   // below (jb/jc)
+  Ae = 0x83,  // above or equal (jae/jnb)
+  Be = 0x86,  // below or equal (jbe)
+  A = 0x87,   // above (ja)
+  S = 0x88,   // sign set
+  Ns = 0x89,  // sign clear
 };
 
 class CodeGen {
@@ -82,7 +91,13 @@ class CodeGen {
   void movToMem(X64Reg base, std::int64_t disp, X64Reg src);
   void movFromMem(X64Reg dst, X64Reg base, std::int64_t disp);
   void movImmToMem(X64Reg base, std::int64_t disp, std::int64_t value);
+  void movImmByteToMem(X64Reg base, std::int64_t disp, std::uint8_t value);  // mov byte [m], imm8
+  void movByteToMem(X64Reg base, std::int64_t disp, X64Reg src);             // mov [m], r8
   void leaRip(X64Reg dst, std::int32_t ripDelta);         // lea dst, [rip + delta]
+  // `lea dst, [rip + label]`, the label resolved by `finalize()`. Used to
+  // address constant data emitted inline (error messages): unlike `leaRip`
+  // the distance is not known when the instruction is emitted.
+  void leaRipLabel(X64Reg dst, Label label);
 
   // Arithmetic/logical on registers (64-bit unless noted).
   void addReg(X64Reg dst, X64Reg src);
@@ -92,6 +107,8 @@ class CodeGen {
   void imulReg(X64Reg dst, X64Reg src);
   void idiv(X64Reg divisor);  // signed divide rdx:rax by divisor -> rax, remainder rdx
   void cdq();                 // sign-extend rax into rdx:rax (needed before idiv)
+  void divReg(X64Reg divisor);  // cdq + idiv: rax / divisor -> rax, remainder rdx
+  void divUnsigned(X64Reg divisor);  // rdx=0 + div: unsigned rax / divisor
   void negReg(X64Reg dst);
   void notReg(X64Reg dst);
   void andReg(X64Reg dst, X64Reg src);
@@ -114,6 +131,7 @@ class CodeGen {
 
   // Comparisons and control flow.
   void cmpReg(X64Reg lhs, X64Reg rhs);
+  void cmpImm32(X64Reg lhs, std::int32_t value);  // cmp r/m64, imm32
   void testReg(X64Reg reg);
   void setcc(Jcc cc, X64Reg dst);          // setcc r/m8: dst low byte = 0/1
   void movzx(X64Reg dst, X64Reg src);      // movzx r64, r/m8 (zero-extend)
