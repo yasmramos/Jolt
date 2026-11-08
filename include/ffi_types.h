@@ -51,6 +51,25 @@ enum class ReturnClass {
 // template recursion stays a few thousand instantiations instead of exploding.
 constexpr std::size_t kMaxExternArgs = 6;
 
+// Whether a `struct` may cross the C boundary by value. The marshalling is
+// written for the System V AMD64 ABI, where a struct of up to 16 bytes travels
+// in registers as up to two eightbytes; the Microsoft x64 ABI (Windows) passes
+// a struct larger than 8 bytes through a hidden pointer instead, a shape the
+// register thunks cannot express. Scalars stay portable: the call goes through
+// a typed function pointer, so the host compiler applies the platform ABI.
+//
+// A macro, not only a `constexpr`, because the tests select which cases to
+// compile with `#if` (the preprocessor does not evaluate `constexpr`).
+#ifndef JOLT_FFI_STRUCT_BY_VALUE
+#if defined(__x86_64__) && !defined(_WIN32)
+#define JOLT_FFI_STRUCT_BY_VALUE 1
+#else
+#define JOLT_FFI_STRUCT_BY_VALUE 0
+#endif
+#endif
+
+constexpr bool kStructByValueSupported = JOLT_FFI_STRUCT_BY_VALUE != 0;
+
 // One field of a struct crossing the C boundary. `type` is an FFI scalar type
 // name (the same vocabulary as a parameter annotation); a nested struct is not
 // a scalar and is rejected by `buildStructLayout`.
@@ -314,6 +333,11 @@ inline std::string validateTypeSpec(const TypeSpec& spec, bool isReturn) {
   StructLayout layout;
   std::string reason;
   if (!buildStructLayout(spec.fields, layout, reason)) return reason;
+  if (!kStructByValueSupported) {
+    return "a struct cannot cross the C boundary by value on this target: the register "
+           "marshalling implements the System V AMD64 ABI only (the Microsoft x64 ABI passes "
+           "a struct larger than 8 bytes through a hidden pointer)";
+  }
   return "";
 }
 

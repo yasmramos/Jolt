@@ -484,7 +484,15 @@ previous one.
   declaration is rejected at compile time, as is a nested (non-scalar) field.
   No new opcode and no compiler-side ABI logic: the layout is the single source
   of truth in `ffi_types.h`, shared by the compiler and the runtime across the
-  §2 boundary. See `docs/language.md` §4.6 and `tests/31_ffi_struct.jolt`.
+  §2 boundary. Struct-by-value is **System V AMD64 only**: the register
+  classification is that ABI's, and the Microsoft x64 ABI (Windows) passes a
+  struct larger than 8 bytes through a hidden pointer instead, a shape the
+  register thunks cannot express. Off System V the compiler rejects the
+  declaration (`kStructByValueSupported` in `ffi_types.h`; the CMake capability
+  `JOLT_FFI_STRUCT_BY_VALUE` skips the script test), so a Windows build fails
+  cleanly at compile time instead of crashing at the call. Scalars stay portable
+  because the call is a typed function pointer. See `docs/language.md` §4.6 and
+  `tests/31_ffi_struct.jolt`.
 - **Callbacks (done)** — a parameter typed `fn(P...): R` is a C function
   pointer. `fn` is a keyword, so `parseTypeAnnotation` reads the signature
   before the ordinary type-name path; the parameters and return are scalar FFI

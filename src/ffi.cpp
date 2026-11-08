@@ -483,6 +483,9 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
   StructLayout layout;
   std::string returnScalar;
   if (returnType.isStruct) {
+    if (!kStructByValueSupported) {
+      rt.fail("a struct cannot cross the C boundary by value on this target");
+    }
     std::string reason;
     if (!buildStructLayout(returnType.fields, layout, reason)) {
       rt.fail("invalid extern return struct: " + reason);
@@ -548,6 +551,9 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
       }
       StructLayout structLayout;
       std::string reason;
+      if (!kStructByValueSupported) {
+        in.fail("a struct cannot cross the C boundary by value on this target");
+      }
       if (!buildStructLayout(spec.fields, structLayout, reason)) in.fail(reason);
       if (!args[i].isMap()) {
         in.fail("argument " + std::to_string(i + 1) + " of '" + name +

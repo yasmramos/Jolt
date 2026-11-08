@@ -1531,6 +1531,7 @@ void testExternMarshalsPointerArgument() {
   assert(out == "7\n8\n");
 }
 
+#if JOLT_FFI_STRUCT_BY_VALUE
 void testExternMarshalsStructReturnTwoIntegers() {
   TEST_SCOPE();
   // A two-`int` struct is 8 bytes, class INTEGER: it comes back wholly in `rax`.
@@ -1621,6 +1622,7 @@ void testExternMarshalsSubEightbyteStruct() {
       "print(t.b);\n");
   assert(out == "65\n66\n");
 }
+#endif  // JOLT_FFI_STRUCT_BY_VALUE
 
 #ifdef JOLT_HAVE_LIBFFI
 void testExternCallbackGprShape() {
@@ -1851,6 +1853,7 @@ int main() {
   testExternMarshalsDoubleReturnAndArgument();
   testExternMarshalsStringReturnAsCString();
   testExternMarshalsPointerArgument();
+#if JOLT_FFI_STRUCT_BY_VALUE
   testExternMarshalsStructReturnTwoIntegers();
   testExternMarshalsStructReturnTwoDoubles();
   testExternMarshalsStructReturnMixedClasses();
@@ -1858,6 +1861,7 @@ int main() {
   testExternMarshalsMixedStructArgument();
   testExternMarshalsStructArgumentAndReturnTogether();
   testExternMarshalsSubEightbyteStruct();
+#endif
 #ifdef JOLT_HAVE_LIBFFI
   testExternCallbackGprShape();
   testExternCallbackSseShape();
