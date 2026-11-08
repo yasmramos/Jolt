@@ -73,6 +73,16 @@ if(JOLT_ENABLE_LIBFFI)
   endif()
 endif()
 
+# Struct-by-value FFI is written for the System V AMD64 ABI only; the Microsoft
+# x64 ABI passes a struct larger than 8 bytes through a hidden pointer, a shape
+# the register thunks cannot express. The compiler rejects such a declaration
+# with a clear error on other targets, and the test that exercises it is skipped.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND NOT WIN32)
+  set(JOLT_FFI_STRUCT_BY_VALUE TRUE)
+else()
+  set(JOLT_FFI_STRUCT_BY_VALUE FALSE)
+endif()
+
 # --------------------------------------------------------------------------- main binary
 add_executable(jolt "${JOLT_MAIN}")
 target_link_libraries(jolt PRIVATE jolt_lib)
@@ -163,6 +173,10 @@ if(BUILD_TESTING)
     # FFI callbacks need libffi in the dev engine; skip the callback test when
     # the build has no libffi (the feature reports a clear runtime error then).
     if(name STREQUAL "32_ffi_callback" AND NOT JOLT_LIBFFI_FOUND)
+      continue()
+    endif()
+    # Struct-by-value FFI needs the System V AMD64 ABI; see the capability above.
+    if(name STREQUAL "31_ffi_struct" AND NOT JOLT_FFI_STRUCT_BY_VALUE)
       continue()
     endif()
     jolt_add_script_test("jolt.${name}" "${script}")

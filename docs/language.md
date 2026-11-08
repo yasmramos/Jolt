@@ -484,6 +484,14 @@ instead of a wrong call. A struct field must be an FFI scalar type (an integer,
 `float`/`double`, `ptr`/`cstring` or `bool`); a nested struct field is rejected
 for the same reason.
 
+Structs by value are **System V AMD64 only**. The register classification above
+is the System V ABI's; the Microsoft x64 ABI (Windows) passes a struct larger
+than 8 bytes through a hidden pointer instead, a shape the register thunks
+cannot express. On such a target the declaration is rejected at compile time
+with `a struct cannot cross the C boundary by value on this target`. Scalar
+arguments and results stay portable: the call goes through a typed function
+pointer, so the host compiler applies whichever ABI it targets.
+
 **Callbacks.** A parameter typed `fn(paramTypes): returnType` is a C function
 pointer. A Jolt function (or a closure) passed for it is callable from C, and a
 callback signature only carries scalar FFI types:
