@@ -274,7 +274,10 @@ Ideas for future versions:
 - Union types (`T | E`), `@mustUse` warnings and richer error handling sugar (PHASE 6.7, slices 4-5).
 - User-defined structs and methods.
 - Better Unicode support (upper/lower case and graphemes).
-- More tooling: formatter, syntax highlighting and debugger.
+- More tooling: formatter and debugger.
+
+Editor support: a VS Code syntax-highlighting extension lives in
+[`editors/vscode`](editors/vscode).
 
 ## License
 
