@@ -1,73 +1,96 @@
 #include "native/lower.h"
 
 #include "native/codegen.h"
+#include "native/entry.h"
+#include "native/runtime.h"
+#include "native/value.h"
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace {
 
-// R0-R11 map to System V general-purpose registers. r15 is deliberately left
-// out of the window and used as the lowering's scratch register.
-X64Reg regFor(int index) {
-  switch (index) {
-    case 0: return X64Reg::Rax;
-    case 1: return X64Reg::Rcx;
-    case 2: return X64Reg::Rdx;
-    case 3: return X64Reg::Rsi;
-    case 4: return X64Reg::Rdi;
-    case 5: return X64Reg::R8;
-    case 6: return X64Reg::R9;
-    case 7: return X64Reg::R10;
-    case 8: return X64Reg::R11;
-    case 9: return X64Reg::R12;
-    case 10: return X64Reg::R13;
-    case 11: return X64Reg::R14;
-    default:
-      throw LoweringError("lowering: register index " + std::to_string(index) +
-                          " out of range (0-11)");
-  }
+// PHASE 7c.1 lowers the runtime-free opcodes over the boxed `AotValue`. A
+// bytecode register is now a 16-byte slot in a register file on the stack, not
+// a physical CPU register: a boxed value does not fit in one, and the file is
+// what makes `print`, collections and calls (7c.2/7c.3) possible without a
+// second value representation. The file grows down from rbp:
+//
+//   [rbp - 16 * (i + 1)] = tag(Ri), [rbp - 16 * (i + 1) + 8] = payload(Ri)
+//
+// so R0 sits highest, right below rbp. rbp is both the frame pointer and the
+// file base, so the epilogue (`mov rsp, rbp; pop rbp; ret`) needs no extra
+// bookkeeping.
+
+// The physical registers the lowering uses for scratch. The register file
+// lives on the stack, so the CPU registers are free to be temporaries.
+constexpr X64Reg kFileBase = X64Reg::Rbp;  // &R0 is [rbp - 16]
+constexpr X64Reg kTmpTag = X64Reg::Rax;
+constexpr X64Reg kTmpPayload = X64Reg::Rdx;
+
+// Byte offset of a register slot from the file base (`rbp`). Slot i sits
+// *below* R0, hence the negative offset.
+constexpr std::int64_t slotOffset(int index) { return -16LL * (index + 1); }
+
+// Loads register `index` into `tag`:`payload`. Two moves, the tagged load the
+// lowering table budgets.
+void loadValue(CodeGen& cg, int index, X64Reg tag, X64Reg payload) {
+  cg.movFromMem(tag, kFileBase, slotOffset(index));
+  cg.movFromMem(payload, kFileBase, slotOffset(index) + 8);
 }
 
-// PHASE 7b lowers only the opcodes that need no runtime, and only for integer
-// values: a register holds a raw 64-bit integer with no tag, so a float, string
-// or nil constant has no representation yet. The remaining opcodes arrive in
-// 7c together with the boxed `Value` representation and the embedded runtime.
+// Stores `tag`:`payload` into register `index`.
+void storeValue(CodeGen& cg, int index, X64Reg tag, X64Reg payload) {
+  cg.movToMem(kFileBase, slotOffset(index), tag);
+  cg.movToMem(kFileBase, slotOffset(index) + 8, payload);
+}
+
+// Loads a 64-bit immediate into a register slot as an integer value.
+void loadIntImmediate(CodeGen& cg, int index, std::int64_t value) {
+  cg.movImmToMem(kFileBase, slotOffset(index),
+                 static_cast<std::int64_t>(AotTag::Int));
+  cg.movImm(kTmpTag, value);
+  cg.movToMem(kFileBase, slotOffset(index) + 8, kTmpTag);
+}
+
+// Loads a boolean immediate into a register slot.
+void loadBoolImmediate(CodeGen& cg, int index, bool value) {
+  cg.movImmToMem(kFileBase, slotOffset(index),
+                 static_cast<std::int64_t>(AotTag::Bool));
+  cg.movImmToMem(kFileBase, slotOffset(index) + 8, value ? 1 : 0);
+}
+
+// Loads nil into a register slot.
+void loadNilImmediate(CodeGen& cg, int index) {
+  cg.movImmToMem(kFileBase, slotOffset(index),
+                 static_cast<std::int64_t>(AotTag::Nil));
+  cg.movImmToMem(kFileBase, slotOffset(index) + 8, 0);
+}
+
+// PHASE 7c.1 still lowers a subset. Floats and strings need the arena and
+// their own tags (7c.1b); calls, globals, locals and collections need frames
+// and the allocator (7c.2/7c.3). Every other opcode raises a `LoweringError`
+// instead of emitting wrong code.
 [[noreturn]] void unsupported(const char* opName, const char* phase) {
   throw LoweringError(std::string("lowering: opcode '") + opName +
                       "' needs runtime support (" + phase + ")");
 }
 
-// Emits `R[a] = R[b] OP R[c]` for a binary opcode. The compiler always emits
-// `a == b` (the left operand's register is reused as the destination), so the
-// common case is a single ALU instruction. The general case is handled too:
-// when the destination aliases the right operand, that operand is stashed in
-// the scratch register before the destination is overwritten.
-void emitBinary(CodeGen& cg, const Instruction& instr,
-                void (CodeGen::*op)(X64Reg, X64Reg)) {
-  X64Reg a = regFor(instr.a);
-  X64Reg b = regFor(instr.b);
-  X64Reg c = regFor(instr.c);
-
-  if (instr.a == instr.c && instr.a != instr.b) {
-    cg.movReg(X64Reg::R15, c);
-    cg.movReg(a, b);
-    (cg.*op)(a, X64Reg::R15);
-    return;
-  }
-  if (instr.a != instr.b) cg.movReg(a, b);
-  (cg.*op)(a, c);
+// Emits a call to a runtime helper that takes one `AotValue` (in rdi:rsi) and
+// returns one (in rax:rdx), then stores the result in register `dst`.
+void callUnary(CodeGen& cg, CodeGen::Label helper, int src, int dst) {
+  loadValue(cg, src, X64Reg::Rdi, X64Reg::Rsi);
+  cg.callLabel(helper);
+  storeValue(cg, dst, X64Reg::Rax, X64Reg::Rdx);
 }
 
-// Materializes the 0/1 result of a comparison into R[a]: `cmp`, then `setcc`
-// on the low byte, then `movzx` to clear the rest of the register. Three
-// instructions is the documented exception to the 1:1/1:2 budget (AGENT.md
-// §3.2): x86-64 has no single instruction that writes a full-width 0/1, and
-// the byte must be zero-extended so the value is a clean integer.
-void emitCompare(CodeGen& cg, const Instruction& instr, Jcc cc) {
-  cg.cmpReg(regFor(instr.b), regFor(instr.c));
-  cg.setcc(cc, regFor(instr.a));
-  cg.movzx(regFor(instr.a), regFor(instr.a));
+// Same, for a helper taking two `AotValue`s (rdi:rsi, rdx:rcx).
+void callBinary(CodeGen& cg, CodeGen::Label helper, int lhs, int rhs, int dst) {
+  loadValue(cg, lhs, X64Reg::Rdi, X64Reg::Rsi);
+  loadValue(cg, rhs, X64Reg::Rdx, X64Reg::Rcx);
+  cg.callLabel(helper);
+  storeValue(cg, dst, X64Reg::Rax, X64Reg::Rdx);
 }
 
 CodeGen::Label jumpTarget(const Instruction& instr, const Bytecode& proto,
@@ -81,47 +104,66 @@ CodeGen::Label jumpTarget(const Instruction& instr, const Bytecode& proto,
 }
 
 void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& cg,
-                      const std::vector<CodeGen::Label>& labels) {
+                      const std::vector<CodeGen::Label>& labels,
+                      const AotRuntimeHandles& rt) {
   switch (instr.op) {
     case OpCode::LOADK: {
       const Value& value = proto.constants.at(static_cast<std::size_t>(instr.b));
       if (value.isInt()) {
-        cg.movImm(regFor(instr.a), value.asInt());
+        loadIntImmediate(cg, instr.a, value.asInt());
       } else if (value.isBool()) {
-        cg.movImm(regFor(instr.a), value.asBool() ? 1 : 0);
+        loadBoolImmediate(cg, instr.a, value.asBool());
+      } else if (value.isNil()) {
+        loadNilImmediate(cg, instr.a);
       } else {
-        unsupported("LOADK (float/string/nil)", "PHASE 7c");
+        unsupported("LOADK (float/string)", "PHASE 7c.1b");
       }
       break;
     }
 
     case OpCode::MOVE:
-      cg.movReg(regFor(instr.a), regFor(instr.b));
+      loadValue(cg, instr.b, kTmpTag, kTmpPayload);
+      storeValue(cg, instr.a, kTmpTag, kTmpPayload);
       break;
 
-    case OpCode::ADD: emitBinary(cg, instr, &CodeGen::addReg); break;
-    case OpCode::SUB: emitBinary(cg, instr, &CodeGen::subReg); break;
-    case OpCode::MUL: emitBinary(cg, instr, &CodeGen::imulReg); break;
+    case OpCode::ADD:
+      callBinary(cg, rt.addValues, instr.b, instr.c, instr.a);
+      break;
+    case OpCode::SUB:
+      callBinary(cg, rt.subValues, instr.b, instr.c, instr.a);
+      break;
+    case OpCode::MUL:
+      callBinary(cg, rt.mulValues, instr.b, instr.c, instr.a);
+      break;
 
-    case OpCode::BAND: emitBinary(cg, instr, &CodeGen::andReg); break;
-    case OpCode::BOR: emitBinary(cg, instr, &CodeGen::orReg); break;
-    case OpCode::BXOR: emitBinary(cg, instr, &CodeGen::xorReg); break;
+    case OpCode::BAND:
+    case OpCode::BOR:
+    case OpCode::BXOR: {
+      // The selector is the third argument, so it goes in r8 (after the two
+      // `AotValue`s occupy rdi:rsi and rdx:rcx). AotBitwiseOp matches the
+      // hosted operator one-to-one.
+      const AotBitwiseOp op = instr.op == OpCode::BAND
+                                  ? AotBitwiseOp::And
+                                  : (instr.op == OpCode::BOR ? AotBitwiseOp::Or
+                                                             : AotBitwiseOp::Xor);
+      loadValue(cg, instr.b, X64Reg::Rdi, X64Reg::Rsi);
+      loadValue(cg, instr.c, X64Reg::Rdx, X64Reg::Rcx);
+      cg.movImm(X64Reg::R8, static_cast<std::int64_t>(op));
+      cg.callLabel(rt.bitwiseValues);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
 
     case OpCode::UNOP: {
-      X64Reg a = regFor(instr.a);
-      if (instr.a != instr.b) cg.movReg(a, regFor(instr.b));
       switch (static_cast<UnaryOp>(instr.c)) {
         case UnaryOp::Negate:
-          cg.negReg(a);
-          break;
-        case UnaryOp::BitNot:
-          cg.notReg(a);
+          callUnary(cg, rt.negateValue, instr.b, instr.a);
           break;
         case UnaryOp::Not:
-          // !x is (x == 0), materialized as a 0/1 integer.
-          cg.testReg(a);
-          cg.setcc(Jcc::Eq, a);
-          cg.movzx(a, a);
+          callUnary(cg, rt.notValue, instr.b, instr.a);
+          break;
+        case UnaryOp::BitNot:
+          callUnary(cg, rt.bitNotValue, instr.b, instr.a);
           break;
         default:
           throw LoweringError("lowering: invalid UNOP selector " +
@@ -130,77 +172,108 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       break;
     }
 
-    case OpCode::EQ: emitCompare(cg, instr, Jcc::Eq); break;
-    case OpCode::NEQ: emitCompare(cg, instr, Jcc::Ne); break;
-    case OpCode::LT: emitCompare(cg, instr, Jcc::Lt); break;
-    case OpCode::LTE: emitCompare(cg, instr, Jcc::Le); break;
-    case OpCode::GT: emitCompare(cg, instr, Jcc::Gt); break;
-    case OpCode::GTE: emitCompare(cg, instr, Jcc::Ge); break;
+    case OpCode::EQ:
+    case OpCode::NEQ:
+    case OpCode::LT:
+    case OpCode::LTE:
+    case OpCode::GT:
+    case OpCode::GTE: {
+      // The op selector is the low nibble of the x86-64 condition code, so the
+      // runtime dispatches with a `cmp` + `je` chain. Map each bytecode
+      // comparison to its `AotCompareOp`.
+      AotCompareOp op;
+      switch (instr.op) {
+        case OpCode::EQ: op = AotCompareOp::Eq; break;
+        case OpCode::NEQ: op = AotCompareOp::Ne; break;
+        case OpCode::LT: op = AotCompareOp::Lt; break;
+        case OpCode::LTE: op = AotCompareOp::Le; break;
+        case OpCode::GT: op = AotCompareOp::Gt; break;
+        default: op = AotCompareOp::Ge; break;
+      }
+      loadValue(cg, instr.b, X64Reg::Rdi, X64Reg::Rsi);
+      loadValue(cg, instr.c, X64Reg::Rdx, X64Reg::Rcx);
+      cg.movImm(X64Reg::R8, static_cast<std::int64_t>(op));
+      cg.callLabel(rt.compareValues);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
 
     case OpCode::JMP:
       cg.jmp(jumpTarget(instr, proto, labels));
       break;
     case OpCode::JMP_IF_FALSE:
-      cg.testReg(regFor(instr.a));
-      cg.jcc(Jcc::Eq, jumpTarget(instr, proto, labels));
+    case OpCode::JMP_IF_TRUE: {
+      // The condition is the value's truthiness, not its raw payload: `0` is
+      // truthy in Jolt, so `jolt_truthy` decides. Branch on its 0/1 result.
+      loadValue(cg, instr.a, X64Reg::Rdi, X64Reg::Rsi);
+      cg.callLabel(rt.truthy);
+      cg.testReg(X64Reg::Rax);
+      cg.jcc(instr.op == OpCode::JMP_IF_FALSE ? Jcc::Eq : Jcc::Ne,
+             jumpTarget(instr, proto, labels));
       break;
-    case OpCode::JMP_IF_TRUE:
-      cg.testReg(regFor(instr.a));
-      cg.jcc(Jcc::Ne, jumpTarget(instr, proto, labels));
-      break;
+    }
 
     case OpCode::HALT:
+      // The chunk's result is R0, returned as an `AotValue` in rax:rdx (the
+      // System V ABI's two-register return), so the test harness can read both
+      // the tag and the payload. The process entry discards it and exits 0.
+      loadValue(cg, 0, X64Reg::Rax, X64Reg::Rdx);
+      cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+      cg.pop(X64Reg::Rbp);
       cg.retInsn();
       break;
 
-    // The rest need runtime support and land in PHASE 7c. DIV/MOD need the
-    // division-by-zero error path; SHL/SHR need the shift count in cl (R1),
-    // which would clobber a live register of the window.
+    // The rest need runtime support and land in later slices of PHASE 7c.
+    // DIV/MOD/POW need the division-by-zero error path and libm.
     case OpCode::DIV:
     case OpCode::MOD:
     case OpCode::POW:
-      unsupported("DIV/MOD/POW", "PHASE 7c");
+      unsupported("DIV/MOD/POW", "PHASE 7c.1b");
+    // SHL/SHR need the shift count in cl, which the register file rework
+    // settles in 7c.1b.
     case OpCode::SHL:
     case OpCode::SHR:
-      unsupported("SHL/SHR", "PHASE 7c");
+      unsupported("SHL/SHR", "PHASE 7c.1b");
     case OpCode::GETGLOBAL:
     case OpCode::SETGLOBAL:
-      unsupported("GETGLOBAL/SETGLOBAL", "PHASE 7c");
+      unsupported("GETGLOBAL/SETGLOBAL", "PHASE 7c.2");
     case OpCode::DECLLOCAL:
     case OpCode::GETLOCAL:
     case OpCode::SETLOCAL:
-      unsupported("DECLLOCAL/GETLOCAL/SETLOCAL", "PHASE 7c");
+      unsupported("DECLLOCAL/GETLOCAL/SETLOCAL", "PHASE 7c.2");
     case OpCode::CALL:
     case OpCode::RETURN:
-      unsupported("CALL/RETURN", "PHASE 7c");
+      unsupported("CALL/RETURN", "PHASE 7c.2");
     case OpCode::CLOSURE:
     case OpCode::GETUPVAL:
     case OpCode::SETUPVAL:
-      unsupported("CLOSURE/GETUPVAL/SETUPVAL", "PHASE 7c");
+      unsupported("CLOSURE/GETUPVAL/SETUPVAL", "PHASE 7c.2");
     case OpCode::NEWTABLE:
     case OpCode::GETTABLE:
     case OpCode::SETTABLE:
-      unsupported("NEWTABLE/GETTABLE/SETTABLE", "PHASE 7c");
+      unsupported("NEWTABLE/GETTABLE/SETTABLE", "PHASE 7c.3");
     case OpCode::IN:
-      unsupported("IN", "PHASE 7c");
+      unsupported("IN", "PHASE 7c.3");
     case OpCode::ITER:
-      unsupported("ITER", "PHASE 7c");
+      unsupported("ITER", "PHASE 7c.3");
   }
 }
 
 }  // namespace
 
-std::vector<std::uint8_t> lowerToX64(const Target& target, const Bytecode& proto,
-                                     const CodeGen& /*codegen*/) {
+LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
+                        const CodeGen& /*codegen*/) {
   requireSupportedTarget(target);
 
-  if (proto.numRegisters > 12) {
-    throw LoweringError("lowering: proto '" + proto.name + "' uses " +
-                        std::to_string(proto.numRegisters) +
-                        " registers; PHASE 7b only supports up to 12");
-  }
-
   CodeGen cg(target);
+
+  // The entry prelude and the runtime share the program's code buffer, so
+  // every `call` resolves through the emitter's labels: no linker, no
+  // relocations.
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label chunkEntry = cg.newLabel();
+  CodeGen::Label mainEntry = cg.newLabel();
 
   // One label per instruction index, so a jump (an absolute index into `code`)
   // can target any instruction, forward or backward.
@@ -210,11 +283,41 @@ std::vector<std::uint8_t> lowerToX64(const Target& target, const Bytecode& proto
     labels.push_back(cg.newLabel());
   }
 
+  const std::uint64_t chunkOffset = cg.offset();
+  cg.bind(chunkEntry);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  const std::int64_t fileBytes =
+      16LL * (proto.numRegisters > 0 ? proto.numRegisters : 1);
+  cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(fileBytes));
+
   for (std::size_t i = 0; i < proto.code.size(); ++i) {
     cg.bind(labels[i]);
-    lowerInstruction(proto.code[i], proto, cg, labels);
+    lowerInstruction(proto.code[i], proto, cg, labels, rt);
   }
 
+  // `main`: run the chunk and return 0, so the process exit code is a clean
+  // "success" and does not leak whatever value R0 happens to hold. `_start`
+  // (emitted by `emitFreestandingRuntime`) calls this and exits with its
+  // result. The frame keeps rsp 16-byte aligned at the `call` into the chunk,
+  // which the System V ABI requires (a callee sees rsp % 16 == 8 at entry).
+  cg.bind(mainEntry);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.callLabel(chunkEntry);
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t startOffset = emitFreestandingRuntime(cg, entry, mainEntry);
+  emitAotRuntime(cg, rt, entry);
+
   cg.finalize();
-  return cg.code();
+
+  LoweredChunk result;
+  result.code = cg.code();
+  result.programEntry = chunkOffset;
+  result.processEntry = startOffset;
+  return result;
 }

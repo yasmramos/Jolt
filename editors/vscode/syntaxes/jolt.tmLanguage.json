@@ -102,7 +102,7 @@
       "patterns": [
         {
           "name": "keyword.control.jolt",
-          "match": "\\b(?:if|else|while|for|in|break|continue|return|switch|case|default|try|catch|defer)\\b"
+          "match": "\\b(?:if|else|while|do|for|in|break|continue|return|switch|case|default|try|catch|defer)\\b"
         },
         {
           "name": "storage.type.jolt",
@@ -236,7 +236,7 @@
       "patterns": [
         {
           "name": "keyword.operator.assignment.compound.jolt",
-          "match": "\\*\\*=|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^="
+          "match": "\\*\\*=|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|&&=|\\|\\|=|\\?\\?="
         },
         {
           "comment": "Shifts before comparison so `a << b` is one token, not two `<`. `<<=`/`>>=` are already consumed above.",

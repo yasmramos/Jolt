@@ -157,6 +157,67 @@ static void test_memory_operands() {
   CodeGen g4;
   g4.leaRip(X64Reg::Rsi, 0x77);
   checkBytes("lea rsi, [rip+0x77]", g4, "488D3577000000");
+
+  // mov qword [rbp-16], 5 -> REX.W C7 /0, mod=01 disp8, imm32.
+  CodeGen g5;
+  g5.movImmToMem(X64Reg::Rbp, -16, 5);
+  checkBytes("mov qword [rbp-16], 5", g5, "48C745F005000000");
+
+  // mov byte [rbp], 'A' -> C6 /0, no REX for a low base.
+  CodeGen g6;
+  g6.movImmByteToMem(X64Reg::Rbp, 0, 'A');
+  checkBytes("mov byte [rbp], 'A'", g6, "C6450041");
+
+  // A base above r7 sets REX.B: mov byte [r8], 'A' -> 41 C6 00 41 (mod=00,
+  // since r8 is not rbp/r13 and needs no forced disp8).
+  CodeGen g7;
+  g7.movImmByteToMem(X64Reg::R8, 0, 'A');
+  checkBytes("mov byte [r8], 'A' (REX.B)", g7, "41C60041");
+
+  // mov byte [rbp-1], dl -> REX 40 (always, to reach dl not dh), 88 /r.
+  CodeGen g8;
+  g8.movByteToMem(X64Reg::Rbp, -1, X64Reg::Rdx);
+  checkBytes("mov [rbp-1], dl", g8, "408855FF");
+
+  // mov byte [rbp], r8b -> REX.R selects r8b: 44 88 45 00.
+  CodeGen g9;
+  g9.movByteToMem(X64Reg::Rbp, 0, X64Reg::R8);
+  checkBytes("mov [rbp], r8b (REX.R)", g9, "44884500");
+
+  // cmp rax, 2 -> REX.W 81 /7 imm32.
+  CodeGen g10;
+  g10.cmpImm32(X64Reg::Rax, 2);
+  checkBytes("cmp rax, 2", g10, "4881F802000000");
+
+  // divUnsigned(rcx): xor rdx, rdx; div rcx -> 48 31 D2 48 F7 F1.
+  CodeGen g11;
+  g11.divUnsigned(X64Reg::Rcx);
+  checkBytes("unsigned div rcx", g11, "4831D248F7F1");
+
+  // divReg(rcx): cdq; idiv rcx -> 99 48 F7 F9.
+  CodeGen g12;
+  g12.divReg(X64Reg::Rcx);
+  checkBytes("signed idiv rcx", g12, "9948F7F9");
+
+  // lea rax, [rip+label] with the label bound immediately after: the
+  // displacement is zero, and the four bytes are the reserved fixup slot.
+  CodeGen g13;
+  CodeGen::Label target = g13.newLabel();
+  g13.leaRipLabel(X64Reg::Rax, target);
+  g13.bind(target);
+  g13.retInsn();
+  checkBytes("lea rax, [rip+label] (forward fixup)", g13, "488D0500000000C3");
+
+  // A backward reference resolves to the negative distance.
+  CodeGen g14;
+  CodeGen::Label back = g14.newLabel();
+  g14.bind(back);
+  g14.retInsn();
+  g14.leaRipLabel(X64Reg::Rax, back);
+  g14.retInsn();
+  // lea sits at offset 1, its next instruction at offset 8, so the distance to
+  // offset 0 is -8 = FFFFFFF8.
+  checkBytes("lea rax, [rip+label] (backward fixup)", g14, "C3488D05F8FFFFFFC3");
 }
 
 static void test_alu() {

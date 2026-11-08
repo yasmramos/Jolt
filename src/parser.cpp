@@ -187,6 +187,9 @@ bool isAssignOp(Tok type) {
     case Tok::SlashEq:
     case Tok::PercentEq:
     case Tok::StarStarEq:
+    case Tok::AmpAmpEq:
+    case Tok::PipePipeEq:
+    case Tok::QuestionQuestionEq:
       return true;
     default:
       return false;
@@ -274,6 +277,7 @@ StmtPtr Parser::parseStatement() {
   if (match(Tok::Struct)) return parseStructDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
+  if (match(Tok::Do)) return parseDoWhile();
   if (match(Tok::For)) return parseFor();
   if (match(Tok::Return)) return parseReturn();
   if (match(Tok::Defer)) return parseDefer();
@@ -896,13 +900,13 @@ StmtPtr Parser::parseIf() {
   consume(Tok::LParen, "expected '(' after 'if'");
   auto condition = parseExpression();
   consume(Tok::RParen, "expected ')' after the condition");
-  auto thenBranch = parseBlock();
+  auto thenBranch = parseBody();
   StmtPtr elseBranch;
   if (match(Tok::Else)) {
     if (match(Tok::If)) {
       elseBranch = parseIf();
     } else {
-      elseBranch = parseBlock();
+      elseBranch = parseBody();
     }
   }
   match(Tok::Semicolon);
@@ -915,19 +919,44 @@ StmtPtr Parser::parseWhile() {
   consume(Tok::LParen, "expected '(' after 'while'");
   auto condition = parseExpression();
   consume(Tok::RParen, "expected ')' after the condition");
-  auto body = parseBlock();
+  auto body = parseBody();
   match(Tok::Semicolon);
   return makeStmt(WhileStmt{std::move(condition), std::move(body)}, keyword.line, keyword.col);
+}
+
+// `do { ... } while (cond);` (PHASE 6.5): a post-test loop. The body runs
+// before the condition is tested, so it always runs at least once. The `while`
+// and the condition are required; the trailing `;` is optional.
+StmtPtr Parser::parseDoWhile() {
+  const Token& keyword = previous();
+  auto body = parseBlock();
+  consume(Tok::While, "expected 'while' after the 'do' body");
+  consume(Tok::LParen, "expected '(' after 'while'");
+  auto condition = parseExpression();
+  consume(Tok::RParen, "expected ')' after the condition");
+  match(Tok::Semicolon);
+  return makeStmt(DoWhileStmt{std::move(body), std::move(condition)}, keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseFor() {
   const Token& keyword = previous();
 
-  if (!check(Tok::LParen)) {
+  // `for-in` accepts an optional pair of parentheses around the loop variable
+  // and the iterable: `for x in xs` and `for (x in xs)` are the same. The
+  // parenthesized form is told apart from a classic `for` by the lookahead
+  // `( IDENT in`, which a classic header (`( init; cond; step )`) never starts
+  // with: an initializer is a declaration, an assignment or an expression, none
+  // of which is a bare identifier followed by `in`.
+  const bool parenthesizedForIn =
+      check(Tok::LParen) && peek(1).type == Tok::Ident && peek(2).type == Tok::In;
+
+  if (parenthesizedForIn || !check(Tok::LParen)) {
+    if (parenthesizedForIn) consume(Tok::LParen, "expected '(' after 'for'");
     const Token& var = consume(Tok::Ident, "expected a loop variable or '(' after 'for'");
     consume(Tok::In, "expected 'in' in the for-in loop");
     auto iterable = parseExpression();
-    auto body = parseBlock();
+    if (parenthesizedForIn) consume(Tok::RParen, "expected ')' after the for-in iterable");
+    auto body = parseBody();
     match(Tok::Semicolon);
     return makeStmt(ForInStmt{var.lexeme, std::move(iterable), std::move(body)}, keyword.line,
                     keyword.col);
@@ -954,7 +983,7 @@ StmtPtr Parser::parseFor() {
   if (!check(Tok::RParen)) step = parseExpression();
   consume(Tok::RParen, "expected ')' after the for-loop clauses");
 
-  auto body = parseBlock();
+  auto body = parseBody();
   match(Tok::Semicolon);
   return makeStmt(ForStmt{std::move(init), std::move(condition), std::move(step), std::move(body)},
                   keyword.line, keyword.col);
@@ -982,6 +1011,19 @@ StmtPtr Parser::parseDefer() {
   StmtPtr body = parseBlock();
   match(Tok::Semicolon);
   return makeStmt(DeferStmt{std::move(body)}, keyword.line, keyword.col);
+}
+
+StmtPtr Parser::parseBody() {
+  if (check(Tok::LBrace)) return parseBlock();
+  // Brace-less body: exactly one statement. Wrapping it in a block keeps the
+  // AST, the compiler and the bytecode identical to the brace form, so the
+  // single statement is a scope of its own (a `let` declared in it does not
+  // leak) and a `defer` in it runs when the body exits.
+  const Token& start = peek();
+  auto statement = parseStatement();
+  std::vector<StmtPtr> statements;
+  statements.push_back(std::move(statement));
+  return makeStmt(BlockStmt{std::move(statements)}, start.line, start.col);
 }
 
 StmtPtr Parser::parseBlock() {
@@ -1373,16 +1415,19 @@ ExprPtr Parser::parsePostfix() {
       expr = makeExpr(CallExpr{std::move(expr), std::move(args)}, open.line, open.col);
     } else if (match(Tok::LBracket)) {
       const Token& open = previous();
-      // `obj[start:end]` (slicing): a ':' inside the brackets starts a slice.
-      // `obj[:end]` has no start, `obj[start:]` has no end. A second ':' is
-      // rejected: there is no `step`.
+      // `obj[start:end:step]` (slicing): a ':' inside the brackets starts a
+      // slice. `obj[:end]` has no start, `obj[start:]` has no end, and the
+      // `step` after a second ':' may be omitted too (`obj[::2]`).
       ExprPtr first = check(Tok::Colon) ? nullptr : parseExpression();
       if (match(Tok::Colon)) {
-        if (check(Tok::Colon)) error(peek(), "slice does not accept a step ('::')");
-        ExprPtr end = check(Tok::RBracket) ? nullptr : parseExpression();
+        ExprPtr end;
+        if (!check(Tok::RBracket) && !check(Tok::Colon)) end = parseExpression();
+        ExprPtr step;
+        if (match(Tok::Colon) && !check(Tok::RBracket)) step = parseExpression();
         consume(Tok::RBracket, "expected ']' after the slice");
-        expr = makeExpr(SliceExpr{std::move(expr), std::move(first), std::move(end)}, open.line,
-                        open.col);
+        expr = makeExpr(
+            SliceExpr{std::move(expr), std::move(first), std::move(end), std::move(step)},
+            open.line, open.col);
       } else {
         consume(Tok::RBracket, "expected ']' after the index");
         expr = makeExpr(IndexExpr{std::move(expr), std::move(first)}, open.line, open.col);

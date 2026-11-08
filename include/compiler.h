@@ -378,6 +378,11 @@ class Compiler {
   int compileVariable(const std::string& name);
   int compileLambda(const LambdaExpr& lambda, int line, int col);
   int compileAssign(const AssignExpr& assign, int line, int col);
+  // `&&=`, `||=` and `??=`: short-circuiting compound assignment. `targetReg`
+  // already holds the target's current value (read once by the caller) and
+  // `store` emits the write-back of `targetReg` for that target's shape.
+  int compileLogicalAssign(const AssignExpr& assign, int targetReg,
+                           const std::function<void()>& store);
   int compileTernary(const TernaryExpr& expr);
   int compileTry(const TryExpr& node, int line, int col);
   int compileCatch(const CatchExpr& node, int line, int col);
@@ -424,6 +429,7 @@ class Compiler {
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);
+  void compileDoWhile(const DoWhileStmt& stmt);
   void compileFor(const ForStmt& stmt);
   void compileForIn(const ForInStmt& stmt);
   void compileSwitch(const SwitchStmt& stmt);
@@ -437,6 +443,18 @@ class Compiler {
   void emitDeferredBlocks(size_t minDepth);
 
   void resetChunk(const std::string& name = "<main>");
+
+  // A name an import introduces into the current scope, and where it came
+  // from. One map holds every form (qualified namespace, alias, wildcard or
+  // selective name) so a collision between any two forms is caught, not only
+  // the wildcard-vs-wildcard case (AGENT.md §18.3). Two namespace roots merge
+  // (sibling modules under the same root); any other pair that binds the same
+  // name is a conflict unless it is the very same binding imported twice.
+  struct ImportBinding {
+    enum class Kind { Namespace, Module, Name };
+    Kind kind;
+    std::string module;
+  };
 
   // Everything that outlives one chunk: the definitions a REPL session
   // carries from one entry to the next. `snapshotSession`/`restoreSession`
@@ -453,8 +471,7 @@ class Compiler {
     std::map<std::string, ImportedModule> loadedModules;
     std::set<std::string> materializedModules;
     std::set<std::string> namespaces;
-    std::set<std::string> boundImports;
-    std::unordered_map<std::string, std::string> wildcardBindings;
+    std::unordered_map<std::string, ImportBinding> importedNames;
   };
 
   SessionSnapshot snapshotSession() const;
@@ -508,6 +525,16 @@ class Compiler {
   void compileNameImport(const ImportedModule& module, const std::vector<std::string>& names,
                          int line, int col);
 
+  // Records that the visible name `visible` is now bound by an import of the
+  // given kind, coming from `module`. This is the single place conflict
+  // detection lives, so every pair of forms is checked, not only two
+  // wildcards. Returns false when the binding must be skipped: a name the
+  // importing module declares itself always wins, and re-importing the very
+  // same binding is a no-op. Reports a compile error on a genuine collision
+  // (AGENT.md §18.3).
+  bool recordImportBinding(const std::string& visible, ImportBinding::Kind kind,
+                           const std::string& module, int line, int col);
+
   // Creates the namespace prefix `prefix` (e.g. "std" or "std.math") as a
   // global map if it was not created by an earlier import, and returns the
   // register holding the deepest existing map on the path.
@@ -543,13 +570,12 @@ class Compiler {
   // Namespace prefixes already created as runtime maps ("std", "std.math"),
   // so repeated imports reuse the same table instead of replacing it.
   std::set<std::string> namespaces_;
-  // Bound qualified names ("std.math", or the alias "m"), so a repeated
-  // import of the same module does not bind twice.
-  std::set<std::string> boundImports_;
-  // Unqualified names already introduced by an `import ... .*`, mapped to the
-  // module that brought them in, so a second wildcard exporting the same name
-  // is reported as ambiguous.
-  std::unordered_map<std::string, std::string> wildcardBindings_;
+  // Every name an import has bound in the current scope, whatever its form,
+  // mapped to where it came from. This is the single place conflict detection
+  // consults, so a collision between any two import forms (namespace vs alias,
+  // alias vs wildcard, ...) is caught, not only wildcard-vs-wildcard
+  // (AGENT.md §18.3).
+  std::unordered_map<std::string, ImportBinding> importedNames_;
 
   // Path of the module body currently being compiled. Empty at the top level.
   // Used to build the hidden global names a module's own imports bind to.

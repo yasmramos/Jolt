@@ -375,6 +375,74 @@ void testBreakAndContinueBackpatch() {
   expectCompileError("continue;\n", "continue outside loop");
 }
 
+void testDoWhileBackpatch() {
+  Bytecode bc = compileSource("do { print(1); } while (false);\n");
+
+  // Body first, then the condition: GETGLOBAL "print", LOADK 1, CALL 0, 1,
+  // LOADK false, JMP_IF_TRUE (back to the body), HALT.
+  assert(bc.code.size() == 6);
+  assert(bc.code[0].op == OpCode::GETGLOBAL);  // "print"
+  assert(bc.code[1].op == OpCode::LOADK);
+  assert(bc.code[2].op == OpCode::CALL);
+  assert(bc.code[3].op == OpCode::LOADK);
+  assert(bc.code[4].op == OpCode::JMP_IF_TRUE);
+  assert(bc.code[4].jump == 0);  // loops back to the top of the body
+  assert(bc.code[5].op == OpCode::HALT);
+  // The loop is a post-test one: the body's first instruction is at index 0,
+  // so nothing jumps past it before it runs once.
+  assert(bc.code[0].op != OpCode::JMP_IF_FALSE);
+
+  // `continue` jumps to the condition, not to the top of the body.
+  Bytecode cont = compileSource("do { continue; } while (false);\n");
+  // JMP (continue -> condition), LOADK false, JMP_IF_TRUE, HALT
+  assert(cont.code.size() == 4);
+  assert(cont.code[0].op == OpCode::JMP && cont.code[0].jump == 1);
+  assert(cont.code[1].op == OpCode::LOADK);
+  assert(cont.code[2].op == OpCode::JMP_IF_TRUE && cont.code[2].jump == 0);
+
+  // `break` leaves the loop.
+  Bytecode brk = compileSource("do { break; } while (true);\n");
+  // JMP (break -> after), LOADK true, JMP_IF_TRUE (back), HALT
+  assert(brk.code.size() == 4);
+  assert(brk.code[0].op == OpCode::JMP && brk.code[0].jump == 3);
+  assert(brk.code[2].op == OpCode::JMP_IF_TRUE && brk.code[2].jump == 0);
+
+  // An empty body is a valid post-test loop, and `do`/`while` may appear
+  // outside a function (unlike `defer`).
+  expectCompiles("do { } while (false);\n");
+}
+
+void testBracelessBodies() {
+  // A brace-less body compiles to the exact bytecode of the brace form: the
+  // single statement is wrapped in a block, so nothing downstream changes.
+  auto sameCode = [](const std::string& braced, const std::string& braceless) {
+    Bytecode a = compileSource(braced);
+    Bytecode b = compileSource(braceless);
+    assert(a.code.size() == b.code.size());
+    for (size_t i = 0; i < a.code.size(); ++i) {
+      assert(a.code[i].op == b.code[i].op);
+      assert(a.code[i].a == b.code[i].a);
+      assert(a.code[i].b == b.code[i].b);
+      assert(a.code[i].c == b.code[i].c);
+      assert(a.code[i].jump == b.code[i].jump);
+    }
+  };
+
+  sameCode("if (true) { print(1); }\n", "if (true) print(1);\n");
+  sameCode("if (true) { print(1); } else { print(2); }\n",
+           "if (true) print(1); else print(2);\n");
+  sameCode("while (false) { print(1); }\n", "while (false) print(1);\n");
+  sameCode("for (var i = 0; i < 3; i += 1) { print(i); }\n",
+           "for (var i = 0; i < 3; i += 1) print(i);\n");
+  sameCode("for i in 0..3 { print(i); }\n", "for i in 0..3 print(i);\n");
+
+  // A brace-less `else if` chain still parses, and `else` binds to the nearest
+  // `if` (C dangling-else semantics): the `else` belongs to the inner `if`.
+  expectCompiles("if (true) if (false) print(1); else print(2);\n");
+  // A brace-less body must still be a single, complete statement.
+  expectCompileError("if (true) print(1) print(2);\n", "missing ';' in brace-less body");
+}
+
 void testSwitchBytecode() {
   // `switch (2) { case 1: {...} case 2: {...} }` compiles the subject once,
   // compares each label with EQ, jumps to the matching body and skips the rest.
@@ -750,8 +818,11 @@ void testPhase6ConstructsCompile() {
   expectCompiles("let m = {a: 1};\n");
   expectCompiles("let s = \"a${b}\";\n");
   expectCompiles("let r = 1..2;\n");
-  // No parentheses: `for (x in ...)` would be rejected by the parser instead.
+  // `for-in` accepts an optional pair of parentheses; the classic `for` header
+  // is unaffected.
   expectCompiles("for x in 1..2 { print(x); }\n");
+  expectCompiles("for (x in 1..2) { print(x); }\n");
+  expectCompiles("for (var i = 0; i < 2; i += 1) { print(i); }\n");
   expectCompiles("let x = 1 in 2;\n");
   expectCompiles("let a = 1;\nlet x = a[0];\n");
   expectCompiles("let m = 1;\nlet x = m.a;\n");
@@ -948,6 +1019,70 @@ void testTypeMismatchErrors() {
   expectCompileError("let x: integer = 1;\n", "unknown type name");
 }
 
+void testLogicalAssignmentBytecode() {
+  // `x ??= v` (PHASE 6.5 operators, compound form): read the target once,
+  // compare against nil with NEQ, and short-circuit with JMP_IF_TRUE. No new
+  // opcode: the same `LOADK nil` + `NEQ` + jump shape as `??`.
+  Bytecode coalesce = compileSource("var x = nil;\nx ??= 1;\n");
+  bool sawNeq = false;
+  bool sawJmpIfTrue = false;
+  bool sawSetGlobal = false;
+  for (const Instruction& ins : coalesce.code) {
+    if (ins.op == OpCode::NEQ) sawNeq = true;
+    if (ins.op == OpCode::JMP_IF_TRUE) sawJmpIfTrue = true;
+    if (ins.op == OpCode::SETGLOBAL) sawSetGlobal = true;
+  }
+  assert(sawNeq && "??= must compare the target against nil");
+  assert(sawJmpIfTrue && "??= must skip the write-back when the target is not nil");
+  assert(sawSetGlobal && "??= must write the target back");
+
+  // `x ||= v` tests truthiness: JMP_IF_TRUE skips the assignment.
+  Bytecode orAssign = compileSource("var x = 0;\nx ||= 1;\n");
+  bool orJmpIfTrue = false;
+  for (const Instruction& ins : orAssign.code) {
+    if (ins.op == OpCode::JMP_IF_TRUE) orJmpIfTrue = true;
+  }
+  assert(orJmpIfTrue && "||= must skip the write-back when the target is truthy");
+
+  // `x &&= v` tests truthiness: JMP_IF_FALSE skips the assignment.
+  Bytecode andAssign = compileSource("var x = 1;\nx &&= 0;\n");
+  bool andJmpIfFalse = false;
+  for (const Instruction& ins : andAssign.code) {
+    if (ins.op == OpCode::JMP_IF_FALSE) andJmpIfFalse = true;
+  }
+  assert(andJmpIfFalse && "&&= must skip the write-back when the target is falsy");
+
+  // On an index target the element is read once (GETTABLE) and written back
+  // once (SETTABLE). The array literal `[nil]` itself contributes one SETTABLE,
+  // so the assignment adds exactly one of each.
+  Bytecode indexed = compileSource("var a = [nil];\na[0] ??= 1;\n");
+  int getTable = 0;
+  int setTable = 0;
+  for (const Instruction& ins : indexed.code) {
+    if (ins.op == OpCode::GETTABLE) ++getTable;
+    if (ins.op == OpCode::SETTABLE) ++setTable;
+  }
+  assert(getTable == 1 && "the index target must be read once");
+  assert(setTable == 2 && "one SETTABLE for the literal plus one write-back");
+
+  // The target is read once on the variable path too: one GETGLOBAL.
+  int getGlobal = 0;
+  for (const Instruction& ins : coalesce.code) {
+    if (ins.op == OpCode::GETGLOBAL) ++getGlobal;
+  }
+  assert(getGlobal == 1 && "the variable target must be read once");
+
+  expectCompiles("var x = nil;\nx ??= 1;\n");
+  expectCompiles("var x = false;\nx ||= true;\n");
+  expectCompiles("var x = true;\nx &&= false;\n");
+}
+
+void testLogicalAssignmentErrors() {
+  // The target must be assignable and mutable, exactly like `=`.
+  expectCompileError("let x = 1;\nx ||= 2;\n", "||= on an immutable binding");
+  expectCompileError("let m = {a: nil};\nm?.a ??= 2;\n", "??= on a safe member access");
+}
+
 void testNullCoalesceBytecode() {
   // PHASE 6.5: `a ?? b` lowers to existing opcodes only (no new opcode).
   // LOADK a; LOADK nil; EQ isNil, a, nil; JMP_IF_FALSE isNil -> end;
@@ -1012,10 +1147,13 @@ void testSliceBytecode() {
   expectCompiles("let a = [1, 2, 3];\nlet b = a[:2];\n");
   expectCompiles("let a = [1, 2, 3];\nlet b = a[0:2];\n");
   expectCompiles("let s = \"hello\";\nlet t = s[1:3];\n");
+  // An optional step: `[a:b:s]`, `[::s]`, `[::-1]`.
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[0:3:2];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[::2];\n");
+  expectCompiles("let a = [1, 2, 3];\nlet b = a[::-1];\n");
 
-  // A slice is read-only and there is no step.
+  // A slice is read-only.
   expectCompileError("let a = [1, 2, 3];\na[0:1] = [9];\n", "assignment to a slice");
-  expectCompileError("let a = [1, 2, 3];\nlet b = a[0:2:1];\n", "slice step");
 }
 
 void testNonNullBytecode() {
@@ -1381,6 +1519,9 @@ int main() {
   testWhileBackpatch();
   testForBackpatch();
   testBreakAndContinueBackpatch();
+  testDoWhileBackpatch();
+
+  testBracelessBodies();
   testSwitchBytecode();
   testSwitchRangeUsesIn();
   testSwitchErrors();
@@ -1408,6 +1549,8 @@ int main() {
   testMustUse();
   testTypeMismatchErrors();
   testNullCoalesceBytecode();
+  testLogicalAssignmentBytecode();
+  testLogicalAssignmentErrors();
   testSafeMemberBytecode();
   testNonNullBytecode();
   testSliceBytecode();

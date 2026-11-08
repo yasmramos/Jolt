@@ -19,7 +19,8 @@ const Keyword kKeywords[] = {
     {"let", Tok::Let},       {"var", Tok::Var},        {"const", Tok::Const},
     {"fn", Tok::Fn},
     {"if", Tok::If},         {"else", Tok::Else},       {"while", Tok::While},
-    {"for", Tok::For},       {"in", Tok::In},           {"break", Tok::Break},
+    {"do", Tok::Do},         {"for", Tok::For},         {"in", Tok::In},
+    {"break", Tok::Break},
     {"continue", Tok::Continue}, {"return", Tok::Return}, {"import", Tok::Import},
     {"switch", Tok::Switch}, {"case", Tok::Case},     {"default", Tok::Default},
     {"defer", Tok::Defer},       {"struct", Tok::Struct},
@@ -480,6 +481,7 @@ class Lexer {
         return make(Tok::Semicolon, 1);
       case '?':
         if (c1 == '.') return make(Tok::QuestionDot, 2);
+        if (c1 == '?' && c2 == '=') return make(Tok::QuestionQuestionEq, 3);
         if (c1 == '?') return make(Tok::QuestionQuestion, 2);
         return make(Tok::Question, 1);
       case ':':
@@ -525,9 +527,11 @@ class Lexer {
         if (c1 == '>') return make(Tok::Shr, 2);
         return make(Tok::Gt, 1);
       case '&':
+        if (c1 == '&' && c2 == '=') return make(Tok::AmpAmpEq, 3);
         if (c1 == '&') return make(Tok::AmpAmp, 2);
         return make(Tok::Amp, 1);
       case '|':
+        if (c1 == '|' && c2 == '=') return make(Tok::PipePipeEq, 3);
         if (c1 == '|') return make(Tok::PipePipe, 2);
         return make(Tok::Pipe, 1);
       case '^':

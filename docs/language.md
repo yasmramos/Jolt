@@ -76,7 +76,7 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  case   catch  const  continue  default  defer  else  false  fn  for  if
+break  case   catch  const  continue  default  defer  do     else  false  fn  for  if
 import in     let    native nil       return   struct switch true  try  var
 while
 ```
@@ -738,7 +738,7 @@ From highest to lowest precedence:
 | 15 | `??` | left |
 | 16 | `catch` | left |
 | 17 | `?:` | right |
-| 18 | `=` `+=` `-=` `*=` `/=` `%=` `**=` | right |
+| 18 | `=` `+=` `-=` `*=` `/=` `%=` `**=` `&&=` `\|\|=` `??=` | right |
 
 Notes:
 
@@ -932,6 +932,32 @@ person.age += 1;
 person["age"] *= 2;
 ```
 
+The logical operators have a compound form too. Each one short-circuits exactly
+like its binary counterpart and writes the target back only when it does not,
+so the right-hand side is evaluated at most once:
+
+```jolt
+var name = nil;
+name ??= "anon";  // assigns only when `name` is nil
+
+var count = 0;    // 0 is truthy in Jolt
+count ||= 10;     // not assigned: `count` is already truthy
+
+var flag = true;
+flag &&= check(); // calls `check()` and assigns its result
+```
+
+- `a ??= b` is `a = a ?? b`: assign `b` only when `a` is nil (`false` and `0`
+  are kept).
+- `a ||= b` is `a = a || b`: assign `b` only when `a` is falsy (`false` or
+  `nil`).
+- `a &&= b` is `a = a && b`: assign `b` only when `a` is truthy.
+
+Like the other compound operators, they work on indexes and members
+(`data[0] ??= 1`, `obj.name ||= "x"`) and yield the target's final value. They
+read the target once and lower to the existing opcodes (`EQ`/`NEQ`,
+`JMP_IF_FALSE`/`JMP_IF_TRUE`, `MOVE`), so no opcode is added.
+
 There are no `++` or `--`; use `+= 1` and `-= 1`.
 
 ---
@@ -960,7 +986,7 @@ Blocks create a new scope. An empty `;` statement is also valid.
 
 ### 6.3 `if` / `else`
 
-The condition goes in parentheses and the body **must** be in braces:
+The condition goes in parentheses. The body is usually a block:
 
 ```jolt
 if (age >= 18) {
@@ -972,9 +998,24 @@ if (age >= 18) {
 }
 ```
 
-The brace-less form (`if (x) print(x);`) is not supported.
+A body may also be a single statement without braces. It is wrapped in a
+block, so its bytecode is the same as the brace form, it is a scope of its own
+(a `let` in it does not leak) and a `defer` in it runs when the body exits:
 
-### 6.4 `while`
+```jolt
+if (x > 0) print("positive"); else print("non-positive");
+
+if (n >= 90) return "A";
+else if (n >= 70) return "B";
+else return "C";
+```
+
+The dangling `else` binds to the nearest `if`, like C. The same brace-less form
+works for `while`, `for` and `for-in` (§6.4, §6.5, §6.6).
+
+### 6.4 `while` and `do`/`while`
+
+`while` tests its condition before each iteration:
 
 ```jolt
 var i = 0;
@@ -983,6 +1024,23 @@ while (i < 5) {
   i += 1;
 }
 ```
+
+`do { ... } while (cond);` is the post-test form: the body runs once before the
+condition is checked, so it always runs at least once. The trailing `;` after
+the condition is optional.
+
+```jolt
+var n = 0;
+do {
+  n += 1;
+} while (n < 3);   // runs three times
+
+do { n += 1; } while (false);   // runs once
+```
+
+In both loops `break` leaves the loop, `continue` re-tests the condition (in a
+`do`/`while` it jumps to the condition, not to the top of the body), and a
+`defer` in the body runs on every exit path.
 
 ### 6.5 Classic `for`
 
@@ -1004,13 +1062,21 @@ The variable declared in the initializer lives in a scope of its own for the loo
 
 ### 6.6 `for ... in`
 
-Syntax, without parentheses:
+Syntax, with or without parentheses:
 
 ```jolt
 for value in [10, 20, 30] {
   print(value);
 }
+
+for (value in [10, 20, 30]) {
+  print(value);
+}
 ```
+
+The two spellings are equivalent. The parenthesized form is told apart from a
+classic `for` header by the lookahead `( name in`, so `for (var i = 0; ...)` is
+unaffected.
 
 You can iterate over:
 
@@ -1401,11 +1467,14 @@ numbers[0] = 10;
 numbers.push(4);
 ```
 
-A slice `a[start:end]` returns a new array with the half-open range
-`[start, end)`. Either bound may be omitted (`a[:]`, `a[2:]`, `a[:3]`);
-negative bounds count from the end and are clamped to the size, exactly like
-the `slice` method. A slice is a copy, so mutating it never touches the
-source, and it is not an assignment target.
+A slice `a[start:end:step]` returns a new array with the half-open range
+`[start, end)`, taking every `step`-th element. Every part may be omitted:
+`a[:]`, `a[2:]`, `a[:3]`, `a[::2]` and `a[::-1]` all parse. Negative bounds
+count from the end and are clamped to the size; a negative `step` walks
+backwards, and a `step` of 1 (the default) is the plain range. The bounds
+follow Python's rule: with a negative step the defaults are the end and
+before the start, so `a[::-1]` reverses. A slice is a copy, so mutating it
+never touches the source, and it is not an assignment target.
 
 ```jolt
 let a = [10, 20, 30, 40, 50];
@@ -1414,7 +1483,13 @@ assertEq(a[2:], [30, 40, 50]);
 assertEq(a[:2], [10, 20]);
 assertEq(a[-2:], [40, 50]);
 assertEq(a[:], a);
+assertEq(a[::2], [10, 30, 50]);
+assertEq(a[::-1], [50, 40, 30, 20, 10]);
+assertEq(a[3:0:-1], [40, 30, 20]);
 ```
+
+The same syntax works on strings, slicing by UTF-8 character
+(`"hello"[::-1]` is `"olleh"`). A zero step is a runtime error.
 
 ### 8.2 Members
 
@@ -1481,13 +1556,15 @@ assertEq(s[-1], "é");
 An out-of-range index is an error. You cannot assign to a string index.
 
 Strings also support slicing by code point, with the same rules as arrays
-(bounds omitted, negatives counted from the end, clamped):
+(bounds and step omitted, negatives counted from the end, clamped, negative
+step reverses):
 
 ```jolt
 let s = "hello";
 assertEq(s[1:3], "el");
 assertEq(s[2:], "llo");
 assertEq(s[:-1], "hell");
+assertEq(s[::-1], "olleh");
 ```
 
 ### 9.1 String methods
@@ -2048,15 +2125,15 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
 - No `try`/`catch` or catchable exceptions. Error handling uses `nil` (not found), `pcall(fn, ...)` for recoverable runtime errors (see §13.1) and `panic()` for unrecoverable ones. There are no plans to add catchable exceptions; `pcall` and errors as values are the model.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
-- No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
+- No `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10), and so is the post-test loop `do { ... } while (cond);` (see §6.4).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
 - FFI with C is implemented for the development engine (PHASE 6.6). C functions are declared with `extern "C" { ... }` blocks or the single-line `extern fn ...;` form (implicit `"C"` ABI); both desugar to the same representation. The FFI type vocabulary is documented in §4.6: the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi` for scalars and structs by value. A `fn(P...): R` parameter is a callback: the development engine builds a `libffi` closure that re-enters the VM, while the AOT backend (PHASE 7) lowers callbacks to compile-time stubs and never links `libffi`.
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
-- The bodies of `if`, `while` and `for` require braces.
-- `for ... in` does not accept parentheses around the variable and the iterable.
-- Slicing syntax `s[start:end]` works for strings and arrays (see §8.1 and §9); there is no step (`s[start:end:step]`), and the methods `substr`/`slice` remain available.
+- A body of `if`, `while`, `for` or `for-in` may be a block or a single statement without braces; a brace-less body is wrapped in a block, so its bytecode and scoping match the brace form. `switch` arms always require braces.
+- `for ... in` accepts the loop variable and the iterable with or without parentheses (`for x in xs` and `for (x in xs)`).
+- Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.
@@ -2144,15 +2221,20 @@ A module body runs **exactly once**, no matter how many times it is imported, an
 
 ### 18.3 Conflict detection
 
-Wildcard imports are safe because conflicts are caught at compile time. If two `.*` imports export the same name, the compiler reports an error instead of silently letting one shadow the other:
+Wildcard imports are safe because conflicts are caught at compile time. If two imports bind the same name, the compiler reports an error instead of silently letting one shadow the other:
 
 ```text
 'sqrt' is ambiguous between std.math and std.stats; use 'std.math.sqrt' or 'std.stats.sqrt' to disambiguate
 ```
 
-Importing the same module twice is not a conflict.
+Conflict detection covers every pair of forms, not only two `.*` imports: a wildcard name that collides with an alias or with a namespace root is reported too, and so is an alias that collides with a namespace root. When both sides are unqualified names the error suggests the qualified form; otherwise it asks you to rename one of the imports.
 
-A name the importing module declares itself (`let`, `var` or `fn`) wins over an imported one, whatever the order of the declarations: a wildcard or selective import never silently shadows a local binding. The two cases are distinct — a local binding is deliberate and wins; two imports colliding is a mistake and is reported.
+Two cases are *not* conflicts:
+
+- Importing the same module twice (the same binding, whatever the form).
+- Two dotted imports with the same root (`import a.b;` then `import a.c;`): they are sibling modules of one package and share the namespace table.
+
+A name the importing module declares itself (`let`, `var` or `fn`) wins over an imported one, whatever the order of the declarations: an import never silently shadows a local binding. The two cases are distinct — a local binding is deliberate and wins; two imports colliding is a mistake and is reported.
 
 ### 18.4 Module resolution
 

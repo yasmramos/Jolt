@@ -249,13 +249,15 @@ struct IndexExpr {
 // `obj[start:end]` (slicing syntax): a half-open copy `[start, end)`. Either
 // bound may be omitted (`obj[:]`, `obj[1:]`, `obj[:3]`), which is represented
 // as a null `start`/`end`; a negative bound counts from the end and is clamped
-// to the valid range, exactly like the `slice`/`substr` methods. It is
-// read-only (not an assignment target) and compiles to one `$slice` helper
-// call, so it adds no opcode.
+// to the valid range, exactly like the `slice`/`substr` methods. An optional
+// `step` (`obj[start:end:step]`) selects every `step`-th element and may be
+// negative to walk backwards. It is read-only (not an assignment target) and
+// compiles to one `$slice` helper call, so it adds no opcode.
 struct SliceExpr {
   ExprPtr object;
   ExprPtr start;
   ExprPtr end;
+  ExprPtr step;
 };
 
 struct MemberExpr {
@@ -395,6 +397,15 @@ struct WhileStmt {
   StmtPtr body;
 };
 
+// `do { ... } while (cond);` (PHASE 6.5): a post-test loop. The body runs once
+// before the condition is evaluated, so the body always runs at least once.
+// It is a distinct node from WhileStmt so `continue` jumps to the condition
+// (not the top) and the body's scope is entered before the first test.
+struct DoWhileStmt {
+  StmtPtr body;
+  ExprPtr condition;
+};
+
 struct ForStmt {
   // Classic C-style loop, a distinct node from ForInStmt on purpose: the
   // three optional parts are nullable by design -- `init` may be null (or any
@@ -491,8 +502,8 @@ struct ExternBlockStmt {
 };
 
 using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, StructDeclStmt, BlockStmt, IfStmt,
-                              WhileStmt, ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
-                              ImportStmt, SwitchStmt, DeferStmt, ExternBlockStmt>;
+                              WhileStmt, DoWhileStmt, ForStmt, ForInStmt, BreakStmt, ContinueStmt,
+                              ReturnStmt, ImportStmt, SwitchStmt, DeferStmt, ExternBlockStmt>;
 
 struct Stmt {
   StmtNode node;

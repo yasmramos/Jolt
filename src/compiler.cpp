@@ -185,6 +185,14 @@ bool compoundOpCode(Tok op, OpCode& out) {
   }
 }
 
+// The short-circuiting compound assignments `&&=`, `||=` and `??=`. Unlike
+// `+=` and friends they cannot reuse the plain binary opcode: the target must
+// be read once, written back only on the non-short-circuiting branch, and the
+// result expression must still yield the target's final value.
+bool isLogicalAssignOp(Tok op) {
+  return op == Tok::AmpAmpEq || op == Tok::PipePipeEq || op == Tok::QuestionQuestionEq;
+}
+
 // The union of two known types (PHASE 6.7.4), used to type `e catch d`: the
 // result is either the operand or the fallback. `any` or an unknown on either
 // side collapses to unknown, which keeps untyped code unchecked. `nil` folds
@@ -674,8 +682,7 @@ void Compiler::clearSession() {
   loadedModules_.clear();
   materializedModules_.clear();
   namespaces_.clear();
-  boundImports_.clear();
-  wildcardBindings_.clear();
+  importedNames_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
@@ -775,8 +782,7 @@ Compiler::SessionSnapshot Compiler::snapshotSession() const {
   snapshot.loadedModules = loadedModules_;
   snapshot.materializedModules = materializedModules_;
   snapshot.namespaces = namespaces_;
-  snapshot.boundImports = boundImports_;
-  snapshot.wildcardBindings = wildcardBindings_;
+  snapshot.importedNames = importedNames_;
   return snapshot;
 }
 
@@ -790,8 +796,7 @@ void Compiler::restoreSession(SessionSnapshot snapshot) {
   loadedModules_ = std::move(snapshot.loadedModules);
   materializedModules_ = std::move(snapshot.materializedModules);
   namespaces_ = std::move(snapshot.namespaces);
-  boundImports_ = std::move(snapshot.boundImports);
-  wildcardBindings_ = std::move(snapshot.wildcardBindings);
+  importedNames_ = std::move(snapshot.importedNames);
 }
 
 Bytecode Compiler::compileLoaded(const StmtPtr& program, ImportLoader loader,
@@ -1031,6 +1036,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const ReturnStmt& s) { compileReturn(s); },
           [&](const IfStmt& s) { compileIf(s); },
           [&](const WhileStmt& s) { compileWhile(s); },
+          [&](const DoWhileStmt& s) { compileDoWhile(s); },
           [&](const ForStmt& s) { compileFor(s); },
           [&](const ForInStmt& s) { compileForIn(s); },
           [&](const SwitchStmt& s) { compileSwitch(s); },
@@ -1158,8 +1164,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   // `modulePath_`/`moduleImportNames_` give the module-local global names its
   // imports bind to (see `importBindingName`).
   auto savedNamespaces = std::move(namespaces_);
-  auto savedBoundImports = std::move(boundImports_);
-  auto savedWildcardBindings = std::move(wildcardBindings_);
+  auto savedImportedNames = std::move(importedNames_);
   std::string savedModulePath = std::move(modulePath_);
   auto savedModuleImportNames = std::move(moduleImportNames_);
 
@@ -1186,8 +1191,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   nativeSigs_.clear();
   mustUseGlobals_.clear();
   namespaces_.clear();
-  boundImports_.clear();
-  wildcardBindings_.clear();
+  importedNames_.clear();
 
   std::vector<std::string> symbols;
   const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
@@ -1243,8 +1247,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   mustUseGlobals_ = std::move(savedMustUseGlobals);
   funcStack_ = std::move(savedFuncStack);
   namespaces_ = std::move(savedNamespaces);
-  boundImports_ = std::move(savedBoundImports);
-  wildcardBindings_ = std::move(savedWildcardBindings);
+  importedNames_ = std::move(savedImportedNames);
   modulePath_ = std::move(savedModulePath);
   moduleImportNames_ = std::move(savedModuleImportNames);
   return module;
@@ -1454,11 +1457,17 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   // The module body runs on import even when the binding below is skipped, so
   // its side effects match the wildcard form.
   materializeModule(module, line, col);
-  // A simple bound name (the alias form) must not silently rebind a name the
-  // module declares itself: the local binding wins, as for a wildcard import.
-  if (segments.size() == 1 && userGlobals_.find(boundName) != userGlobals_.end()) return;
-  if (boundImports_.find(boundName) != boundImports_.end()) return;
-  boundImports_.insert(boundName);
+
+  // A dotted path binds its *root* namespace ("m" in "m.a"): that is the only
+  // name that can collide with an alias or a wildcard name, and sibling
+  // modules under the same root share the table. An alias binds its own name.
+  const bool isAlias = segments.size() == 1;
+  const std::string& visible = isAlias ? boundName : segments.front();
+  const ImportBinding::Kind kind =
+      isAlias ? ImportBinding::Kind::Module : ImportBinding::Kind::Namespace;
+  // A local binding wins, a repeated import is a no-op, and a genuine
+  // collision with another import form is a compile error (AGENT.md §18.3).
+  if (!recordImportBinding(visible, kind, module.path, line, col)) return;
 
   int table = allocReg();
   emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
@@ -1466,7 +1475,7 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   // Bind the module table at the visible name. A dotted path becomes a real
   // namespace tree of maps (`std.math.sqrt` is the ordinary member chain); a
   // bare alias binds the table directly.
-  if (segments.size() == 1) {
+  if (isAlias) {
     emit(OpCode::SETGLOBAL, table, addString(importBindingName(boundName)));
     declareGlobal(boundName, false);
   } else {
@@ -1477,28 +1486,50 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   freeReg(nextReg_ - table);
 }
 
+bool Compiler::recordImportBinding(const std::string& visible, ImportBinding::Kind kind,
+                                   const std::string& module, int line, int col) {
+  // A name the importing module declares itself (`let`/`var`/`fn`) always wins
+  // over an import, whatever the order of the declarations. Such a name is not
+  // an import binding, so it never triggers an ambiguity either (AGENT.md
+  // §18.3).
+  if (userGlobals_.find(visible) != userGlobals_.end()) return false;
+
+  auto existing = importedNames_.find(visible);
+  if (existing == importedNames_.end()) {
+    importedNames_[visible] = ImportBinding{kind, module};
+    return true;
+  }
+  const ImportBinding& previous = existing->second;
+  // Importing the very same binding again is not a conflict.
+  if (previous.kind == kind && previous.module == module) return false;
+  // Two dotted imports with the same root are sibling modules of one package:
+  // they share the namespace table, so the bindings merge instead of colliding.
+  if (previous.kind == ImportBinding::Kind::Namespace &&
+      kind == ImportBinding::Kind::Namespace) {
+    return true;
+  }
+
+  std::string message = "'" + visible + "' is ambiguous between " + previous.module +
+                        " and " + module;
+  if (previous.kind == ImportBinding::Kind::Name && kind == ImportBinding::Kind::Name) {
+    message += "; use '" + previous.module + "." + visible + "' or '" + module + "." +
+               visible + "' to disambiguate";
+  } else {
+    message += "; rename one of the imports to disambiguate";
+  }
+  fail(message, line, col);
+}
+
 void Compiler::compileNameImport(const ImportedModule& module,
                                  const std::vector<std::string>& names, int line, int col) {
   materializeModule(module, line, col);
 
   for (const std::string& name : names) {
-    // A name the importing module declares itself wins over the import: the
-    // import must not silently shadow a local `let`, `var` or `fn`, whatever
-    // the order of the declarations. Such a name is not a wildcard binding, so
-    // it never triggers an ambiguity either.
-    if (userGlobals_.find(name) != userGlobals_.end()) continue;
-
-    // Conflict detection: a name already introduced by another wildcard is
-    // ambiguous unless this import is the very same module. This is the
-    // compile-time guarantee that makes `.*` safe (no silent shadowing).
-    auto existing = wildcardBindings_.find(name);
-    if (existing != wildcardBindings_.end() && existing->second != module.path) {
-      fail("'" + name + "' is ambiguous between " + existing->second + " and " +
-               module.path + "; use '" + existing->second + "." + name + "' or '" +
-               module.path + "." + name + "' to disambiguate",
-           line, col);
-    }
-    wildcardBindings_[name] = module.path;
+    // Conflict detection is centralised in `recordImportBinding`, so a
+    // wildcard or selective name colliding with any other import form is
+    // reported here, not only wildcard-vs-wildcard. This is the compile-time
+    // guarantee that makes `.*` safe (no silent shadowing).
+    if (!recordImportBinding(name, ImportBinding::Kind::Name, module.path, line, col)) continue;
 
     int table = allocReg();
     emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
@@ -1952,6 +1983,32 @@ void Compiler::compileWhile(const WhileStmt& s) {
   for (int index : loop.continues) patchJump(index, loopStart);  // re-evaluates the condition
 }
 
+// `do { body } while (cond);` (PHASE 6.5). The body runs first, so its scope is
+// entered before the condition is compiled. `continue` jumps to the condition
+// test (not the top of the body), and `break` leaves the loop.
+void Compiler::compileDoWhile(const DoWhileStmt& s) {
+  int loopStart = currentOffset();
+
+  loops_.push_back(Loop{});
+  // The body is a block whose scope is one deeper than the loop's; a
+  // `break`/`continue` unwinds down to it so a `defer` in the body runs.
+  loops_.back().deferMinDepth = scopes_.size() + 1;
+  compileScopedBlock(*s.body);
+  Loop loop = std::move(loops_.back());
+  loops_.pop_back();
+
+  // The condition is tested after every iteration; `continue` re-tests it.
+  int conditionStart = currentOffset();
+  int condition = compileExpr(*s.condition);
+  freeReg();
+  int backJump = emitJump(OpCode::JMP_IF_TRUE, condition);
+  patchJump(backJump, loopStart);
+
+  int after = currentOffset();
+  for (int index : loop.breaks) patchJump(index, after);
+  for (int index : loop.continues) patchJump(index, conditionStart);
+}
+
 void Compiler::compileFor(const ForStmt& s) {
   // `for` creates its own scope for the initializer; the body creates another.
   pushScope();
@@ -2246,6 +2303,28 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
       return value;
     }
 
+    // `&&=`, `||=` and `??=`: the target is read once and written back only
+    // when the operator does not short-circuit (see compileLogicalAssign).
+    if (isLogicalAssignOp(assign.op)) {
+      int current = allocReg();
+      if (isLocal) {
+        emit(OpCode::GETLOCAL, current, local.slot);
+      } else if (upvalueSlot >= 0) {
+        emit(OpCode::GETUPVAL, current, upvalueSlot);
+      } else {
+        emit(OpCode::GETGLOBAL, current, addString(importBindingName(name)));
+      }
+      return compileLogicalAssign(assign, current, [&] {
+        if (isLocal) {
+          emit(OpCode::SETLOCAL, current, local.slot);
+        } else if (upvalueSlot >= 0) {
+          emit(OpCode::SETUPVAL, current, upvalueSlot);
+        } else {
+          emit(OpCode::SETGLOBAL, current, addString(importBindingName(name)));
+        }
+      });
+    }
+
     OpCode op;
     if (!compoundOpCode(assign.op, op)) {
       fail("unsupported compound assignment operator", assign.opLine, assign.opCol);
@@ -2297,6 +2376,20 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
     return object;
   }
 
+  // `a[k] &&= v`, `a.k ||= v`, `a[k] ??= v`: read the element once, then
+  // short-circuit. The receiver and key are already in `object`/`key`, so the
+  // write-back is a SETTABLE of the same target.
+  if (isLogicalAssignOp(assign.op)) {
+    int current = allocReg();
+    emit(OpCode::GETTABLE, current, object, key);
+    int result = compileLogicalAssign(assign, current, [&] {
+      emit(OpCode::SETTABLE, current, object, key);
+    });
+    emit(OpCode::MOVE, object, result);
+    freeReg(nextReg_ - object - 1);
+    return object;
+  }
+
   OpCode op;
   if (!compoundOpCode(assign.op, op)) {
     fail("unsupported compound assignment operator", assign.opLine, assign.opCol);
@@ -2311,6 +2404,37 @@ int Compiler::compileAssign(const AssignExpr& assign, int line, int col) {
   emit(OpCode::MOVE, object, current);
   freeReg(nextReg_ - object - 1);
   return object;
+}
+
+int Compiler::compileLogicalAssign(const AssignExpr& assign, int targetReg,
+                                   const std::function<void()>& store) {
+  // `targetReg` holds the target's current value. The test matches the plain
+  // binary operator: `&&=` and `||=` test truthiness (like `&&`/`||`), `??=`
+  // tests only nil (like `??`). On short-circuit the write-back is skipped and
+  // the expression yields the value already read; otherwise the right-hand
+  // side is evaluated into `targetReg` and written back once.
+  //
+  // `store` emits the write-back, so a variable target stores to its local,
+  // upvalue or global slot and an index/member target emits SETTABLE.
+  int skipJump;
+  if (assign.op == Tok::QuestionQuestionEq) {
+    int nilReg = allocReg();
+    emit(OpCode::LOADK, nilReg, addConstant(Value()));
+    int isNotNil = allocReg();
+    emit(OpCode::NEQ, isNotNil, targetReg, nilReg);
+    skipJump = emitJump(OpCode::JMP_IF_TRUE, isNotNil);
+    freeReg(2);
+  } else {
+    skipJump = emitJump(assign.op == Tok::AmpAmpEq ? OpCode::JMP_IF_FALSE : OpCode::JMP_IF_TRUE,
+                        targetReg);
+  }
+
+  int right = compileExpr(*assign.value);
+  emit(OpCode::MOVE, targetReg, right);
+  freeReg();
+  store();
+  patchJump(skipJump, currentOffset());
+  return targetReg;
 }
 
 int Compiler::compileTernary(const TernaryExpr& ternary) {
@@ -2498,22 +2622,18 @@ int Compiler::compileRange(const RangeExpr& range, int line, int col) {
 int Compiler::compileSlice(const SliceExpr& slice, int line, int col) {
   int object = compileExpr(*slice.object);
   // An omitted bound is passed as nil; the `$slice` helper treats nil as
-  // "from the start" / "to the end", so the helper has one fixed arity.
-  int start;
-  if (slice.start) {
-    start = compileExpr(*slice.start);
-  } else {
-    start = allocReg();
-    emit(OpCode::LOADK, start, addConstant(Value()));
-  }
-  int end;
-  if (slice.end) {
-    end = compileExpr(*slice.end);
-  } else {
-    end = allocReg();
-    emit(OpCode::LOADK, end, addConstant(Value()));
-  }
-  int result = compileHelperCall("$slice", {object, start, end}, line, col);
+  // "from the start" / "to the end" / "step 1", so the helper has one fixed
+  // arity.
+  auto operand = [&](const ExprPtr& expr) -> int {
+    if (expr) return compileExpr(*expr);
+    int reg = allocReg();
+    emit(OpCode::LOADK, reg, addConstant(Value()));
+    return reg;
+  };
+  int start = operand(slice.start);
+  int end = operand(slice.end);
+  int step = operand(slice.step);
+  int result = compileHelperCall("$slice", {object, start, end, step}, line, col);
   emit(OpCode::MOVE, object, result);
   freeReg(nextReg_ - object - 1);
   return object;

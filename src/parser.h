@@ -117,7 +117,11 @@ class Parser {
   StmtPtr parseFunctionBody(const Token& arrow);
   StmtPtr parseIf();
   StmtPtr parseWhile();
+  StmtPtr parseDoWhile();
   StmtPtr parseFor();
+  // Body of a control-flow statement: a `{ ... }` block, or a single statement
+  // wrapped in a block, so the AST/compiler/bytecode match the brace form.
+  StmtPtr parseBody();
   StmtPtr parseReturn();
   StmtPtr parseDefer();
   StmtPtr parseImport();

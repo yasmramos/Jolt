@@ -1,0 +1,7 @@
+// expect-exit: 65
+// The condition must be parenthesized, like `while` and `if`.
+
+var i = 0;
+do {
+  i += 1;
+} while i < 3;
