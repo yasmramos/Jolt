@@ -2144,15 +2144,20 @@ A module body runs **exactly once**, no matter how many times it is imported, an
 
 ### 18.3 Conflict detection
 
-Wildcard imports are safe because conflicts are caught at compile time. If two `.*` imports export the same name, the compiler reports an error instead of silently letting one shadow the other:
+Wildcard imports are safe because conflicts are caught at compile time. If two imports bind the same name, the compiler reports an error instead of silently letting one shadow the other:
 
 ```text
 'sqrt' is ambiguous between std.math and std.stats; use 'std.math.sqrt' or 'std.stats.sqrt' to disambiguate
 ```
 
-Importing the same module twice is not a conflict.
+Conflict detection covers every pair of forms, not only two `.*` imports: a wildcard name that collides with an alias or with a namespace root is reported too, and so is an alias that collides with a namespace root. When both sides are unqualified names the error suggests the qualified form; otherwise it asks you to rename one of the imports.
 
-A name the importing module declares itself (`let`, `var` or `fn`) wins over an imported one, whatever the order of the declarations: a wildcard or selective import never silently shadows a local binding. The two cases are distinct — a local binding is deliberate and wins; two imports colliding is a mistake and is reported.
+Two cases are *not* conflicts:
+
+- Importing the same module twice (the same binding, whatever the form).
+- Two dotted imports with the same root (`import a.b;` then `import a.c;`): they are sibling modules of one package and share the namespace table.
+
+A name the importing module declares itself (`let`, `var` or `fn`) wins over an imported one, whatever the order of the declarations: an import never silently shadows a local binding. The two cases are distinct — a local binding is deliberate and wins; two imports colliding is a mistake and is reported.
 
 ### 18.4 Module resolution
 

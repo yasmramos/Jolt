@@ -674,8 +674,7 @@ void Compiler::clearSession() {
   loadedModules_.clear();
   materializedModules_.clear();
   namespaces_.clear();
-  boundImports_.clear();
-  wildcardBindings_.clear();
+  importedNames_.clear();
 }
 
 Bytecode Compiler::compile(const StmtPtr& program) {
@@ -775,8 +774,7 @@ Compiler::SessionSnapshot Compiler::snapshotSession() const {
   snapshot.loadedModules = loadedModules_;
   snapshot.materializedModules = materializedModules_;
   snapshot.namespaces = namespaces_;
-  snapshot.boundImports = boundImports_;
-  snapshot.wildcardBindings = wildcardBindings_;
+  snapshot.importedNames = importedNames_;
   return snapshot;
 }
 
@@ -790,8 +788,7 @@ void Compiler::restoreSession(SessionSnapshot snapshot) {
   loadedModules_ = std::move(snapshot.loadedModules);
   materializedModules_ = std::move(snapshot.materializedModules);
   namespaces_ = std::move(snapshot.namespaces);
-  boundImports_ = std::move(snapshot.boundImports);
-  wildcardBindings_ = std::move(snapshot.wildcardBindings);
+  importedNames_ = std::move(snapshot.importedNames);
 }
 
 Bytecode Compiler::compileLoaded(const StmtPtr& program, ImportLoader loader,
@@ -1158,8 +1155,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   // `modulePath_`/`moduleImportNames_` give the module-local global names its
   // imports bind to (see `importBindingName`).
   auto savedNamespaces = std::move(namespaces_);
-  auto savedBoundImports = std::move(boundImports_);
-  auto savedWildcardBindings = std::move(wildcardBindings_);
+  auto savedImportedNames = std::move(importedNames_);
   std::string savedModulePath = std::move(modulePath_);
   auto savedModuleImportNames = std::move(moduleImportNames_);
 
@@ -1186,8 +1182,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   nativeSigs_.clear();
   mustUseGlobals_.clear();
   namespaces_.clear();
-  boundImports_.clear();
-  wildcardBindings_.clear();
+  importedNames_.clear();
 
   std::vector<std::string> symbols;
   const auto* block = program ? std::get_if<BlockStmt>(&program->node) : nullptr;
@@ -1243,8 +1238,7 @@ ImportedModule Compiler::importModule(const StmtPtr& program, const std::string&
   mustUseGlobals_ = std::move(savedMustUseGlobals);
   funcStack_ = std::move(savedFuncStack);
   namespaces_ = std::move(savedNamespaces);
-  boundImports_ = std::move(savedBoundImports);
-  wildcardBindings_ = std::move(savedWildcardBindings);
+  importedNames_ = std::move(savedImportedNames);
   modulePath_ = std::move(savedModulePath);
   moduleImportNames_ = std::move(savedModuleImportNames);
   return module;
@@ -1454,11 +1448,17 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   // The module body runs on import even when the binding below is skipped, so
   // its side effects match the wildcard form.
   materializeModule(module, line, col);
-  // A simple bound name (the alias form) must not silently rebind a name the
-  // module declares itself: the local binding wins, as for a wildcard import.
-  if (segments.size() == 1 && userGlobals_.find(boundName) != userGlobals_.end()) return;
-  if (boundImports_.find(boundName) != boundImports_.end()) return;
-  boundImports_.insert(boundName);
+
+  // A dotted path binds its *root* namespace ("m" in "m.a"): that is the only
+  // name that can collide with an alias or a wildcard name, and sibling
+  // modules under the same root share the table. An alias binds its own name.
+  const bool isAlias = segments.size() == 1;
+  const std::string& visible = isAlias ? boundName : segments.front();
+  const ImportBinding::Kind kind =
+      isAlias ? ImportBinding::Kind::Module : ImportBinding::Kind::Namespace;
+  // A local binding wins, a repeated import is a no-op, and a genuine
+  // collision with another import form is a compile error (AGENT.md §18.3).
+  if (!recordImportBinding(visible, kind, module.path, line, col)) return;
 
   int table = allocReg();
   emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
@@ -1466,7 +1466,7 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   // Bind the module table at the visible name. A dotted path becomes a real
   // namespace tree of maps (`std.math.sqrt` is the ordinary member chain); a
   // bare alias binds the table directly.
-  if (segments.size() == 1) {
+  if (isAlias) {
     emit(OpCode::SETGLOBAL, table, addString(importBindingName(boundName)));
     declareGlobal(boundName, false);
   } else {
@@ -1477,28 +1477,50 @@ void Compiler::compileQualifiedImport(const ImportedModule& module, const std::s
   freeReg(nextReg_ - table);
 }
 
+bool Compiler::recordImportBinding(const std::string& visible, ImportBinding::Kind kind,
+                                   const std::string& module, int line, int col) {
+  // A name the importing module declares itself (`let`/`var`/`fn`) always wins
+  // over an import, whatever the order of the declarations. Such a name is not
+  // an import binding, so it never triggers an ambiguity either (AGENT.md
+  // §18.3).
+  if (userGlobals_.find(visible) != userGlobals_.end()) return false;
+
+  auto existing = importedNames_.find(visible);
+  if (existing == importedNames_.end()) {
+    importedNames_[visible] = ImportBinding{kind, module};
+    return true;
+  }
+  const ImportBinding& previous = existing->second;
+  // Importing the very same binding again is not a conflict.
+  if (previous.kind == kind && previous.module == module) return false;
+  // Two dotted imports with the same root are sibling modules of one package:
+  // they share the namespace table, so the bindings merge instead of colliding.
+  if (previous.kind == ImportBinding::Kind::Namespace &&
+      kind == ImportBinding::Kind::Namespace) {
+    return true;
+  }
+
+  std::string message = "'" + visible + "' is ambiguous between " + previous.module +
+                        " and " + module;
+  if (previous.kind == ImportBinding::Kind::Name && kind == ImportBinding::Kind::Name) {
+    message += "; use '" + previous.module + "." + visible + "' or '" + module + "." +
+               visible + "' to disambiguate";
+  } else {
+    message += "; rename one of the imports to disambiguate";
+  }
+  fail(message, line, col);
+}
+
 void Compiler::compileNameImport(const ImportedModule& module,
                                  const std::vector<std::string>& names, int line, int col) {
   materializeModule(module, line, col);
 
   for (const std::string& name : names) {
-    // A name the importing module declares itself wins over the import: the
-    // import must not silently shadow a local `let`, `var` or `fn`, whatever
-    // the order of the declarations. Such a name is not a wildcard binding, so
-    // it never triggers an ambiguity either.
-    if (userGlobals_.find(name) != userGlobals_.end()) continue;
-
-    // Conflict detection: a name already introduced by another wildcard is
-    // ambiguous unless this import is the very same module. This is the
-    // compile-time guarantee that makes `.*` safe (no silent shadowing).
-    auto existing = wildcardBindings_.find(name);
-    if (existing != wildcardBindings_.end() && existing->second != module.path) {
-      fail("'" + name + "' is ambiguous between " + existing->second + " and " +
-               module.path + "; use '" + existing->second + "." + name + "' or '" +
-               module.path + "." + name + "' to disambiguate",
-           line, col);
-    }
-    wildcardBindings_[name] = module.path;
+    // Conflict detection is centralised in `recordImportBinding`, so a
+    // wildcard or selective name colliding with any other import form is
+    // reported here, not only wildcard-vs-wildcard. This is the compile-time
+    // guarantee that makes `.*` safe (no silent shadowing).
+    if (!recordImportBinding(name, ImportBinding::Kind::Name, module.path, line, col)) continue;
 
     int table = allocReg();
     emit(OpCode::GETGLOBAL, table, addString("$module$" + module.path));
