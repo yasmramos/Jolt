@@ -1,0 +1,85 @@
+# Builds the Windows deliverables and publishes them as workflow artifacts:
+#
+#   1. jolt-windows-x64        - the development engine (`jolt.exe`) installed
+#                                next to the standard library (`std/`), the
+#                                layout `standardLibraryDir` looks for, so
+#                                `import std.math` resolves from the artifact.
+#   2. jolt-vscode-extension   - the packaged VS Code extension (`.vsix`).
+#
+# This is separate from `cmake-multi-platform.yml`, which only builds and tests
+# on three toolchains: this one's job is to publish runnable Windows artifacts.
+name: Windows artifacts
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+  workflow_dispatch:
+
+# One run per ref: a new push cancels the previous, still-running build.
+concurrency:
+  group: windows-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and package (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        # Default generator on windows-latest is Visual Studio (multi-config),
+        # so the configuration is chosen at build/install time with --config.
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -S .
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        # Linux-only execution checks skip themselves on Windows; the FFI
+        # callback and struct-by-value tests are excluded by the build when
+        # their capability is missing (see CMakeLists.txt).
+        working-directory: build
+        run: ctest --build-config Release --output-on-failure
+
+      - name: Install into a staging prefix
+        # `cmake --install` produces the same layout as `make install`:
+        # stage/bin/jolt.exe plus stage/share/jolt/std/*.jolt. The engine finds
+        # the library through `../share/jolt/std` relative to the executable, so
+        # the staged tree is self-contained and runs after unzipping.
+        run: cmake --install build --config Release --prefix stage
+
+      - name: Set up Node.js
+        # `@vscode/vsce` needs a modern Node; pin it so the extension packaging
+        # does not depend on the runner's preinstalled version.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Package the VS Code extension
+        working-directory: editors/vscode
+        # `--out` pins the file name so the upload step does not depend on the
+        # extension version in package.json.
+        run: npx --yes @vscode/vsce@3 package --out jolt-vscode.vsix
+
+      - name: Upload the engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-windows-x64
+          path: stage
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the VS Code extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-vscode-extension
+          path: editors/vscode/jolt-vscode.vsix
+          if-no-files-found: error
+          retention-days: 30
