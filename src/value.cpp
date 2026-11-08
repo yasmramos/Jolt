@@ -29,6 +29,10 @@ const char* Value::typeName() const {
       return "function";
     case VType::Range:
       return "range";
+    case VType::Ptr:
+      // The handle's kind is the FFI type it was built as, so `type()` keeps
+      // reporting `ptr` or `cstring` after a `cstring` upcasts to `ptr`.
+      return data.pointer && data.pointer->kind == PtrKind::CString ? "cstring" : "ptr";
   }
   return "unknown";
 }
@@ -86,6 +90,10 @@ bool Value::equals(const Value& other) const {
       const auto& b = other.range();
       return a.start == b.start && a.end == b.end && a.inclusive == b.inclusive;
     }
+    case VType::Ptr:
+      // Two pointer values are equal when they are the same handle. The bytes
+      // are not compared: a pointer is an identity, like a function.
+      return data.pointer == other.data.pointer;
   }
   return false;
 }
@@ -192,6 +200,22 @@ static void writeValue(std::string& out, const Value& value, bool repr, int dept
       out += std::to_string(r.end);
       break;
     }
+    case VType::Ptr: {
+      const PtrObj& p = value.ptr();
+      // A `cstring` reads as the text it points at (that is what the user
+      // passed in); any other handle is opaque, so it prints as `<ptr>` rather
+      // than leaking an address the program must never see.
+      if (p.kind == PtrKind::CString) {
+        // C sees a `cstring` up to the first NUL; display matches that view.
+        auto end = p.bytes.begin();
+        while (end != p.bytes.end() && *end != '\0') ++end;
+        std::string text(p.bytes.begin(), end);
+        out += repr ? quoteString(text) : text;
+      } else {
+        out += "<ptr>";
+      }
+      break;
+    }
   }
 }
 
@@ -273,6 +297,12 @@ RangePtr makeRange(int64_t start, int64_t end, bool inclusive) {
   range->end = end;
   range->inclusive = inclusive;
   return range;
+}
+
+Value makePtr(PtrKind kind, std::vector<char> bytes, int64_t address) {
+  auto pointer = makeRef<PtrObj>(kind, std::move(bytes));
+  pointer->address = address;
+  return Value(std::move(pointer));
 }
 
 Value makeNative(std::string name, NativeFn fn) {

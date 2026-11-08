@@ -1,0 +1,6 @@
+// expect-exit: 65
+// A type that cannot cross the C boundary is rejected at compile time, before
+// any bytecode is produced.
+extern "C" {
+  fn bad(m: map): int;
+}

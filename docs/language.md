@@ -346,11 +346,12 @@ vocabulary (PHASE 6.6) adds pointers and fixed-width/unsigned integers:
 | `uint` | `unsigned int` | Unsigned. |
 | `size_t` | `size_t` | Unsigned size. |
 
-These are **compile-time annotations, erased before the bytecode**: the runtime
-value is still an `int` (a pointer is an opaque handle) and `type()` keeps
-reporting the primitive name, so no opcode and no runtime type is added. The
-width and signedness are recorded for the FFI marshalling to honour, not for
-the VM.
+These are **compile-time annotations**: the integer family is erased before the
+bytecode (the runtime value is still an `int`) and `type()` keeps reporting the
+primitive name. Pointers are the exception: `ptr` and `cstring` are a distinct
+runtime value (see **Pointer values** below), because a pointer has to be
+recognisable at run time to be marshalled safely. The width and signedness of
+the integers are recorded for the FFI marshalling to honour, not for the VM.
 
 ```jolt
 native fn strlen(s: cstring): size_t;
@@ -367,13 +368,57 @@ is not implicit. The integer family (`int`, the fixed-width types, `uint`,
 `size_t`) is mutually assignable at compile time and widens to `float`/`double`,
 following the same numeric rule as `int`.
 
+**Pointer values.** A `ptr`/`cstring` is an **opaque handle**, never a machine
+address: the program can pass it to a native and read it back, but it can never
+dereference an arbitrary location. This keeps Jolt memory-safe and keeps the
+allocation visible to the cycle collector. `type()` reports `ptr` for a `void *`
+and `cstring` for a C string, and a `cstring` upcasts to `ptr` without losing
+its kind. Pointers compare by identity (like functions), not by their contents.
+
+The development engine owns the storage through the handle and exposes it with
+these builtins:
+
+| Builtin | Meaning |
+| --- | --- |
+| `cstring(s)` | Builds a `cstring` from a Jolt string (bytes plus a NUL). |
+| `cstr(p)` | Reads a `cstring`/buffer back as a Jolt string. |
+| `buffer(n)` | Allocates `n` zero-initialised bytes and returns a `ptr`. |
+| `byteLen(p)` | Bytes the handle owns (`cstring` excludes the NUL; `void *` is 0). |
+| `loadByte(p, i)` | Byte `0..255` at index `i` (bounds-checked). |
+| `storeByte(p, i, b)` | Writes a byte into a buffer (`cstring` is read-only). |
+| `intToPtr(n)` / `ptrToInt(p)` | Wraps and reads the opaque integer token a native returns. |
+| `free(p)` | Releases the handle's storage; a later use is a runtime error. |
+
+```jolt
+let greeting = cstring("hi");
+print(cstr(greeting));      // hi
+print(byteLen(greeting));   // 2
+
+let buf = buffer(4);
+storeByte(buf, 0, 65);      // 'A'
+print(loadByte(buf, 0));    // 65
+free(buf);
+```
+
+The AOT backend (PHASE 7) lowers the same handles to real C pointers, so a
+program that only passes them to natives compiles unchanged.
+
 **`extern "C"` blocks.** A C function is declared in an `extern "C" { ... }`
 block (PHASE 6.6). The ABI is a plain string literal and only `"C"` is
-supported. Each entry is a bodyless `fn ...;` and follows the `native fn` path:
-the name binds to the host function of the same name, the signature is checked
-at the call site, and the block emits no bytecode. The declarations are hoisted,
-so a function may call one declared later. Like `import`, `struct` and
-`native fn`, the block is module-level metadata: nesting it is a compile error.
+supported. Each entry is a bodyless `fn ...;`; the compiler validates the
+signature against the FFI type vocabulary (see §4.6) and records it as
+compile-time metadata on the proto, so the block emits no bytecode of its own.
+The declarations are hoisted, so a function may call one declared later. Like
+`import`, `struct` and `native fn`, the block is module-level metadata: nesting
+it is a compile error.
+
+Before a proto runs, the engine resolves each declared name through
+`Platform::lookupSymbol` and binds it to a marshalling native. The call passes
+its arguments and reads its result across the System V AMD64 ABI without
+`libffi`: integers, bools and pointers travel in general-purpose registers and
+`float`/`double` in SSE registers, and the result is read back at the exact
+width the declaration named (so a C `int` is not read as a 64-bit value). A
+symbol the host cannot resolve is a clear runtime error, never a wild call.
 
 ```jolt
 extern "C" {
@@ -386,8 +431,9 @@ print(sqrt(16.0));         // 4
 let n: size_t = strlen("hi");
 ```
 
-Binding a declaration to a real C function (the marshalling and the call
-lowering without `libffi`) is the remaining part of PHASE 6.6.
+A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a `ptr`
+argument accepts `nil` (NULL) and an owned `cstring`/buffer, whose bytes are the
+address the C callee receives.
 
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
@@ -1527,6 +1573,23 @@ assertEq(sqrt(81), 9.0);
 
 `assertEq` follows the order `expected, actual` and adds both values to the error message.
 
+### 12.8 FFI pointers
+
+Opaque `ptr`/`cstring` handles (PHASE 6.6, see §4.6). They own host storage and
+are never a machine address the program can dereference.
+
+| Function | Description |
+| --- | --- |
+| `cstring(s)` | Builds a `cstring` from a string (bytes plus a NUL). |
+| `cstr(p)` | Reads a `cstring`/buffer back as a string. |
+| `buffer(n)` | Allocates `n` zero-initialised bytes and returns a `ptr`. |
+| `byteLen(p)` | Bytes the handle owns. |
+| `loadByte(p, i)` | Byte `0..255` at index `i` (bounds-checked). |
+| `storeByte(p, i, b)` | Writes a byte into a buffer. |
+| `intToPtr(n)` | Wraps an opaque integer token in a `ptr`. |
+| `ptrToInt(p)` | Reads the opaque integer token back. |
+| `free(p)` | Releases the handle's storage. |
+
 ---
 
 ## 13. Errors and diagnostics
@@ -1779,7 +1842,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
-- FFI with C is partially implemented (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): each declaration follows the `native fn` path, so the name binds to the host function of the same name and the signature is checked at the call site. The block is compile-time metadata and emits no bytecode. Binding a declaration to a real C function (the marshalling and the call lowering without `libffi`) is the remaining part of PHASE 6.6.
+- FFI with C is implemented for the development engine (PHASE 6.6). `extern "C" { ... }` blocks declare C functions with the FFI type vocabulary (see §4.6): the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi`. The AOT backend (PHASE 7) will lower the same declarations to link-time relocations.
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
 - No async/await, generics, full pattern matching, generators, or transactions. These are out of scope (see `AGENT.md`).
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.

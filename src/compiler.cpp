@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "errors.h"
+#include "ffi_types.h"
 #include "util.h"
 
 namespace {
@@ -391,7 +392,11 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
   }
 
   // FFI pointers (PHASE 6.6): a `cstring` is also a `ptr` (upcast to `void*`);
-  // the reverse needs an explicit cast, so it is not implicit.
+  // the reverse needs an explicit cast, so it is not implicit. A Jolt `string`
+  // is not assignable to `cstring`: `cstring` is an owned handle, so binding a
+  // string to it would leave a dangling pointer once the string is collected.
+  // Passing a string as a `cstring` *argument* is allowed instead, because the
+  // string stays alive for the whole call (see `checkNativeCall`).
   if (from.name == "cstring" && to.name == "ptr") return;
 
   // Every integer spelling is one numeric family at compile time (the runtime
@@ -429,9 +434,14 @@ void Compiler::checkNativeCall(const std::string& name, const NativeSig& sig,
   for (size_t i = 0; i < call.args.size(); ++i) {
     // Arguments past the fixed parameters all bind the variadic element type.
     const size_t slot = i < required ? i : sig.params.size() - 1;
-    if (!sig.params[slot].type.isPresent()) continue;
-    checkAssignable(inferExprType(*call.args[i]), sig.params[slot].type,
-                    "argument " + std::to_string(i + 1) + " of '" + name + "'",
+    const TypeRef& param = sig.params[slot].type;
+    if (!param.isPresent()) continue;
+    const TypeRef argument = inferExprType(*call.args[i]);
+    // A Jolt `string` is NUL-terminated and stays alive for the whole call, so
+    // it is a valid `const char *` *argument* even though it is not assignable
+    // to an owned `cstring` binding (see `checkAssignable`).
+    if (param.name == "cstring" && argument.name == "string" && !argument.nullable) continue;
+    checkAssignable(argument, param, "argument " + std::to_string(i + 1) + " of '" + name + "'",
                     call.args[i]->line, call.args[i]->col);
   }
 }
@@ -1461,19 +1471,36 @@ void Compiler::registerNativeDecls(const BlockStmt& block) {
     } else if (const auto* ext = std::get_if<ExternBlockStmt>(&child->node)) {
       // An `extern "C"` declaration is a native, so a hoisted function that
       // calls one is checked against its signature exactly like `native fn`.
-      for (const FnDeclStmt& fn : ext->decls) {
-        nativeSigs_[fn.name] = NativeSig{fn.params, fn.returnType};
+      for (const FnDeclStmt& decl : ext->decls) {
+        nativeSigs_[decl.name] = NativeSig{decl.params, decl.returnType};
       }
     }
   }
 }
 
 // An `extern "C" { ... }` block emits no bytecode of its own: each declaration
-// binds its name to the host function of the same name, exactly like a
-// top-level `native fn`. The block is pure compile-time metadata (the ABI
-// string is validated by the parser), so this only walks the declarations.
+// binds its name to the C symbol of the same name, exactly like a top-level
+// `native fn`. The block is pure compile-time metadata (the ABI string is
+// validated by the parser), so this validates each signature, records it in
+// `bc_.externs` for the engine to resolve, and then follows the `native fn`
+// path so the call site is type-checked and the binding is emitted.
 void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int col) {
   for (const FnDeclStmt& fn : block.decls) {
+    if (std::any_of(fn.params.begin(), fn.params.end(),
+                    [](const Param& p) { return p.variadic; })) {
+      fail("extern \"C\" function '" + fn.name + "' cannot be variadic", line, col);
+    }
+    std::vector<std::string> paramTypes;
+    paramTypes.reserve(fn.params.size());
+    for (const Param& param : fn.params) paramTypes.push_back(param.type.name);
+    const std::string returnType = fn.returnType.name;
+    std::string problem = ffi::validateSignature(paramTypes, returnType);
+    if (!problem.empty()) {
+      fail("extern \"C\" function '" + fn.name + "': " + problem, line, col);
+    }
+    // The engine reads this to resolve the symbol and build the marshalling
+    // thunk; the compiler stays free of any host/ABI dependency (§2 boundary).
+    bc_.externs.push_back(ExternSymbol{fn.name, std::move(paramTypes), returnType});
     compileFnDecl(fn, line, col);
   }
 }

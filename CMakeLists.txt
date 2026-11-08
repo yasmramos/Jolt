@@ -40,6 +40,10 @@ list(REMOVE_ITEM JOLT_ALL_SOURCES "${JOLT_MAIN}")
 add_library(jolt_lib STATIC ${JOLT_ALL_SOURCES})
 target_include_directories(jolt_lib PUBLIC src include)
 target_compile_options(jolt_lib PRIVATE ${JOLT_WARNINGS})
+# `Platform::lookupSymbol` resolves `extern "C"` declarations with `dlsym`
+# (PHASE 6.6). Empty on platforms that fold libdl into libc (glibc 2.34+,
+# Windows), so linking it unconditionally is safe and portable.
+target_link_libraries(jolt_lib PUBLIC ${CMAKE_DL_LIBS})
 
 # --------------------------------------------------------------------------- main binary
 add_executable(jolt "${JOLT_MAIN}")
@@ -92,6 +96,7 @@ if(BUILD_TESTING)
   jolt_add_cpp_test(compiler_test)
   jolt_add_cpp_test(module_test)
   jolt_add_cpp_test(vm_test)
+  jolt_add_cpp_test(value_test)
   jolt_add_cpp_test(repl_test)
   jolt_add_cpp_test(gc_test)
   jolt_add_cpp_test(codegen_test)

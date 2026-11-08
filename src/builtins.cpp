@@ -65,6 +65,18 @@ std::string wantString(Runtime& in, const std::string& fn, const Value& value,
   return value.asStr();
 }
 
+// Extracts a live pointer argument, rejecting a released handle so a
+// use-after-free is a clear error instead of undefined behaviour.
+PtrObj& wantPtr(Runtime& in, const std::string& fn, const Value& value,
+                const std::string& what = "argument") {
+  if (!value.isPtr()) {
+    in.fail(fn + "() expects a pointer " + what + ", got '" + value.typeName() + "'");
+  }
+  PtrObj& pointer = value.ptr();
+  if (pointer.released) in.fail(fn + "() used a pointer after it was freed");
+  return pointer;
+}
+
 Value invoke(Runtime& in, const Value& fn, std::vector<Value> args,
              const std::string& who = "callback") {
   if (!fn.isFunc()) {
@@ -1341,5 +1353,119 @@ void registerBuiltins(Runtime& in) {
       return Value(utf8Join(out));
     }
     in.fail(std::string("cannot slice a value of type '") + args[0].typeName() + "'");
+  });
+
+  // ----------------------------------------------------------- FFI pointers
+  //
+  // A `ptr`/`cstring` is an opaque handle (PHASE 6.6): the program never sees a
+  // machine address, only a value it can pass to a `native fn`/`extern "C"`
+  // declaration and read back. The host owns the storage. These builtins are
+  // the whole marshalling surface available in the development engine; the AOT
+  // backend (PHASE 7) lowers the same handles to real C pointers.
+
+  // Builds a C string (`const char *`) from a Jolt string: the bytes plus a
+  // terminating NUL, exactly what C expects.
+  in.addNative("cstring", [](Runtime& in, Args args) -> Value {
+    need(in, "cstring", args, 1);
+    std::string text = wantString(in, "cstring", args[0]);
+    std::vector<char> bytes(text.begin(), text.end());
+    bytes.push_back('\0');
+    return makePtr(PtrKind::CString, std::move(bytes));
+  });
+
+  // Allocates a zero-initialised byte buffer of `size` bytes and returns a
+  // handle to it. This is the owned storage `loadByte`/`storeByte` work on.
+  in.addNative("buffer", [](Runtime& in, Args args) -> Value {
+    need(in, "buffer", args, 1);
+    int64_t size = wantInt(in, "buffer", args[0], "size");
+    if (size < 0) in.fail("buffer() size must not be negative");
+    return makePtr(PtrKind::Buffer, std::vector<char>(static_cast<size_t>(size), '\0'));
+  });
+
+  // Reads a `cstring`/`buffer` handle back as a Jolt string. A `cstring` stops
+  // at the first NUL, like C; a buffer yields all its bytes.
+  in.addNative("cstr", [](Runtime& in, Args args) -> Value {
+    need(in, "cstr", args, 1);
+    PtrObj& pointer = wantPtr(in, "cstr", args[0]);
+    const std::vector<char>& bytes = pointer.bytes;
+    if (pointer.kind == PtrKind::CString) {
+      auto end = bytes.begin();
+      while (end != bytes.end() && *end != '\0') ++end;
+      return Value(std::string(bytes.begin(), end));
+    }
+    return Value(std::string(bytes.begin(), bytes.end()));
+  });
+
+  // Number of bytes a handle owns: a `cstring` counts up to (not including) the
+  // NUL, a buffer counts all its bytes, a `void *` has no size.
+  in.addNative("byteLen", [](Runtime& in, Args args) -> Value {
+    need(in, "byteLen", args, 1);
+    PtrObj& pointer = wantPtr(in, "byteLen", args[0]);
+    if (pointer.kind == PtrKind::Void) return Value(static_cast<int64_t>(0));
+    size_t length = pointer.bytes.size();
+    if (pointer.kind == PtrKind::CString && length > 0 && pointer.bytes.back() == '\0') {
+      --length;  // the terminator is not part of the text
+    }
+    return Value(static_cast<int64_t>(length));
+  });
+
+  // Reads one byte (0-255) at `index`. Bounds-checked, so a bad index is a
+  // runtime error rather than a wild read.
+  in.addNative("loadByte", [](Runtime& in, Args args) -> Value {
+    need(in, "loadByte", args, 2);
+    PtrObj& pointer = wantPtr(in, "loadByte", args[0], "value");
+    int64_t index = wantInt(in, "loadByte", args[1], "index");
+    if (pointer.kind == PtrKind::Void) in.fail("loadByte() needs a cstring or buffer");
+    if (index < 0 || static_cast<size_t>(index) >= pointer.bytes.size()) {
+      in.fail("loadByte() index " + std::to_string(index) + " is out of range");
+    }
+    return Value(static_cast<int64_t>(static_cast<unsigned char>(pointer.bytes[index])));
+  });
+
+  // Writes one byte (0-255) at `index`. A `cstring` is read-only, like C's
+  // `const char *`, so only a buffer accepts a store.
+  in.addNative("storeByte", [](Runtime& in, Args args) -> Value {
+    need(in, "storeByte", args, 3);
+    PtrObj& pointer = wantPtr(in, "storeByte", args[0], "value");
+    int64_t index = wantInt(in, "storeByte", args[1], "index");
+    int64_t byte = wantInt(in, "storeByte", args[2], "byte");
+    if (pointer.kind != PtrKind::Buffer) {
+      in.fail("storeByte() needs a buffer (a cstring is read-only)");
+    }
+    if (index < 0 || static_cast<size_t>(index) >= pointer.bytes.size()) {
+      in.fail("storeByte() index " + std::to_string(index) + " is out of range");
+    }
+    if (byte < 0 || byte > 255) in.fail("storeByte() byte must be in 0..255");
+    pointer.bytes[index] = static_cast<char>(byte);
+    return Value();
+  });
+
+  // Wraps an integer a native returned (a `size_t`/`void *` token) in a handle,
+  // and reads the token back. The token is opaque: the program cannot turn it
+  // into a dereferenceable address.
+  in.addNative("intToPtr", [](Runtime& in, Args args) -> Value {
+    need(in, "intToPtr", args, 1);
+    int64_t token = wantInt(in, "intToPtr", args[0], "token");
+    return makePtr(PtrKind::Void, {}, token);
+  });
+  in.addNative("ptrToInt", [](Runtime& in, Args args) -> Value {
+    need(in, "ptrToInt", args, 1);
+    PtrObj& pointer = wantPtr(in, "ptrToInt", args[0]);
+    return Value(pointer.address);
+  });
+
+  // Releases the handle's storage. A later use is a runtime error, so a
+  // double-free or a use-after-free is caught instead of corrupting memory.
+  in.addNative("free", [](Runtime& in, Args args) -> Value {
+    need(in, "free", args, 1);
+    if (!args[0].isPtr()) {
+      in.fail(std::string("free() expects a pointer, got '") + args[0].typeName() + "'");
+    }
+    PtrObj& pointer = args[0].ptr();
+    if (pointer.released) in.fail("free() used a pointer after it was freed");
+    pointer.released = true;
+    pointer.bytes.clear();
+    pointer.bytes.shrink_to_fit();
+    return Value();
   });
 }

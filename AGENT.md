@@ -418,14 +418,28 @@ previous one.
 - **FFI type vocabulary (done)** — the type names needed to *spell* a C
   signature: `ptr` (`void *`), `cstring` (`const char *`), the fixed-width
   integers (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `uint` and
-  `size_t`. They are compile-time annotations erased before the bytecode: the
-  runtime value stays an `int` (a pointer is an opaque handle) and `type()`
-  keeps reporting the primitive name, so no opcode and no runtime type is
-  added. `checkAssignable` knows `nil` is NULL for a pointer (even without a
-  `?`), `cstring` upcasts to `ptr`, and the integer family is mutually
-  assignable and widens to `float`/`double`. This is the vocabulary only;
-  the pointer/byte-buffer *representation* and the `extern "C"` call lowering
-  are the next slices. See `docs/language.md` §4.6 and `tests/28_ffi_types.jolt`.
+  `size_t`. The integer family is a compile-time annotation erased before the
+  bytecode: the runtime value stays an `int` and `type()` keeps reporting the
+  primitive name. `checkAssignable` knows `nil` is NULL for a pointer (even
+  without a `?`), `cstring` upcasts to `ptr`, and the integer family is
+  mutually assignable and widens to `float`/`double`. See
+  `docs/language.md` §4.6 and `tests/28_ffi_types.jolt`.
+- **Pointer runtime representation (done)** — `ptr`/`cstring` is the one FFI
+  type with a runtime value of its own: `VType::Ptr` backed by a
+  reference-counted `PtrObj` (`PtrKind::Void`/`CString`/`Buffer`). It is an
+  *opaque handle*, never a machine address, so a program can pass it to a
+  native and read it back but can never dereference arbitrary memory (Jolt is
+  memory-safe) and the allocation stays visible to the collector. `PtrObj`
+  holds only raw bytes, so — like `StringObj`/`ErrorObj` — it is **not** a
+  `GcNode` and can never sit in a cycle. `typeName()` reports `cstring` or
+  `ptr` from the handle's kind, a `cstring` upcasts to `ptr` keeping its kind,
+  and pointers compare by identity. The development engine exposes the
+  storage through the builtins `cstring`, `cstr`, `buffer`, `byteLen`,
+  `loadByte`, `storeByte`, `intToPtr`/`ptrToInt` and `free` (a released handle
+  is a clean runtime error, not a use-after-free). No new opcode: these are
+  ordinary host natives. The AOT backend (PHASE 7) lowers the same handles to
+  real C pointers. See `docs/language.md` §4.6, `tests/30_ffi_ptr.jolt` and
+  `tests/value_test.cpp`.
 - **`extern "C"` blocks (declaration half, done)** — `extern "C" { fn ...; }`
   declares C functions. The ABI is a plain string literal and only `"C"` is
   accepted. Each entry is a bodyless `fn ...;` stored as a `FnDeclStmt` with
@@ -434,9 +448,9 @@ previous one.
   The block emits no bytecode (a block compiles to the bytecode of the
   equivalent `native fn` declarations), the declarations are hoisted, and the
   block is module-level metadata (nesting it is a compile error). Binding a
-  declaration to a real C function — the marshalling and the call lowering
-  without `libffi` — is the remaining part of the phase. See
-  `docs/language.md` §4.6 and `tests/29_extern_c.jolt`.
+  declaration to a real C symbol — lowering the call to a real `extern` symbol
+  rather than a host builtin of the same name — is the remaining part of the
+  phase. See `docs/language.md` §4.6 and `tests/29_extern_c.jolt`.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 

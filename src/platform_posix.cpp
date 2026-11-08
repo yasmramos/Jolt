@@ -9,7 +9,9 @@
 #include <io.h>
 #include <malloc.h>
 #include <sys/stat.h>
+#include <windows.h>
 #else
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -139,6 +141,35 @@ void PlatformPosix::dealloc(void* pointer) {
   _aligned_free(pointer);
 #else
   std::free(pointer);
+#endif
+}
+
+void* PlatformPosix::lookupSymbol(const char* name) {
+  // `RTLD_DEFAULT` searches the global symbol scope: the executable and every
+  // shared object already loaded, which is where libc, libm and the host
+  // program's own C symbols live. That is exactly the set an `extern "C"`
+  // declaration can name, and it needs no `-rdynamic` on the host.
+#ifdef _WIN32
+  // Windows resolves through the module handle of the process image plus the
+  // C runtime; `GetProcAddress` needs a module, so the C runtime is the one
+  // that carries libc-style names. `GetModuleHandleA(nullptr)` covers a symbol
+  // the host itself exports.
+  HMODULE module = GetModuleHandleA(nullptr);
+  if (module != nullptr) {
+    if (FARPROC symbol = GetProcAddress(module, name)) {
+      return reinterpret_cast<void*>(symbol);
+    }
+  }
+  HMODULE runtime = GetModuleHandleA("ucrtbase.dll");
+  if (runtime == nullptr) runtime = GetModuleHandleA("msvcrt.dll");
+  if (runtime != nullptr) {
+    if (FARPROC symbol = GetProcAddress(runtime, name)) {
+      return reinterpret_cast<void*>(symbol);
+    }
+  }
+  return nullptr;
+#else
+  return dlsym(RTLD_DEFAULT, name);
 #endif
 }
 

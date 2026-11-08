@@ -83,6 +83,14 @@ class Platform {
   // adding them later is not an interface break.
   virtual void* alloc(std::size_t size, std::size_t alignment) = 0;
   virtual void dealloc(void* pointer) = 0;
+
+  // Resolves a C symbol declared in an `extern "C"` block (PHASE 6.6). The
+  // hosted engine answers with the address of the libc/host symbol; a platform
+  // that cannot reach one (the freestanding AOT runtime, where extern symbols
+  // are link-time relocations resolved by the static linker, not at run time)
+  // returns nullptr. The caller turns nullptr into a clear runtime error, so a
+  // program never silently calls a wrong address.
+  virtual void* lookupSymbol(const char* name) = 0;
 };
 
 // The development engine's implementation (libc and the C++ standard library
