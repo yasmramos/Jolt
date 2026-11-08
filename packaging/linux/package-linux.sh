@@ -42,9 +42,18 @@ if [ ! -f "$stage/share/jolt/std/math.jolt" ]; then
   exit 1
 fi
 
-# Debian packages version 0.1.0 as-is; the release tag is `v0.1.0`, so strip the
-# leading `v` if the caller passed one.
-deb_version="${version#v}"
+# Debian versions may contain `-`, but it separates the upstream version from
+# the revision, so a pre-release tag (`0.1.0-rc1`) is rewritten with `~`, which
+# sorts *before* the final `0.1.0` — the ordering a pre-release wants.
+deb_version="${version//-/\~}"
+
+# RPM splits Version and Release at the first `-`, and Version may not contain
+# one at all, so `0.1.0-rc1` becomes Version `0.1.0` + Release `0.rc1`, and a
+# plain `0.1.0` stays Release `1`.
+case "$version" in
+  *-*) rpm_version="${version%%-*}"; rpm_release="0.${version#*-}" ;;
+  *)   rpm_version="$version";       rpm_release="1" ;;
+esac
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -91,8 +100,8 @@ rpm_top="$work/rpm"
 mkdir -p "$rpm_top"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 cat > "$rpm_top/SPECS/jolt.spec" <<EOF
 Name:           jolt
-Version:        $deb_version
-Release:        1
+Version:        $rpm_version
+Release:        $rpm_release
 Summary:        Jolt programming language engine
 License:        MIT
 URL:            https://github.com/yasmramos/Jolt
@@ -112,11 +121,11 @@ cp -a "$stage/share/jolt/std" %{buildroot}/usr/share/jolt/std
 /usr/share/jolt/std
 
 %changelog
-* Thu Jan 01 2026 Jolt contributors <noreply@example.com> - $deb_version-1
+* Thu Jan 01 2026 Jolt contributors <noreply@example.com> - $rpm_version-$rpm_release
 - Automated release build.
 EOF
 
 rpmbuild --define "_topdir $rpm_top" -bb "$rpm_top/SPECS/jolt.spec"
 rpm_file="$(find "$rpm_top/RPMS" -name '*.rpm' | head -n1)"
-cp "$rpm_file" "$out/jolt-${deb_version}-1.x86_64.rpm"
-echo "wrote $out/jolt-${deb_version}-1.x86_64.rpm"
+cp "$rpm_file" "$out/jolt-${rpm_version}-${rpm_release}.x86_64.rpm"
+echo "wrote $out/jolt-${rpm_version}-${rpm_release}.x86_64.rpm"
