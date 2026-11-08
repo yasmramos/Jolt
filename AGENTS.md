@@ -21,6 +21,18 @@ Repository-specific workflow for AI agents. Project conventions live in
 - Reply to the user in **Spanish**. All repository artifacts (code, comments,
   docs, commit messages, PR titles/bodies) stay in **English**.
 
+## CI
+
+- Two workflows: `cmake-multi-platform.yml` builds and runs the full CTest
+  suite, and `artifacts.yml` builds the release artifacts. Both cover Linux,
+  Windows and macOS — keep the three in step. A platform missing from the
+  `cmake-multi-platform.yml` matrix passes CI while never being built, which
+  is how a macOS-only break slips through.
+- The `cmake-multi-platform.yml` matrix is `os` × `c_compiler` with
+  `include`/`exclude` pinning one `cpp_compiler` per job. Adding an `os` means
+  adding its real compiler to `include` *and* excluding the impossible pairs,
+  or the product grows dead jobs.
+
 ## Release and artifacts
 
 - `.github/workflows/artifacts.yml` builds the engine on Linux, Windows and
