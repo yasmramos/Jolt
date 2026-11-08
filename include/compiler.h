@@ -429,6 +429,7 @@ class Compiler {
   void compileReturn(const ReturnStmt& stmt);
   void compileIf(const IfStmt& stmt);
   void compileWhile(const WhileStmt& stmt);
+  void compileDoWhile(const DoWhileStmt& stmt);
   void compileFor(const ForStmt& stmt);
   void compileForIn(const ForInStmt& stmt);
   void compileSwitch(const SwitchStmt& stmt);

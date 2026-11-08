@@ -22,6 +22,7 @@ enum class Tok {
   If,
   Else,
   While,
+  Do,
   For,
   In,
   Break,

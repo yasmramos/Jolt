@@ -260,7 +260,7 @@ Current limitations:
 - There are no classes, structs, interfaces or inheritance.
 - There is no `try`/`catch` *statement* or catchable exceptions. Errors are values: `error(message, code?)` builds a first-class error value and `isError(value)` detects it. `pcall(fn, ...)` turns a raised runtime error into a `{ok, value, error}` map instead of aborting. Two operators work on error values: `try expr` propagates one to the caller (Rust's `?`) and `expr catch default` recovers locally (Zig's `catch`). `panic()` is for unrecoverable errors.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require`; modules are loaded eagerly and a cyclic import is a compile error.
-- There is no `do`/`while`, `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough.
+- There is no `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough, and so is the post-test loop `do { ... } while (cond);`.
 - `defer { ... }` runs a block when its scope exits, in LIFO order, on fall-through, `return` and `break`/`continue` alike; it compiles to no new opcode.
 - Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - Braces are mandatory in the bodies of `if`, `while`, `for` and `switch`.

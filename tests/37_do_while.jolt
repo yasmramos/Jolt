@@ -1,0 +1,148 @@
+// `do { ... } while (cond);` — a post-test loop (PHASE 6.5).
+//
+// The body runs before the condition is tested, so it always runs at least
+// once. `continue` jumps to the condition, `break` leaves the loop, and a
+// `defer` inside the body runs on every exit path (fall-through, `break`,
+// `return`). The trailing `;` after the `while (...)` is optional.
+
+// --- the body always runs at least once -----------------------------------
+
+var count = 0;
+do {
+  count += 1;
+} while (false);
+assertEq(count, 1);
+
+// --- a normal loop ---------------------------------------------------------
+
+var i = 0;
+var sum = 0;
+do {
+  sum += i;
+  i += 1;
+} while (i < 5);
+assertEq(sum, 0 + 1 + 2 + 3 + 4);
+assertEq(i, 5);
+
+// --- the condition may use any expression ----------------------------------
+
+var n = 10;
+var steps = 0;
+do {
+  n = n / 2;
+  steps += 1;
+} while (n > 1);
+assertEq(steps, 3);  // 10 -> 5 -> 2 -> 1 (int division)
+
+// --- `break` leaves the loop ----------------------------------------------
+
+var seen = [];
+var j = 0;
+do {
+  j += 1;
+  if (j == 3) { break; }
+  seen.push(j);
+} while (true);
+assertEq(seen, [1, 2]);
+
+// --- `continue` re-tests the condition (not the top of the body) ----------
+
+var odds = [];
+var k = 0;
+do {
+  k += 1;
+  if (k % 2 == 0) { continue; }
+  odds.push(k);
+} while (k < 6);
+assertEq(odds, [1, 3, 5]);
+
+// --- `continue` in a loop that would otherwise not terminate --------------
+
+// The condition is evaluated after `continue`, so the counter still advances.
+var m = 0;
+do {
+  m += 1;
+  continue;
+} while (m < 4);
+assertEq(m, 4);
+
+// --- `defer` runs on fall-through and on `break` ---------------------------
+
+fn runBreaks() {
+  var log = [];
+  var x = 0;
+  do {
+    x += 1;
+    defer { log.push(x); }
+    if (x == 2) { break; }
+  } while (x < 10);
+  return log;
+}
+assertEq(runBreaks(), [1, 2]);
+
+// --- `defer` runs on `continue` too ---------------------------------------
+
+fn runContinues() {
+  var log = [];
+  var x = 0;
+  do {
+    x += 1;
+    defer { log.push(x); }
+    if (x < 3) { continue; }
+    break;
+  } while (true);
+  return log;
+}
+assertEq(runContinues(), [1, 2, 3]);
+
+// --- `return` from inside a `do` body -------------------------------------
+
+fn firstOver(limit) {
+  var x = 0;
+  do {
+    x += 1;
+    if (x > limit) { return x; }
+  } while (true);
+}
+assertEq(firstOver(7), 8);
+
+// --- nested loops: `break`/`continue` bind to the innermost loop -----------
+
+var pairs = [];
+var a = 0;
+do {
+  a += 1;
+  var b = 0;
+  do {
+    b += 1;
+    if (b == 2) { continue; }
+    pairs.push([a, b]);
+  } while (b < 3);
+} while (a < 2);
+assertEq(pairs, [[1, 1], [1, 3], [2, 1], [2, 3]]);
+
+// --- a `let` declared in the body is scoped to it -------------------------
+
+var outside = 0;
+do {
+  let scoped = 42;
+  outside = scoped;
+} while (false);
+assertEq(outside, 42);
+
+// --- closures in the body capture a fresh binding per iteration -----------
+
+fn makeGetters() {
+  var getters = [];
+  var t = 0;
+  do {
+    t += 1;
+    let captured = t;
+    getters.push(() => captured);
+  } while (t < 3);
+  return getters;
+}
+let getters = makeGetters();
+assertEq(getters[0](), 1);
+assertEq(getters[1](), 2);
+assertEq(getters[2](), 3);

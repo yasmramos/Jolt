@@ -277,6 +277,7 @@ StmtPtr Parser::parseStatement() {
   if (match(Tok::Struct)) return parseStructDecl();
   if (match(Tok::If)) return parseIf();
   if (match(Tok::While)) return parseWhile();
+  if (match(Tok::Do)) return parseDoWhile();
   if (match(Tok::For)) return parseFor();
   if (match(Tok::Return)) return parseReturn();
   if (match(Tok::Defer)) return parseDefer();
@@ -921,6 +922,20 @@ StmtPtr Parser::parseWhile() {
   auto body = parseBlock();
   match(Tok::Semicolon);
   return makeStmt(WhileStmt{std::move(condition), std::move(body)}, keyword.line, keyword.col);
+}
+
+// `do { ... } while (cond);` (PHASE 6.5): a post-test loop. The body runs
+// before the condition is tested, so it always runs at least once. The `while`
+// and the condition are required; the trailing `;` is optional.
+StmtPtr Parser::parseDoWhile() {
+  const Token& keyword = previous();
+  auto body = parseBlock();
+  consume(Tok::While, "expected 'while' after the 'do' body");
+  consume(Tok::LParen, "expected '(' after 'while'");
+  auto condition = parseExpression();
+  consume(Tok::RParen, "expected ')' after the condition");
+  match(Tok::Semicolon);
+  return makeStmt(DoWhileStmt{std::move(body), std::move(condition)}, keyword.line, keyword.col);
 }
 
 StmtPtr Parser::parseFor() {

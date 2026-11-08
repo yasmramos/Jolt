@@ -395,6 +395,15 @@ struct WhileStmt {
   StmtPtr body;
 };
 
+// `do { ... } while (cond);` (PHASE 6.5): a post-test loop. The body runs once
+// before the condition is evaluated, so the body always runs at least once.
+// It is a distinct node from WhileStmt so `continue` jumps to the condition
+// (not the top) and the body's scope is entered before the first test.
+struct DoWhileStmt {
+  StmtPtr body;
+  ExprPtr condition;
+};
+
 struct ForStmt {
   // Classic C-style loop, a distinct node from ForInStmt on purpose: the
   // three optional parts are nullable by design -- `init` may be null (or any
@@ -491,8 +500,8 @@ struct ExternBlockStmt {
 };
 
 using StmtNode = std::variant<ExprStmt, LetStmt, FnDeclStmt, StructDeclStmt, BlockStmt, IfStmt,
-                              WhileStmt, ForStmt, ForInStmt, BreakStmt, ContinueStmt, ReturnStmt,
-                              ImportStmt, SwitchStmt, DeferStmt, ExternBlockStmt>;
+                              WhileStmt, DoWhileStmt, ForStmt, ForInStmt, BreakStmt, ContinueStmt,
+                              ReturnStmt, ImportStmt, SwitchStmt, DeferStmt, ExternBlockStmt>;
 
 struct Stmt {
   StmtNode node;
