@@ -6,7 +6,10 @@
 #                                 (`std/`), the layout `standardLibraryDir`
 #                                 looks for, so `import std.math` resolves from
 #                                 the unpacked archive.
-#   2. jolt-vscode-extension    - the packaged VS Code extension (`.vsix`),
+#   2. jolt-windows-x64-setup   - an Inno Setup installer that puts the engine
+#                                 in `Program Files`, adds it to the system
+#                                 PATH and optionally associates `.jolt` files.
+#   3. jolt-vscode-extension    - the packaged VS Code extension (`.vsix`),
 #                                 platform-independent, built once.
 #
 # This is separate from `cmake-multi-platform.yml`, which only builds and tests
@@ -91,6 +94,40 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Inno Setup ships on the Windows image, but its directory is not on
+        # PATH and the version in the path changes with the image, so it is
+        # located rather than hard-coded. The version comes from the tag being
+        # released, or from CMakeLists.txt on a branch push.
+        run: |
+          $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue |
+                   Select-Object -First 1).FullName
+          if (-not $iscc) { throw "ISCC.exe not found; the Windows image no longer ships Inno Setup" }
+
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(.*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)' |
+                        Select-Object -First 1).Matches.Groups[1].Value
+          }
+          Write-Host "Building installer for Jolt $version"
+
+          & $iscc "/DAppVersion=$version" "/DStageDir=$PWD\stage" "packaging\windows\jolt.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+          Get-Item dist\jolt-windows-x64-setup.exe | Format-List Name, Length
+
+      - name: Upload the Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-windows-x64-setup
+          path: dist/jolt-windows-x64-setup.exe
           if-no-files-found: error
           retention-days: 30
 
