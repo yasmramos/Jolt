@@ -1,0 +1,68 @@
+// PHASE 6.7 slice 4: union types `T | E`.
+//
+// A union is a compile-time-only type: it names the set of values a slot may
+// hold, and it is erased before the bytecode (AGENT.md §3). It adds no opcode
+// and changes no runtime behaviour; the value that flows through it is an
+// ordinary tagged value.
+
+// --- declaration and assignment -------------------------------------------
+
+let n: int | string = 1;
+assertEq(n, 1);
+let n2: int | string = "text";  // the other alternative is accepted too
+assertEq(n2, "text");
+
+var v: int | string | bool = true;
+assertEq(v, true);
+v = 5;
+assertEq(v, 5);
+v = "s";
+assertEq(v, "s");
+
+// --- `nil` folds into nullability -----------------------------------------
+
+// `T | nil` is the same type as `T?`: `nil` is not a union member, it makes
+// the whole annotation nullable.
+var maybe: int | nil = nil;
+assertEq(maybe, nil);
+maybe = 3;
+assertEq(maybe, 3);
+
+let alsoMaybe: string | nil = "x";
+assertEq(alsoMaybe, "x");
+
+// --- parameters and return types ------------------------------------------
+
+fn describe(x: int | string): string {
+  return type(x);
+}
+assertEq(describe(1), "int");
+assertEq(describe("a"), "string");
+
+// A function may return a union, so the caller sees the value, not a narrowed
+// type. `catch` produces a union of its two sides (PHASE 6.7.3 + 6.7.4).
+fn parse(s: string): int | error {
+  if (len(s) == 0) { return error("bad input"); }
+  return int(s);
+}
+assertEq(type(parse("42")), "int");
+assertEq(type(parse("")), "error");
+assertEq(isError(parse("")), true);
+assertEq(isError(parse("42")), false);
+
+// --- union source fits a wider target -------------------------------------
+
+// Every member of the source must fit the target, so a union can be stored in
+// a union that contains it.
+let wide: int | string | bool = n2;
+assertEq(wide, "text");
+
+// --- catch yields a union of both sides -----------------------------------
+
+// The fallback's type joins the operand's, so the result is `int | string`.
+fn fail() { return error("boom"); }
+let recovered = fail() catch "default";
+assertEq(recovered, "default");
+assertEq(parse("7") catch "default", 7);
+
+print("unions ok");

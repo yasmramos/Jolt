@@ -29,6 +29,13 @@ struct TypeRef {
   std::string name;
   bool nullable = false;
 
+  // Union members (PHASE 6.7.4): the alternatives after the primary `name` in
+  // `T | E | ...`. An empty vector means "not a union". `nil` is not stored
+  // here; it folds into `nullable`, so `int | string | nil` is the union
+  // `int | string` with `nullable = true`. Like every type, unions are erased
+  // before the bytecode (AGENT.md §3).
+  std::vector<std::string> alternatives;
+
   // Callback signature (PHASE 6.6): when `name == "fn"`, the parameter and
   // return type names of a C function pointer. Only scalar FFI types are
   // allowed (no nested callback, no struct by value), so the signature is
@@ -38,6 +45,16 @@ struct TypeRef {
 
   bool isPresent() const { return !name.empty(); }
   bool isCallback() const { return name == "fn"; }
+  bool isUnion() const { return !alternatives.empty(); }
+
+  // Every member of the union, primary first. A non-union yields just `name`.
+  std::vector<std::string> members() const {
+    std::vector<std::string> all;
+    all.reserve(1 + alternatives.size());
+    all.push_back(name);
+    all.insert(all.end(), alternatives.begin(), alternatives.end());
+    return all;
+  }
 };
 
 // One function parameter: a name plus an optional type annotation
@@ -89,6 +106,7 @@ inline bool isIntegerTypeName(const std::string& name) {
 }
 
 // Human-readable form of a type for diagnostics: `int`, `string?`, `any`,
+// `int | string` for a union, `(int | string)?` for a nullable union, and
 // `fn(int, int): int` for a callback signature.
 inline std::string describeType(const TypeRef& type) {
   if (!type.isPresent()) return "any";
@@ -102,7 +120,16 @@ inline std::string describeType(const TypeRef& type) {
     out += type.callbackReturn.empty() ? "void" : type.callbackReturn;
     return out;
   }
-  return type.nullable ? type.name + "?" : type.name;
+  std::string base = type.name;
+  if (type.isUnion()) {
+    for (const std::string& alternative : type.alternatives) {
+      base += " | " + alternative;
+    }
+    // Parenthesize before the nullable `?` so `int | string | nil` is not read
+    // as `int | string?`.
+    return type.nullable ? "(" + base + ")?" : base;
+  }
+  return type.nullable ? base + "?" : base;
 }
 
 // ---------------------------------------------------------------- expressions
