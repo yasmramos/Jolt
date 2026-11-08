@@ -24,6 +24,14 @@ file(GLOB boundary_files
 
 # `[.]` keeps the regex readable: no escaping of the dot inside CMake strings.
 set(forbidden "interpreter[.]h|vm[.]h")
+# The compiler and the native backend must also stay clear of the FFI *runtime*
+# half. `ffi_types.h` is the shared, dependency-free source of truth and is
+# allowed; `ffi_marshal.h` pulls in `runtime.h`/`value.h`, and `ffi.cpp` is the
+# only place that includes libffi. libffi is a development-engine-only
+# dependency (AGENT.md §5.1/§8): the AOT backend lowers callbacks to compile-time
+# stubs and must never link it, so the include must not be reachable from the
+# compiler or the native backend.
+set(forbidden_ffi "ffi_marshal[.]h|ffi[.]h|libffi")
 
 set(violations "")
 foreach(file IN LISTS boundary_files)
@@ -34,7 +42,8 @@ foreach(file IN LISTS boundary_files)
     if(candidate MATCHES "^//" OR candidate MATCHES "^/[*]" OR candidate MATCHES "^[*]")
       continue()
     endif()
-    if(line MATCHES "#[ \t]*include[ \t]*[<\"](${forbidden})[>\"]")
+    if(line MATCHES "#[ \t]*include[ \t]*[<\"](${forbidden})[>\"]" OR
+       line MATCHES "#[ \t]*include[ \t]*[<\"](${forbidden_ffi})[>\"]")
       file(RELATIVE_PATH shown "${ROOT}" "${file}")
       string(STRIP "${line}" shown_line)
       list(APPEND violations "${shown}: ${shown_line}")
@@ -49,7 +58,8 @@ if(violations)
   endforeach()
   message(FATAL_ERROR
     "${count} forbidden include(s): the compiler and the native backend must not "
-    "include interpreter.h or vm.h (see AGENT.md, toolchain boundary).")
+    "include interpreter.h, vm.h, the FFI runtime (ffi_marshal.h) or libffi "
+    "(see AGENT.md, toolchain boundary).")
 endif()
 
 list(LENGTH boundary_files checked)

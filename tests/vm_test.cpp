@@ -39,6 +39,21 @@ Bytecode compileSource(const std::string& source) {
   }
 }
 
+// Compiles `source` expecting a `CompileError`, returning its message. The
+// caller asserts on the text; a successful compile aborts the test.
+std::string compileErrorMessage(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<vm-test>");
+  auto program = parser.parseProgram();
+  try {
+    compileProgram(program);
+  } catch (const CompileError& error) {
+    return error.message;
+  }
+  std::fprintf(stderr, "expected a compile error but the source compiled\n");
+  std::exit(1);
+}
+
 // Redirects std::cout for as long as the object lives.
 struct CoutCapture {
   std::ostringstream stream;
@@ -1369,6 +1384,44 @@ extern "C" int joltTestBump(int* p) {
   return previous;
 }
 
+// Struct-by-value host functions (PHASE 6.6). Each returns or takes a small
+// struct so the marshalling is exercised across the six System V register
+// shapes: I, S, II, SS, IS and SI.
+extern "C" struct JoltPairInt { int a; int b; };
+extern "C" struct JoltPairDouble { double a; double b; };
+extern "C" struct JoltMixed { int a; double b; };
+extern "C" struct JoltMixedRev { double a; int b; };
+extern "C" struct JoltOneDouble { double a; };
+
+extern "C" JoltPairInt joltTestMakePair(int a, int b) { return JoltPairInt{a, b}; }
+extern "C" JoltPairDouble joltTestMakePairDouble(double a, double b) {
+  return JoltPairDouble{a, b};
+}
+extern "C" JoltMixed joltTestMakeMixed(int a, double b) { return JoltMixed{a, b}; }
+extern "C" JoltMixedRev joltTestMakeMixedRev(double a, int b) { return JoltMixedRev{a, b}; }
+extern "C" JoltOneDouble joltTestMakeOneDouble(double a) { return JoltOneDouble{a}; }
+// Takes a struct by value and returns an integer derived from it, so a struct
+// *argument* is proven to arrive with the right bytes in the right registers.
+extern "C" int joltTestSumPair(JoltPairInt p) { return p.a + p.b; }
+extern "C" double joltTestScalePair(JoltPairDouble p) { return p.a * 100.0 + p.b; }
+extern "C" double joltTestMixMagnitude(JoltMixed m) { return m.a + m.b; }
+
+// A struct smaller than one eightbyte: `{char; char}` is 2 bytes, so the whole
+// struct travels in a single INTEGER register with the upper bytes unspecified.
+// Reading the return must touch only the two declared bytes.
+extern "C" struct JoltTwoBytes { char a; char b; };
+extern "C" JoltTwoBytes joltTestMakeTwoBytes(char a, char b) { return JoltTwoBytes{a, b}; }
+
+// C functions that call a Jolt callback, one per ABI shape: a GPR argument and
+// return, an SSE argument and return, and a `void` callback.
+extern "C" int joltTestApply(int (*f)(int), int x) { return f(x); }
+extern "C" double joltTestApplyDouble(double (*f)(double), double x) { return f(x); }
+extern "C" int joltTestApplyTwice(int (*f)(int), int x) { return f(x) + f(x); }
+extern "C" int joltTestApplyVoid(void (*f)(int), int x) {
+  f(x);
+  return x;
+}
+
 // A host that resolves the symbols above. Everything else behaves like the
 // dev platform (writes go to captured strings, so a test can read them).
 struct SymbolPlatform final : Platform {
@@ -1392,6 +1445,21 @@ struct SymbolPlatform final : Platform {
     if (symbol == "joltTestScale") return reinterpret_cast<void*>(&joltTestScale);
     if (symbol == "joltTestGreeting") return reinterpret_cast<void*>(&joltTestGreeting);
     if (symbol == "joltTestBump") return reinterpret_cast<void*>(&joltTestBump);
+    if (symbol == "joltTestMakePair") return reinterpret_cast<void*>(&joltTestMakePair);
+    if (symbol == "joltTestMakePairDouble")
+      return reinterpret_cast<void*>(&joltTestMakePairDouble);
+    if (symbol == "joltTestMakeMixed") return reinterpret_cast<void*>(&joltTestMakeMixed);
+    if (symbol == "joltTestMakeMixedRev") return reinterpret_cast<void*>(&joltTestMakeMixedRev);
+    if (symbol == "joltTestMakeOneDouble")
+      return reinterpret_cast<void*>(&joltTestMakeOneDouble);
+    if (symbol == "joltTestSumPair") return reinterpret_cast<void*>(&joltTestSumPair);
+    if (symbol == "joltTestScalePair") return reinterpret_cast<void*>(&joltTestScalePair);
+    if (symbol == "joltTestMixMagnitude") return reinterpret_cast<void*>(&joltTestMixMagnitude);
+    if (symbol == "joltTestMakeTwoBytes") return reinterpret_cast<void*>(&joltTestMakeTwoBytes);
+    if (symbol == "joltTestApply") return reinterpret_cast<void*>(&joltTestApply);
+    if (symbol == "joltTestApplyDouble") return reinterpret_cast<void*>(&joltTestApplyDouble);
+    if (symbol == "joltTestApplyTwice") return reinterpret_cast<void*>(&joltTestApplyTwice);
+    if (symbol == "joltTestApplyVoid") return reinterpret_cast<void*>(&joltTestApplyVoid);
     return nullptr;
   }
 };
@@ -1461,6 +1529,180 @@ void testExternMarshalsPointerArgument() {
       "print(before);\n"
       "print(loadByte(b, 0));\n");
   assert(out == "7\n8\n");
+}
+
+#if JOLT_FFI_STRUCT_BY_VALUE
+void testExternMarshalsStructReturnTwoIntegers() {
+  TEST_SCOPE();
+  // A two-`int` struct is 8 bytes, class INTEGER: it comes back wholly in `rax`.
+  const std::string out = runWithSymbols(
+      "struct PairInt { a: int; b: int; }\n"
+      "extern \"C\" { fn joltTestMakePair(a: int, b: int): PairInt; }\n"
+      "let p = joltTestMakePair(3, 4);\n"
+      "print(p.a);\n"
+      "print(p.b);\n");
+  assert(out == "3\n4\n");
+}
+
+void testExternMarshalsStructReturnTwoDoubles() {
+  TEST_SCOPE();
+  // Two `double` fields are 16 bytes, class SSE: the eightbytes come back in
+  // `xmm0`/`xmm1`.
+  const std::string out = runWithSymbols(
+      "struct PairDouble { a: double; b: double; }\n"
+      "extern \"C\" { fn joltTestMakePairDouble(a: double, b: double): PairDouble; }\n"
+      "let p = joltTestMakePairDouble(1.5, 2.5);\n"
+      "print(p.a);\n"
+      "print(p.b);\n");
+  assert(out == "1.5\n2.5\n");
+}
+
+void testExternMarshalsStructReturnMixedClasses() {
+  TEST_SCOPE();
+  // `{int; double}` is class INTEGER+SSE: `rax` + `xmm0`. `{double; int}` is the
+  // reverse: `xmm0` + `rax`. Both must be read from the right registers.
+  const std::string out = runWithSymbols(
+      "struct Mixed { a: int; b: double; }\n"
+      "struct MixedRev { a: double; b: int; }\n"
+      "extern \"C\" {\n"
+      "  fn joltTestMakeMixed(a: int, b: double): Mixed;\n"
+      "  fn joltTestMakeMixedRev(a: double, b: int): MixedRev;\n"
+      "}\n"
+      "let m = joltTestMakeMixed(7, 8.5);\n"
+      "print(m.a);\n"
+      "print(m.b);\n"
+      "let r = joltTestMakeMixedRev(1.25, 9);\n"
+      "print(r.a);\n"
+      "print(r.b);\n");
+  assert(out == "7\n8.5\n1.25\n9\n");
+}
+
+void testExternMarshalsStructArgument() {
+  TEST_SCOPE();
+  // A struct argument is flattened to its eightbytes and passed in the right
+  // registers; the callee reads them back as the struct it declared.
+  const std::string out = runWithSymbols(
+      "struct PairInt { a: int; b: int; }\n"
+      "extern \"C\" { fn joltTestSumPair(p: PairInt): int; }\n"
+      "print(joltTestSumPair(PairInt { a: 20, b: 22 }));\n");
+  assert(out == "42\n");
+}
+
+void testExternMarshalsMixedStructArgument() {
+  TEST_SCOPE();
+  // `{int; double}` argument: the INTEGER eightbyte goes in a GPR and the SSE
+  // eightbyte in an xmm register, in that order.
+  const std::string out = runWithSymbols(
+      "struct Mixed { a: int; b: double; }\n"
+      "extern \"C\" { fn joltTestMixMagnitude(m: Mixed): double; }\n"
+      "print(joltTestMixMagnitude(Mixed { a: 2, b: 0.5 }));\n");
+  assert(out == "2.5\n");
+}
+
+void testExternMarshalsStructArgumentAndReturnTogether() {
+  TEST_SCOPE();
+  // Two `double` fields passed in `xmm0`/`xmm1` and the result read back from
+  // `xmm0`: the full round trip for the SSE shape.
+  const std::string out = runWithSymbols(
+      "struct PairDouble { a: double; b: double; }\n"
+      "extern \"C\" { fn joltTestScalePair(p: PairDouble): double; }\n"
+      "print(joltTestScalePair(PairDouble { a: 1.5, b: 0.25 }));\n");
+  assert(out == "150.25\n");
+}
+
+void testExternMarshalsSubEightbyteStruct() {
+  TEST_SCOPE();
+  // A 2-byte struct is one INTEGER eightbyte: it comes back in `rax`, and only
+  // the two declared bytes are read (the rest of the register is unspecified).
+  const std::string out = runWithSymbols(
+      "struct TwoBytes { a: int8; b: int8; }\n"
+      "extern \"C\" { fn joltTestMakeTwoBytes(a: int8, b: int8): TwoBytes; }\n"
+      "let t = joltTestMakeTwoBytes(65, 66);\n"
+      "print(t.a);\n"
+      "print(t.b);\n");
+  assert(out == "65\n66\n");
+}
+#endif  // JOLT_FFI_STRUCT_BY_VALUE
+
+#ifdef JOLT_HAVE_LIBFFI
+void testExternCallbackGprShape() {
+  TEST_SCOPE();
+  // The callback is a Jolt function; C calls it through a libffi trampoline that
+  // re-enters the VM with the C argument boxed as a Jolt value.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApply(f: fn(int): int, x: int): int; }\n"
+      "fn inc(v: int): int { return v + 1; }\n"
+      "print(joltTestApply(inc, 41));\n");
+  assert(out == "42\n");
+}
+
+void testExternCallbackSseShape() {
+  TEST_SCOPE();
+  // A `double` callback argument and return travel through SSE registers; the
+  // trampoline boxes and writes them as `double`, not as a general-purpose word.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApplyDouble(f: fn(double): double, x: double): double; }\n"
+      "fn twice(v: double): double { return v * 2.0; }\n"
+      "print(joltTestApplyDouble(twice, 21.0));\n");
+  assert(out == "42\n");
+}
+
+void testExternCallbackVoidReturnAndClosure() {
+  TEST_SCOPE();
+  // A `void` callback writes no return value, and a closure works: the
+  // trampoline re-enters the VM, so the callback sees its captured variable.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApplyVoid(f: fn(int): void, x: int): int; }\n"
+      "var seen = 0;\n"
+      "let record = (v) => { seen = v; };\n"
+      "print(joltTestApplyVoid(record, 7));\n"
+      "print(seen);\n");
+  assert(out == "7\n7\n");
+}
+
+void testExternCallbackInvokedRepeatedly() {
+  TEST_SCOPE();
+  // C calls the same trampoline twice within one extern call: the closure must
+  // stay valid for the whole call, not just the first entry.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApplyTwice(f: fn(int): int, x: int): int; }\n"
+      "fn inc(v: int): int { return v + 1; }\n"
+      "print(joltTestApplyTwice(inc, 10));\n");
+  assert(out == "22\n");
+}
+
+void testExternCallbackErrorIsReraisedAfterCReturns() {
+  TEST_SCOPE();
+  // A Jolt error inside the callback cannot unwind through the C frame, so the
+  // extern call captures it and re-raises it once C returns; `pcall` catches it.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApply(f: fn(int): int, x: int): int; }\n"
+      "fn boom(v: int): int { panic(\"callback failed\"); }\n"
+      "let r = pcall(() => joltTestApply(boom, 1));\n"
+      "print(r.ok);\n"
+      "print(r.error.message);\n");
+  assert(out == "false\ncallback failed\n");
+}
+#endif  // JOLT_HAVE_LIBFFI
+
+void testExternRejectsLargeStructAtCompileTime() {
+  TEST_SCOPE();
+  // A struct larger than 16 bytes is passed in memory, a shape the register
+  // marshalling does not support, so the declaration is rejected up front.
+  const std::string message = compileErrorMessage(
+      "struct Big { a: int; b: int; c: int; d: int; e: int; }\n"
+      "extern \"C\" { fn f(x: Big): int; }\n");
+  assert(message.find("memory") != std::string::npos);
+}
+
+void testExternRejectsNonScalarStructFieldAtCompileTime() {
+  TEST_SCOPE();
+  // A nested struct field cannot cross the boundary: it is not a scalar member.
+  const std::string message = compileErrorMessage(
+      "struct Inner { a: int; b: int; }\n"
+      "struct Outer { p: Inner; q: int; }\n"
+      "extern \"C\" { fn f(x: Outer): int; }\n");
+  assert(message.find("cross the C boundary") != std::string::npos);
 }
 
 void testExternMissingSymbolIsAClearRuntimeError() {
@@ -1611,6 +1853,24 @@ int main() {
   testExternMarshalsDoubleReturnAndArgument();
   testExternMarshalsStringReturnAsCString();
   testExternMarshalsPointerArgument();
+#if JOLT_FFI_STRUCT_BY_VALUE
+  testExternMarshalsStructReturnTwoIntegers();
+  testExternMarshalsStructReturnTwoDoubles();
+  testExternMarshalsStructReturnMixedClasses();
+  testExternMarshalsStructArgument();
+  testExternMarshalsMixedStructArgument();
+  testExternMarshalsStructArgumentAndReturnTogether();
+  testExternMarshalsSubEightbyteStruct();
+#endif
+#ifdef JOLT_HAVE_LIBFFI
+  testExternCallbackGprShape();
+  testExternCallbackSseShape();
+  testExternCallbackVoidReturnAndClosure();
+  testExternCallbackInvokedRepeatedly();
+  testExternCallbackErrorIsReraisedAfterCReturns();
+#endif
+  testExternRejectsLargeStructAtCompileTime();
+  testExternRejectsNonScalarStructFieldAtCompileTime();
   testExternMissingSymbolIsAClearRuntimeError();
   testExternRejectsUnsupportedSignatureAtCompileTime();
   testExternRejectsVariadicDeclarationAtCompileTime();

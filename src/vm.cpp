@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ops.h"
-#include "ffi.h"
+#include "ffi_marshal.h"
 
 // ---------------------------------------------------------------- diagnostics
 

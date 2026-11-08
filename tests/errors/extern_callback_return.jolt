@@ -1,0 +1,6 @@
+// expect-exit: 65
+// A callback is a C function pointer: it can only be a parameter, never the
+// return type of an `extern "C"` function.
+extern "C" {
+  fn getHandler(): fn(int): int;
+}

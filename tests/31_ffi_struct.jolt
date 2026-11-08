@@ -1,0 +1,53 @@
+// `struct` by value across the C boundary (PHASE 6.6). A small struct (<= 16
+// bytes) is passed and returned in registers, classified by the System V ABI as
+// up to two eightbytes, each INTEGER (a general-purpose register) or SSE (an xmm
+// register). The functions below are real libc names, so the test runs wherever
+// the host links libc.
+
+// `div_t` is `{int quot; int rem;}`: 8 bytes, one INTEGER eightbyte. It comes
+// back wholly in `rax`.
+struct DivResult {
+  quot: int32;
+  rem: int32;
+}
+extern "C" {
+  fn div(numerator: int, denominator: int): DivResult;
+}
+
+let d = div(17, 5);
+assertEq(d.quot, 3);
+assertEq(d.rem, 2);
+
+// `ldiv_t` is `{long quot; long rem;}`: 16 bytes, two INTEGER eightbytes, so
+// the result is read from `rax` and `rdx`.
+struct LDivResult {
+  quot: int64;
+  rem: int64;
+}
+extern "C" {
+  fn ldiv(numerator: int64, denominator: int64): LDivResult;
+}
+
+let l = ldiv(100, 7);
+assertEq(l.quot, 14);
+assertEq(l.rem, 2);
+
+// A struct is a map at runtime, so everything that works on a map works on it.
+assertEq(type(d), "map");
+assertEq(d, {quot: 3, rem: 2});
+assert("quot" in d);
+
+// Passing a struct by value: the compiler flattens it to its eightbytes and the
+// callee reads them back as the struct it declared.
+struct Point {
+  x: int32;
+  y: int32;
+}
+extern "C" {
+  fn abs(x: int): int;
+}
+// `abs` takes a scalar, but a struct argument is exercised from the C++ suite
+// with host functions; here we confirm the result struct composes with calls.
+assertEq(abs(d.rem - d.quot), 1);
+
+print("ffi struct ok");

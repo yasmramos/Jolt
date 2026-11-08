@@ -1072,6 +1072,28 @@ void testExternBlock() {
       "fn g(): double { return h(2.0); }\n"
       "extern \"C\" {\n  fn h(x: double): double;\n}\n");
 
+  // `extern fn ...;` is sugar for a one-entry `extern "C"` block: both spellings
+  // compile to the same bytecode, so the single-line form adds no new path.
+  Bytecode single = compileSource("extern fn f(): int;\n");
+  assert(single.code.size() == block.code.size());
+  for (size_t i = 0; i < single.code.size(); ++i) {
+    assert(single.code[i].op == block.code[i].op);
+    assert(single.code[i].a == block.code[i].a);
+    assert(single.code[i].b == block.code[i].b);
+  }
+  // The single-line form hoists too, and a call is checked against it.
+  expectCompiles("fn g(): int { return h(2); }\nextern fn h(x: int): int;\n");
+
+  // A `string` parameter is a valid `const char *`, exactly like `cstring`.
+  expectCompiles("extern fn strlen(s: string): size_t;\nprint(strlen(\"hi\"));\n");
+  expectCompiles("extern \"C\" { fn puts(s: string): int; }\nputs(\"hi\");\n");
+  // A `string` is not a valid return type: C returns a `cstring`.
+  expectCompileError("extern fn f(): string;\n", "string return");
+  // The single-line form is module-level metadata and bodyless, like the block.
+  expectCompileError("fn g() { extern fn f(): int; }\n", "nested single extern");
+  expectCompileError("extern fn f(): int { return 1; }\n", "single extern body");
+  expectCompileError("extern 42;\n", "single extern without fn");
+
   // The FFI vocabulary is accepted inside a block, and a `void` result too.
   expectCompiles("extern \"C\" { fn free(p: ptr): void; }\nfree(nil);\n");
   expectCompiles("extern \"C\" { fn strlen(s: cstring): size_t; }\n");
@@ -1089,6 +1111,56 @@ void testExternBlock() {
   expectCompileError("extern \"C\" { let x = 1; }\n", "non-fn inside extern");
   expectCompileError("extern \"C\" { fn f(): int { return 1; } }\n", "extern body");
   expectCompileError("extern \"C${1}\" { fn f(): int; }\n", "interpolated ABI");
+}
+
+void testExternStructByValueIsAbiGated() {
+  // A struct by value crosses the C boundary only where the marshalling's ABI
+  // holds: the System V AMD64 register classification. On a target whose ABI
+  // passes a struct through memory (the Microsoft x64 ABI on Windows) the
+  // declaration is rejected at compile time instead of crashing at the call.
+  const char* source =
+      "struct Pair { a: int; b: int; }\n"
+      "extern \"C\" { fn f(p: Pair): int; }\n";
+  if (ffi::kStructByValueSupported) {
+    expectCompiles(source);
+  } else {
+    expectCompileError(source, "struct cannot cross the C boundary by value");
+  }
+}
+
+void testExternCallbackSignatureIsRecordedOnTheProto() {
+  // A callback parameter is recorded as an `isCallback` spec with its scalar
+  // parameter and return names, so the runtime can build the trampoline and the
+  // AOT backend (PHASE 7) can read the same shape off the proto to emit a
+  // compile-time stub. `void` is the default return when none is written.
+  Bytecode bc = compileSource(
+      "extern \"C\" {\n"
+      "  fn apply(f: fn(int, double): int, x: int): int;\n"
+      "  fn visit(f: fn(int): void): void;\n"
+      "}\n");
+  assert(bc.externs.size() == 2);
+
+  const ExternSymbol& apply = bc.externs[0];
+  assert(apply.name == "apply");
+  assert(apply.paramTypes.size() == 2);
+  assert(apply.paramTypes[0].isCallback);
+  assert(apply.paramTypes[0].callbackParams.size() == 2);
+  assert(apply.paramTypes[0].callbackParams[0] == "int");
+  assert(apply.paramTypes[0].callbackParams[1] == "double");
+  assert(apply.paramTypes[0].callbackReturn == "int");
+  assert(!apply.paramTypes[1].isCallback);
+
+  const ExternSymbol& visit = bc.externs[1];
+  assert(visit.paramTypes.size() == 1);
+  assert(visit.paramTypes[0].isCallback);
+  assert(visit.paramTypes[0].callbackParams.size() == 1);
+  assert(visit.paramTypes[0].callbackReturn == "void");
+
+  // A callback is a parameter only; as a return type it is rejected, and a
+  // non-scalar inside a callback signature too.
+  expectCompileError("extern \"C\" { fn get(): fn(int): int; }\n", "callback return type");
+  expectCompileError("extern \"C\" { fn apply(f: fn(map): int): int; }\n",
+                     "non-scalar callback parameter");
 }
 
 void testCyclicImportIsRejected() {
@@ -1197,6 +1269,8 @@ int main() {
   testVoidErrors();
   testFfiTypeVocabulary();
   testExternBlock();
+  testExternStructByValueIsAbiGated();
+  testExternCallbackSignatureIsRecordedOnTheProto();
   testCyclicImportIsRejected();
 
   std::puts("compiler tests passed");

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "ffi_types.h"
 #include "runtime.h"
 #include "value.h"
 
@@ -24,14 +25,14 @@ namespace ffi {
 // Builds the native function that stands in for a resolved `extern "C"` symbol.
 //
 // `address` is the resolved symbol; `paramTypes` and `returnType` are the
-// declared FFI type names, in order. The returned `Value` is a native ready to
-// be defined as a global. `Runtime::fail` is used for a wrong argument type or
-// arity, so a bad call is a clean runtime error, never a wild C call.
+// declared FFI types (a scalar or a resolved struct), in order. The returned
+// `Value` is a native ready to be defined as a global. `Runtime::fail` is used
+// for a wrong argument type or arity, so a bad call is a clean runtime error,
+// never a wild C call.
 //
 // The caller validates the signature with `ffi::validateSignature` first; a
 // signature that reaches here unsupported is a programming error.
 Value makeExternNative(Runtime& rt, const std::string& name, void* address,
-                       const std::vector<std::string>& paramTypes,
-                       const std::string& returnType);
+                       const std::vector<TypeSpec>& paramTypes, const TypeSpec& returnType);
 
 }  // namespace ffi

@@ -1,0 +1,5 @@
+// Test fixture: shadows the same path under tests/packages, proving the
+// resolver prefers the project directory over the packages root.
+fn greeting() {
+  return "from project";
+}

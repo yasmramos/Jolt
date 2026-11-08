@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A `string` is a valid `const char *` *parameter*, but not a return type: a C
+// function that returns text returns a `cstring` (an owned handle).
+extern fn f(): string;

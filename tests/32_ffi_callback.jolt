@@ -1,0 +1,62 @@
+// FFI callbacks (PHASE 6.6, slice C). A Jolt function is passed to C as a
+// function pointer; the development engine builds a trampoline (libffi) that C
+// calls back into the VM. The callback runs while the C function is on the
+// stack, so the trampoline is alive for the whole call.
+//
+// `qsort` is the canonical example: it takes a comparison callback and calls it
+// while it runs. The comparator receives two `ptr` arguments (addresses into the
+// array); it forwards them to `memcmp`, whose `ptr` arguments carry the real
+// address, so the comparison is done in C.
+
+extern "C" {
+  fn qsort(base: ptr, nmemb: size_t, size: size_t, compar: fn(ptr, ptr): int): void;
+  fn memcmp(a: ptr, b: ptr, n: size_t): int;
+}
+
+// A callback is declared as `fn(paramTypes): returnType`. Only scalar FFI types
+// are allowed in the signature.
+fn ascending(a: ptr, b: ptr): int {
+  return memcmp(a, b, 1);
+}
+
+let data = buffer(6);
+let values = [50, 10, 90, 30, 70, 20];
+for i in 0..6 {
+  storeByte(data, i, values[i]);
+}
+
+// The comparator is a Jolt function; qsort calls it through the trampoline.
+qsort(data, 6, 1, ascending);
+
+assertEq(loadByte(data, 0), 10);
+assertEq(loadByte(data, 1), 20);
+assertEq(loadByte(data, 2), 30);
+assertEq(loadByte(data, 3), 50);
+assertEq(loadByte(data, 4), 70);
+assertEq(loadByte(data, 5), 90);
+
+// A closure that captures state works too: the trampoline re-enters the VM, so
+// the callback sees its captured variables.
+let sign = -1;
+let descending = (a, b) => sign * memcmp(a, b, 1);
+qsort(data, 6, 1, descending);
+assertEq(loadByte(data, 0), 90);
+assertEq(loadByte(data, 5), 10);
+
+// `nil` is the NULL function pointer. Binding it to a callback-typed value is
+// allowed; passing it to C would hand C a null pointer.
+let maybe: fn(int): int = nil;
+assertEq(maybe, nil);
+
+// An error raised inside a callback cannot unwind through the C frame that
+// called the trampoline. The extern call captures it and re-raises it once C
+// returns, so `pcall` catches it like any other runtime error.
+fn boom(a: ptr, b: ptr): int {
+  panic("callback failed");
+}
+let caught = pcall(() => qsort(data, 6, 1, boom));
+assertEq(caught.ok, false);
+assertEq(caught.error.message, "callback failed");
+
+print("ffi callback ok");
+
