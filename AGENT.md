@@ -761,6 +761,10 @@ Without this checklist complete and approved, **do not proceed to code**.
 - ✅ Warn when a decision affects the future design (native compilation).
 - ❌ Do not add unrequested features (avoid scope creep).
 - ❌ Do not propose solutions outside the current phases.
+- ❌ Do not add an AI-attribution footer (or any "created by an AI agent"
+  note) to a pull request, its title or its description. The PR is authored
+  under the user's name and stays plain: no `Co-authored-by` trailer in
+  commits and no attribution line in the PR body either.
 
 ---
 
