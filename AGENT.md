@@ -478,8 +478,24 @@ previous one.
   No new opcode and no compiler-side ABI logic: the layout is the single source
   of truth in `ffi_types.h`, shared by the compiler and the runtime across the
   §2 boundary. See `docs/language.md` §4.6 and `tests/31_ffi_struct.jolt`.
-- **Remaining**: callbacks (a Jolt function passed to C as a function pointer)
-  are the last piece of the phase.
+- **Callbacks (done)** — a parameter typed `fn(P...): R` is a C function
+  pointer. `fn` is a keyword, so `parseTypeAnnotation` reads the signature
+  before the ordinary type-name path; the parameters and return are scalar FFI
+  names (a nested callback or a struct by value is out of scope). A callback is
+  only meaningful as a parameter: a callback return type is rejected at compile
+  time, as is a non-scalar callback parameter. In the development engine the
+  callback is a `libffi` closure (`ffi_closure_alloc`/`ffi_prep_closure_loc`):
+  the trampoline re-enters the VM through `Runtime::call`, boxing the C
+  arguments as Jolt values and writing the result back in the declared C type.
+  The closure lives in a reference-counted `CallbackObj` held for the whole
+  extern call, so the trampoline address stays valid while C runs (a callback C
+  stores for a later call is out of scope for this phase). An error raised
+  inside a callback cannot unwind through the C frame, so the extern call
+  captures it and re-raises it once C returns; `pcall` catches it like any other
+  runtime error. `nil` is the NULL function pointer. `libffi` is a
+  **development-engine-only** dependency (§5.1/§8): the AOT backend lowers
+  callbacks to compile-time stubs and never links it. See `docs/language.md`
+  §4.6 and `tests/32_ffi_callback.jolt`.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 

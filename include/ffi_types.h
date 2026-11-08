@@ -22,10 +22,11 @@ namespace ffi {
 
 // The register class a declared parameter maps to.
 enum class ParamClass {
-  Int,      // integer, bool or an unannotated/`any` parameter (GPR)
-  Pointer,  // `ptr`/`cstring` (GPR, but marshalled from a handle)
-  Float,    // C `float` (SSE)
-  Double,   // C `double` (SSE)
+  Int,       // integer, bool or an unannotated/`any` parameter (GPR)
+  Pointer,   // `ptr`/`cstring` (GPR, but marshalled from a handle)
+  Float,     // C `float` (SSE)
+  Double,    // C `double` (SSE)
+  Callback,  // `fn(...): R` (GPR, the trampoline address of a Jolt function)
 };
 
 // The class of a declared return type. `Void` produces no value; `Ptr` and
@@ -274,13 +275,14 @@ inline std::string validateTypeSpec(const TypeSpec& spec, bool isReturn) {
       // A callback parameter is a scalar; a nested callback or a struct by
       // value in a callback signature is out of scope.
       if (!classifyParam(param, ignored)) {
-        return "callback parameter type " + unsupportedTypeMessage(param, false);
+        return "callback parameter type '" + (param.empty() ? "unannotated" : param) +
+               "' cannot cross the C boundary";
       }
     }
     if (!spec.callbackReturn.empty() && spec.callbackReturn != "void") {
       ReturnClass ignored;
       if (!classifyReturn(spec.callbackReturn, ignored)) {
-        return "callback " + unsupportedTypeMessage(spec.callbackReturn, true);
+        return "callback return type '" + spec.callbackReturn + "' cannot cross the C boundary";
       }
     }
     return "";

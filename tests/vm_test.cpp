@@ -1412,6 +1412,16 @@ extern "C" double joltTestMixMagnitude(JoltMixed m) { return m.a + m.b; }
 extern "C" struct JoltTwoBytes { char a; char b; };
 extern "C" JoltTwoBytes joltTestMakeTwoBytes(char a, char b) { return JoltTwoBytes{a, b}; }
 
+// C functions that call a Jolt callback, one per ABI shape: a GPR argument and
+// return, an SSE argument and return, and a `void` callback.
+extern "C" int joltTestApply(int (*f)(int), int x) { return f(x); }
+extern "C" double joltTestApplyDouble(double (*f)(double), double x) { return f(x); }
+extern "C" int joltTestApplyTwice(int (*f)(int), int x) { return f(x) + f(x); }
+extern "C" int joltTestApplyVoid(void (*f)(int), int x) {
+  f(x);
+  return x;
+}
+
 // A host that resolves the symbols above. Everything else behaves like the
 // dev platform (writes go to captured strings, so a test can read them).
 struct SymbolPlatform final : Platform {
@@ -1446,6 +1456,10 @@ struct SymbolPlatform final : Platform {
     if (symbol == "joltTestScalePair") return reinterpret_cast<void*>(&joltTestScalePair);
     if (symbol == "joltTestMixMagnitude") return reinterpret_cast<void*>(&joltTestMixMagnitude);
     if (symbol == "joltTestMakeTwoBytes") return reinterpret_cast<void*>(&joltTestMakeTwoBytes);
+    if (symbol == "joltTestApply") return reinterpret_cast<void*>(&joltTestApply);
+    if (symbol == "joltTestApplyDouble") return reinterpret_cast<void*>(&joltTestApplyDouble);
+    if (symbol == "joltTestApplyTwice") return reinterpret_cast<void*>(&joltTestApplyTwice);
+    if (symbol == "joltTestApplyVoid") return reinterpret_cast<void*>(&joltTestApplyVoid);
     return nullptr;
   }
 };
@@ -1607,6 +1621,67 @@ void testExternMarshalsSubEightbyteStruct() {
       "print(t.b);\n");
   assert(out == "65\n66\n");
 }
+
+#ifdef JOLT_HAVE_LIBFFI
+void testExternCallbackGprShape() {
+  TEST_SCOPE();
+  // The callback is a Jolt function; C calls it through a libffi trampoline that
+  // re-enters the VM with the C argument boxed as a Jolt value.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApply(f: fn(int): int, x: int): int; }\n"
+      "fn inc(v: int): int { return v + 1; }\n"
+      "print(joltTestApply(inc, 41));\n");
+  assert(out == "42\n");
+}
+
+void testExternCallbackSseShape() {
+  TEST_SCOPE();
+  // A `double` callback argument and return travel through SSE registers; the
+  // trampoline boxes and writes them as `double`, not as a general-purpose word.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApplyDouble(f: fn(double): double, x: double): double; }\n"
+      "fn twice(v: double): double { return v * 2.0; }\n"
+      "print(joltTestApplyDouble(twice, 21.0));\n");
+  assert(out == "42\n");
+}
+
+void testExternCallbackVoidReturnAndClosure() {
+  TEST_SCOPE();
+  // A `void` callback writes no return value, and a closure works: the
+  // trampoline re-enters the VM, so the callback sees its captured variable.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApplyVoid(f: fn(int): void, x: int): int; }\n"
+      "var seen = 0;\n"
+      "let record = (v) => { seen = v; };\n"
+      "print(joltTestApplyVoid(record, 7));\n"
+      "print(seen);\n");
+  assert(out == "7\n7\n");
+}
+
+void testExternCallbackInvokedRepeatedly() {
+  TEST_SCOPE();
+  // C calls the same trampoline twice within one extern call: the closure must
+  // stay valid for the whole call, not just the first entry.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApplyTwice(f: fn(int): int, x: int): int; }\n"
+      "fn inc(v: int): int { return v + 1; }\n"
+      "print(joltTestApplyTwice(inc, 10));\n");
+  assert(out == "22\n");
+}
+
+void testExternCallbackErrorIsReraisedAfterCReturns() {
+  TEST_SCOPE();
+  // A Jolt error inside the callback cannot unwind through the C frame, so the
+  // extern call captures it and re-raises it once C returns; `pcall` catches it.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestApply(f: fn(int): int, x: int): int; }\n"
+      "fn boom(v: int): int { panic(\"callback failed\"); }\n"
+      "let r = pcall(() => joltTestApply(boom, 1));\n"
+      "print(r.ok);\n"
+      "print(r.error.message);\n");
+  assert(out == "false\ncallback failed\n");
+}
+#endif  // JOLT_HAVE_LIBFFI
 
 void testExternRejectsLargeStructAtCompileTime() {
   TEST_SCOPE();
@@ -1783,6 +1858,13 @@ int main() {
   testExternMarshalsMixedStructArgument();
   testExternMarshalsStructArgumentAndReturnTogether();
   testExternMarshalsSubEightbyteStruct();
+#ifdef JOLT_HAVE_LIBFFI
+  testExternCallbackGprShape();
+  testExternCallbackSseShape();
+  testExternCallbackVoidReturnAndClosure();
+  testExternCallbackInvokedRepeatedly();
+  testExternCallbackErrorIsReraisedAfterCReturns();
+#endif
   testExternRejectsLargeStructAtCompileTime();
   testExternRejectsNonScalarStructFieldAtCompileTime();
   testExternMissingSymbolIsAClearRuntimeError();
