@@ -84,6 +84,13 @@ struct TypeSpec {
   std::string scalarType;  // scalar spelling when `isStruct` is false ("" = int)
   bool isStruct = false;
   std::vector<FfiField> fields;  // struct shape when `isStruct` is true
+  // Callback (PHASE 6.6): a C function pointer. `isCallback` marks it; the
+  // signature is stored as scalar type names (a callback parameter cannot
+  // itself be a callback or a struct, so no recursion is needed). A callback
+  // crosses the ABI as one GPR (the trampoline address).
+  bool isCallback = false;
+  std::vector<std::string> callbackParams;
+  std::string callbackReturn;  // "void" for a callback that returns nothing
 };
 
 // Byte size, alignment and register class of a scalar field type. Returns false
@@ -255,6 +262,29 @@ inline StructShape structShapeOf(const StructLayout& layout) {
 // the problem. A scalar goes through `classifyParam`/`classifyReturn`; a struct
 // must have a layout `buildStructLayout` accepts.
 inline std::string validateTypeSpec(const TypeSpec& spec, bool isReturn) {
+  if (spec.isCallback) {
+    // A callback is a C function pointer. It crosses the ABI as one GPR, so it
+    // is only meaningful as a parameter: a C function that *returns* a
+    // function pointer is not part of the surface this phase supports.
+    if (isReturn) {
+      return "a callback cannot be a return type";
+    }
+    for (const std::string& param : spec.callbackParams) {
+      ParamClass ignored;
+      // A callback parameter is a scalar; a nested callback or a struct by
+      // value in a callback signature is out of scope.
+      if (!classifyParam(param, ignored)) {
+        return "callback parameter type " + unsupportedTypeMessage(param, false);
+      }
+    }
+    if (!spec.callbackReturn.empty() && spec.callbackReturn != "void") {
+      ReturnClass ignored;
+      if (!classifyReturn(spec.callbackReturn, ignored)) {
+        return "callback " + unsupportedTypeMessage(spec.callbackReturn, true);
+      }
+    }
+    return "";
+  }
   if (!spec.isStruct) {
     if (isReturn) {
       ReturnClass ignored;

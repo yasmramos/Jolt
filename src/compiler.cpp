@@ -374,11 +374,18 @@ void Compiler::checkAssignable(const TypeRef& from, const TypeRef& to,
   // the FFI pointer types, so it is assignable to `ptr`/`cstring` even when the
   // annotation is not written nullable (`native fn free(p: ptr); free(nil);`).
   if (from.name == "nil") {
-    if (to.nullable || isPointerTypeName(to.name)) return;
+    if (to.nullable || isPointerTypeName(to.name) || to.isCallback()) return;
     fail("cannot assign 'nil' to '" + describeType(to) + "' in " + context +
              ": a nullable value is not allowed here (use '" + to.name + "?')",
          line, col);
   }
+
+  // A Jolt function is the value behind a callback (`fn(int, int): int`): any
+  // function is accepted, because the trampoline marshals the arguments at run
+  // time against the declared signature. The exact arity/types are checked when
+  // the callback is invoked, not here.
+  if (to.isCallback() && from.name == "function") return;
+  if (from.isCallback() && to.name == "function") return;
 
   if (from.name == to.name) {
     // Same type; a nullable value does not fit a non-nullable slot unless the
@@ -1493,9 +1500,9 @@ void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int co
     std::vector<ffi::TypeSpec> paramTypes;
     paramTypes.reserve(fn.params.size());
     for (const Param& param : fn.params) {
-      paramTypes.push_back(resolveTypeSpec(param.type.name));
+      paramTypes.push_back(resolveTypeSpec(param.type));
     }
-    const ffi::TypeSpec returnType = resolveTypeSpec(fn.returnType.name);
+    const ffi::TypeSpec returnType = resolveTypeSpec(fn.returnType);
     std::string problem = ffi::validateSignature(paramTypes, returnType);
     if (!problem.empty()) {
       fail("extern \"C\" function '" + fn.name + "': " + problem, line, col);
@@ -1507,12 +1514,20 @@ void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int co
   }
 }
 
-// Resolves an `extern "C"` parameter/return type name to a `TypeSpec`: a struct
+// Resolves an `extern "C"` parameter/return type to a `TypeSpec`: a struct
 // name becomes its field list (a nested struct is rejected by the FFI layout),
-// anything else stays a scalar. The compiler only looks names up in
-// `structDefs_`; the ABI decision lives in `ffi_types.h`.
-ffi::TypeSpec Compiler::resolveTypeSpec(const std::string& typeName) {
+// a callback signature becomes a function-pointer spec, and anything else
+// stays a scalar. The compiler only looks names up in `structDefs_`; the ABI
+// decision lives in `ffi_types.h`.
+ffi::TypeSpec Compiler::resolveTypeSpec(const TypeRef& type) {
   ffi::TypeSpec spec;
+  if (type.isCallback()) {
+    spec.isCallback = true;
+    spec.callbackParams = type.callbackParams;
+    spec.callbackReturn = type.callbackReturn.empty() ? "void" : type.callbackReturn;
+    return spec;
+  }
+  const std::string& typeName = type.name;
   auto definition = structDefs_.find(typeName);
   if (typeName.empty() || definition == structDefs_.end()) {
     spec.scalarType = typeName;

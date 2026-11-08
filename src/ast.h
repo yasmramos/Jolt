@@ -29,7 +29,15 @@ struct TypeRef {
   std::string name;
   bool nullable = false;
 
+  // Callback signature (PHASE 6.6): when `name == "fn"`, the parameter and
+  // return type names of a C function pointer. Only scalar FFI types are
+  // allowed (no nested callback, no struct by value), so the signature is
+  // stored as plain names instead of a recursive `TypeRef`.
+  std::vector<std::string> callbackParams = {};
+  std::string callbackReturn = "";  // "void" for a callback that returns nothing
+
   bool isPresent() const { return !name.empty(); }
+  bool isCallback() const { return name == "fn"; }
 };
 
 // One function parameter: a name plus an optional type annotation
@@ -80,9 +88,20 @@ inline bool isIntegerTypeName(const std::string& name) {
          name == "uint64" || name == "uint" || name == "size_t";
 }
 
-// Human-readable form of a type for diagnostics: `int`, `string?`, `any`.
+// Human-readable form of a type for diagnostics: `int`, `string?`, `any`,
+// `fn(int, int): int` for a callback signature.
 inline std::string describeType(const TypeRef& type) {
   if (!type.isPresent()) return "any";
+  if (type.isCallback()) {
+    std::string out = "fn(";
+    for (std::size_t i = 0; i < type.callbackParams.size(); ++i) {
+      if (i != 0) out += ", ";
+      out += type.callbackParams[i];
+    }
+    out += "): ";
+    out += type.callbackReturn.empty() ? "void" : type.callbackReturn;
+    return out;
+  }
   return type.nullable ? type.name + "?" : type.name;
 }
 
