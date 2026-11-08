@@ -944,22 +944,32 @@ StmtPtr Parser::parseFor() {
   // `for-in` accepts an optional pair of parentheses around the loop variable
   // and the iterable: `for x in xs` and `for (x in xs)` are the same. The
   // parenthesized form is told apart from a classic `for` by the lookahead
-  // `( IDENT in`, which a classic header (`( init; cond; step )`) never starts
-  // with: an initializer is a declaration, an assignment or an expression, none
-  // of which is a bare identifier followed by `in`.
+  // `( IDENT in` (or `( IDENT , IDENT in` for the key/value form), which a
+  // classic header (`( init; cond; step )`) never starts with: an initializer
+  // is a declaration, an assignment or an expression, none of which is a bare
+  // identifier followed by `in`.
   const bool parenthesizedForIn =
-      check(Tok::LParen) && peek(1).type == Tok::Ident && peek(2).type == Tok::In;
+      check(Tok::LParen) && peek(1).type == Tok::Ident &&
+      (peek(2).type == Tok::In ||
+       (peek(2).type == Tok::Comma && peek(3).type == Tok::Ident && peek(4).type == Tok::In));
 
   if (parenthesizedForIn || !check(Tok::LParen)) {
     if (parenthesizedForIn) consume(Tok::LParen, "expected '(' after 'for'");
     const Token& var = consume(Tok::Ident, "expected a loop variable or '(' after 'for'");
+    // `for k, v in map`: an optional second identifier binds the value of each
+    // pair, so the loop walks a map as key/value entries. Only meaningful for
+    // maps; the compiler reports a clear error for the other iterables.
+    std::string valueVar;
+    if (match(Tok::Comma)) {
+      valueVar = consume(Tok::Ident, "expected a second loop variable after ','").lexeme;
+    }
     consume(Tok::In, "expected 'in' in the for-in loop");
     auto iterable = parseExpression();
     if (parenthesizedForIn) consume(Tok::RParen, "expected ')' after the for-in iterable");
     auto body = parseBody();
     match(Tok::Semicolon);
-    return makeStmt(ForInStmt{var.lexeme, std::move(iterable), std::move(body)}, keyword.line,
-                    keyword.col);
+    return makeStmt(ForInStmt{var.lexeme, std::move(valueVar), std::move(iterable), std::move(body)},
+                    keyword.line, keyword.col);
   }
 
   consume(Tok::LParen, "expected '(' after 'for'");

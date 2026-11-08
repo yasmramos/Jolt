@@ -2073,6 +2073,17 @@ void Compiler::compileForIn(const ForInStmt& s) {
   int slot = declareLocal(s.var, false);
   emit(OpCode::DECLLOCAL, item, slot);
 
+  // `for k, v in map`: the first variable holds the key that ITER produced and
+  // the second holds the paired value, read through the `$mapValue` helper
+  // (which also rejects a non-map iterable with a clear message). No new
+  // opcode: the helper is an ordinary host native.
+  if (!s.valueVar.empty()) {
+    int value = compileHelperCall("$mapValue", {iterable, item}, s.iterable->line, s.iterable->col);
+    int valueSlot = declareLocal(s.valueVar, false);
+    emit(OpCode::DECLLOCAL, value, valueSlot);
+    freeReg();
+  }
+
   loops_.push_back(Loop{});
   // `for-in` compiles the body inline in the loop-variable scope, so that
   // scope (the current one) is the depth `break`/`continue` unwind to.
