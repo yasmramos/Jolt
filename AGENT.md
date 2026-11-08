@@ -417,7 +417,9 @@ previous one.
 
 - `extern "C" { ... }` blocks.
 - Compile-time stubs (like Zig/Rust).
-- **No `libffi`**.
+- **No `libffi` in the AOT backend.** The development engine (`jolt`) may use
+  libffi for callbacks; the freestanding AOT runtime never does (callbacks are
+  compile-time stubs there).
 - Support for ints, floats, strings, structs, callbacks.
 - **FFI type vocabulary (done)** — the type names needed to *spell* a C
   signature: `ptr` (`void *`), `cstring` (`const char *`), the fixed-width
@@ -454,7 +456,9 @@ previous one.
   block is module-level metadata (nesting it is a compile error). The engine
   resolves each declared name through `Platform::lookupSymbol` and binds it to a
   marshalling native that passes the arguments and reads the result across the
-  System V AMD64 ABI **without `libffi`**: integers, bools and pointers in
+  System V AMD64 ABI **without `libffi`** (the scalar/struct call path uses
+  compile-time thunks; only callbacks use libffi, and only in the development
+  engine): integers, bools and pointers in
   general-purpose registers, `float`/`double` in SSE registers, and the result
   read back at the exact declared width. See `docs/language.md` §4.6 and
   `tests/29_extern_c.jolt`.
@@ -661,8 +665,12 @@ parity gate and is deleted in PHASE 4.
 ## 5. Code rules
 
 1. **Pure C++17**, no external dependencies **except optional AsmJIT** (for
-   JIT) and **optional ELFIO** (for ELF emitter). The AOT product (`joltc`)
-   uses AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight.
+   JIT), **optional ELFIO** (for ELF emitter) and **optional libffi** (for FFI
+   callbacks, **development engine only**). The AOT product (`joltc`) uses
+   AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight. libffi
+   is never linked into an AOT product: the freestanding backend lowers
+   callbacks to compile-time stubs, so the end-user binary stays dependency
+   free.
 2. **Names**: `camelCase` for functions, variables and members (private data
    members end with `_`), `PascalCase` for types, `UPPER_CASE` for opcodes
    and constants.
@@ -732,16 +740,16 @@ Without this checklist complete and approved, **do not proceed to code**.
 | Migrating the core to pure C | The core stays in C++17 |
 | Adding features without testing the previous one | Breaks incremental development |
 | Skipping the 7-point checklist | Creates architectural debt |
-| **External libraries beyond AsmJIT/ELFIO** | AsmJIT and ELFIO are the only allowed dependencies |
+| **External libraries beyond AsmJIT/ELFIO/libffi** | AsmJIT, ELFIO and libffi are the only allowed dependencies (libffi is development-engine only) |
 | Superinstructions | Violate the 40-opcode ceiling |
 | Inline caching | Changes the bytecode contract |
 | Runtime specialization | Changes the bytecode contract |
 | `async`/`await`, generics, full pattern matching, generators, transactions | Out of scope |
 
-**Note**: AsmJIT and ELFIO are **optional** dependencies. The AOT product
-(`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
-development VM (`jolt`) may use AsmJIT JIT. **The end-user binary (`hello.exe`)
-contains neither.**
+**Note**: AsmJIT, ELFIO and libffi are **optional** dependencies. The AOT
+product (`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
+development VM (`jolt`) may use AsmJIT JIT and libffi (callbacks). **The
+end-user binary (`hello.exe`) contains none of them.**
 
 ---
 

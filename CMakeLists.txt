@@ -45,6 +45,32 @@ target_compile_options(jolt_lib PRIVATE ${JOLT_WARNINGS})
 # Windows), so linking it unconditionally is safe and portable.
 target_link_libraries(jolt_lib PUBLIC ${CMAKE_DL_LIBS})
 
+# --------------------------------------------------------------------------- libffi (optional)
+# FFI callbacks (PHASE 6.6) need a trampoline that C can call back into the VM.
+# The development engine uses libffi for that; the AOT backend lowers callbacks
+# to compile-time stubs and never links libffi (AGENT.md §5.1/§6.6). The build
+# stays green without libffi: `JOLT_HAVE_LIBFFI` is only defined when found, and
+# the callback path is compiled out otherwise (a clear runtime error instead).
+#
+# There is no FindLibFFI module and pkg-config may be absent, so probe the
+# library and the header directly. The header lives under the multiarch dir on
+# Debian/Ubuntu (/usr/include/<triplet>/ffi.h), so that path is hinted too.
+option(JOLT_ENABLE_LIBFFI "Use libffi for FFI callbacks in the dev engine" ON)
+if(JOLT_ENABLE_LIBFFI)
+  find_library(FFI_LIBRARY NAMES ffi libffi)
+  find_path(FFI_INCLUDE_DIR NAMES ffi.h
+    PATH_SUFFIXES ${CMAKE_LIBRARY_ARCHITECTURE}
+    PATHS /usr/include /usr/local/include)
+  if(FFI_LIBRARY AND FFI_INCLUDE_DIR)
+    target_include_directories(jolt_lib PRIVATE ${FFI_INCLUDE_DIR})
+    target_link_libraries(jolt_lib PUBLIC ${FFI_LIBRARY})
+    target_compile_definitions(jolt_lib PUBLIC JOLT_HAVE_LIBFFI)
+    message(STATUS "libffi found: FFI callbacks enabled in the dev engine")
+  else()
+    message(STATUS "libffi not found: FFI callbacks disabled (set JOLT_ENABLE_LIBFFI=OFF to silence)")
+  endif()
+endif()
+
 # --------------------------------------------------------------------------- main binary
 add_executable(jolt "${JOLT_MAIN}")
 target_link_libraries(jolt PRIVATE jolt_lib)
