@@ -435,6 +435,39 @@ A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a `ptr`
 argument accepts `nil` (NULL) and an owned `cstring`/buffer, whose bytes are the
 address the C callee receives.
 
+**Structs by value.** A `struct` (see §4.7) can also cross the C boundary, both
+as a parameter and as a return value. A struct is a map at runtime, so the
+compiler records its field layout from the declaration and the marshalling
+moves the bytes across the ABI in registers:
+
+```jolt
+struct DivResult {
+  quot: int32;
+  rem: int32;
+}
+extern "C" {
+  fn div(numerator: int, denominator: int): DivResult;
+}
+
+let d = div(17, 5);
+print(d.quot);   // 3
+print(d.rem);    // 2
+```
+
+The ABI classifies a small struct as up to two **eightbytes**, each INTEGER (a
+general-purpose register) or SSE (an xmm register); a `{int; int}` struct comes
+back wholly in `rax`, a `{double; double}` in `xmm0`/`xmm1`, and a mixed
+`{int; double}` in `rax` + `xmm0`. A struct argument is flattened to the same
+eightbytes and passed in the registers the ABI assigns it, so the callee reads
+back the exact bytes of the struct.
+
+Only structs of **16 bytes or fewer** are supported (the register case). A
+larger struct is passed in memory, a shape the register marshalling cannot
+express, so the declaration is rejected at compile time with a clear message
+instead of a wrong call. A struct field must be an FFI scalar type (an integer,
+`float`/`double`, `ptr`/`cstring` or `bool`); a nested struct field is rejected
+for the same reason.
+
 **Local inference.** With no annotation, the compiler infers the type from the
 initializer when it is a literal or another typed binding, and then checks
 later assignments against it:

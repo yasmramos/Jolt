@@ -365,8 +365,10 @@ previous one.
   compile error rather than a stack overflow. A module's own imports are
   private to it: a namespace, alias or wildcard name it creates never reaches
   the importing program's globals, and never collides with the importer's own
-  wildcard bindings. `require` (Lua-style) is **dropped**: `import` is the only
-  module form.
+  wildcard bindings. Resolution tries the project directory first, then the
+  packages root (`$JOLT_PACKAGES`, else `~/.jolt/packages`), so a project module
+  shadows an installed package of the same path. `require` (Lua-style) is
+  **dropped**: `import` is the only module form.
 - **`struct`** (data only, no methods) — **done**: a named, module-level map
   shape with optional field types. The declaration emits no bytecode and adds
   no opcode; a `Point { x: 1, y: 2 }` literal is checked against the
@@ -440,17 +442,38 @@ previous one.
   ordinary host natives. The AOT backend (PHASE 7) lowers the same handles to
   real C pointers. See `docs/language.md` §4.6, `tests/30_ffi_ptr.jolt` and
   `tests/value_test.cpp`.
-- **`extern "C"` blocks (declaration half, done)** — `extern "C" { fn ...; }`
+- **`extern "C"` blocks and marshalling (done)** — `extern "C" { fn ...; }`
   declares C functions. The ABI is a plain string literal and only `"C"` is
   accepted. Each entry is a bodyless `fn ...;` stored as a `FnDeclStmt` with
   `isNative`, so it follows exactly the `native fn` path: the name binds to the
   host function of the same name and the signature is checked at the call site.
   The block emits no bytecode (a block compiles to the bytecode of the
   equivalent `native fn` declarations), the declarations are hoisted, and the
-  block is module-level metadata (nesting it is a compile error). Binding a
-  declaration to a real C symbol — lowering the call to a real `extern` symbol
-  rather than a host builtin of the same name — is the remaining part of the
-  phase. See `docs/language.md` §4.6 and `tests/29_extern_c.jolt`.
+  block is module-level metadata (nesting it is a compile error). The engine
+  resolves each declared name through `Platform::lookupSymbol` and binds it to a
+  marshalling native that passes the arguments and reads the result across the
+  System V AMD64 ABI **without `libffi`**: integers, bools and pointers in
+  general-purpose registers, `float`/`double` in SSE registers, and the result
+  read back at the exact declared width. See `docs/language.md` §4.6 and
+  `tests/29_extern_c.jolt`.
+- **Structs by value (done)** — a `struct` (see §4.7) crosses the C boundary as
+  a parameter and as a return value. The compiler resolves the struct's fields
+  from its declaration into a `ffi::TypeSpec` on the proto's `ExternSymbol`, and
+  `ffi_types.h` computes the C layout (natural alignment, field offsets) and the
+  System V classification into up to two eightbytes, each INTEGER (a GPR) or SSE
+  (an xmm register). A struct argument is flattened to those eightbytes and
+  passed in the registers the ABI assigns them (an INTEGER eightbyte as an
+  `int64_t`, an SSE eightbyte as a `double`, both bit-for-bit), so the callee
+  reads back the exact bytes; a struct return is captured through a fixed POD
+  whose members land in `rax`/`rdx`/`xmm0`/`xmm1` and rebuilt as a map. Only
+  structs of **16 bytes or fewer** are supported: a larger one is class MEMORY
+  (passed on the stack), which the register thunks cannot express, so the
+  declaration is rejected at compile time, as is a nested (non-scalar) field.
+  No new opcode and no compiler-side ABI logic: the layout is the single source
+  of truth in `ffi_types.h`, shared by the compiler and the runtime across the
+  §2 boundary. See `docs/language.md` §4.6 and `tests/31_ffi_struct.jolt`.
+- **Remaining**: callbacks (a Jolt function passed to C as a function pointer)
+  are the last piece of the phase.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 
@@ -616,7 +639,7 @@ Phase 4: ⬜ pending (VM as the dev engine; requires PHASE 6)
 Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
-Phase 6.6: 🔶 in progress (FFI type vocabulary + `extern "C"` declaration half)
+Phase 6.6: 🔶 in progress (type vocabulary, `extern "C"` declarations + marshalling, pointers and structs by value done; callbacks pending)
 Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type and 6.7.3 `try`/`catch` done; 6.7.4 unions, 6.7.5 `@mustUse` pending)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, modules, package manager, VM embedded)

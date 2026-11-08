@@ -1490,10 +1490,12 @@ void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int co
                     [](const Param& p) { return p.variadic; })) {
       fail("extern \"C\" function '" + fn.name + "' cannot be variadic", line, col);
     }
-    std::vector<std::string> paramTypes;
+    std::vector<ffi::TypeSpec> paramTypes;
     paramTypes.reserve(fn.params.size());
-    for (const Param& param : fn.params) paramTypes.push_back(param.type.name);
-    const std::string returnType = fn.returnType.name;
+    for (const Param& param : fn.params) {
+      paramTypes.push_back(resolveTypeSpec(param.type.name));
+    }
+    const ffi::TypeSpec returnType = resolveTypeSpec(fn.returnType.name);
     std::string problem = ffi::validateSignature(paramTypes, returnType);
     if (!problem.empty()) {
       fail("extern \"C\" function '" + fn.name + "': " + problem, line, col);
@@ -1503,6 +1505,24 @@ void Compiler::compileExternBlock(const ExternBlockStmt& block, int line, int co
     bc_.externs.push_back(ExternSymbol{fn.name, std::move(paramTypes), returnType});
     compileFnDecl(fn, line, col);
   }
+}
+
+// Resolves an `extern "C"` parameter/return type name to a `TypeSpec`: a struct
+// name becomes its field list (a nested struct is rejected by the FFI layout),
+// anything else stays a scalar. The compiler only looks names up in
+// `structDefs_`; the ABI decision lives in `ffi_types.h`.
+ffi::TypeSpec Compiler::resolveTypeSpec(const std::string& typeName) {
+  ffi::TypeSpec spec;
+  auto definition = structDefs_.find(typeName);
+  if (typeName.empty() || definition == structDefs_.end()) {
+    spec.scalarType = typeName;
+    return spec;
+  }
+  spec.isStruct = true;
+  for (const StructField& field : definition->second) {
+    spec.fields.push_back(ffi::FfiField{field.name, field.type.name});
+  }
+  return spec;
 }
 
 void Compiler::compileReturn(const ReturnStmt& stmt) {

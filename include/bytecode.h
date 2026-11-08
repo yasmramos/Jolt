@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "ffi_types.h"
 #include "value.h"
 
 // <windows.h> defines `IN` as a macro (the input-control parameter annotation),
@@ -145,12 +146,14 @@ struct UpvalDesc {
 // proto starts. The AOT backend (PHASE 7) reads the same entries to emit the
 // relocations of the generated binary.
 struct ExternSymbol {
-  std::string name;                     // the C symbol, e.g. "strlen"
-  std::vector<std::string> paramTypes;  // one type name per parameter, in order
-  // The declared return type, or an empty string when it was not annotated
-  // (which the FFI marshalling reads as C's implicit `int`). `void` is stored
-  // literally.
-  std::string returnType;
+  std::string name;  // the C symbol, e.g. "strlen"
+  // One resolved spec per parameter, in order. A spec is a scalar or a struct
+  // (its fields), so the runtime knows the exact register shape to marshal.
+  std::vector<ffi::TypeSpec> paramTypes;
+  // The resolved return spec. A scalar spec with an empty `scalarType` means
+  // the declaration had no annotation, which the FFI marshalling reads as C's
+  // implicit `int`; `void` is stored literally.
+  ffi::TypeSpec returnType;
 };
 
 // A function prototype. The root chunk is the `<main>` proto and nested
