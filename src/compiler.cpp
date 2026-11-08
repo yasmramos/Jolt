@@ -2622,22 +2622,18 @@ int Compiler::compileRange(const RangeExpr& range, int line, int col) {
 int Compiler::compileSlice(const SliceExpr& slice, int line, int col) {
   int object = compileExpr(*slice.object);
   // An omitted bound is passed as nil; the `$slice` helper treats nil as
-  // "from the start" / "to the end", so the helper has one fixed arity.
-  int start;
-  if (slice.start) {
-    start = compileExpr(*slice.start);
-  } else {
-    start = allocReg();
-    emit(OpCode::LOADK, start, addConstant(Value()));
-  }
-  int end;
-  if (slice.end) {
-    end = compileExpr(*slice.end);
-  } else {
-    end = allocReg();
-    emit(OpCode::LOADK, end, addConstant(Value()));
-  }
-  int result = compileHelperCall("$slice", {object, start, end}, line, col);
+  // "from the start" / "to the end" / "step 1", so the helper has one fixed
+  // arity.
+  auto operand = [&](const ExprPtr& expr) -> int {
+    if (expr) return compileExpr(*expr);
+    int reg = allocReg();
+    emit(OpCode::LOADK, reg, addConstant(Value()));
+    return reg;
+  };
+  int start = operand(slice.start);
+  int end = operand(slice.end);
+  int step = operand(slice.step);
+  int result = compileHelperCall("$slice", {object, start, end, step}, line, col);
   emit(OpCode::MOVE, object, result);
   freeReg(nextReg_ - object - 1);
   return object;

@@ -1,0 +1,5 @@
+// expect-exit: 70
+// A zero step is a runtime error (it would never advance).
+
+let a = [1, 2, 3, 4];
+print(a[::0]);

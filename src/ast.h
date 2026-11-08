@@ -249,13 +249,15 @@ struct IndexExpr {
 // `obj[start:end]` (slicing syntax): a half-open copy `[start, end)`. Either
 // bound may be omitted (`obj[:]`, `obj[1:]`, `obj[:3]`), which is represented
 // as a null `start`/`end`; a negative bound counts from the end and is clamped
-// to the valid range, exactly like the `slice`/`substr` methods. It is
-// read-only (not an assignment target) and compiles to one `$slice` helper
-// call, so it adds no opcode.
+// to the valid range, exactly like the `slice`/`substr` methods. An optional
+// `step` (`obj[start:end:step]`) selects every `step`-th element and may be
+// negative to walk backwards. It is read-only (not an assignment target) and
+// compiles to one `$slice` helper call, so it adds no opcode.
 struct SliceExpr {
   ExprPtr object;
   ExprPtr start;
   ExprPtr end;
+  ExprPtr step;
 };
 
 struct MemberExpr {

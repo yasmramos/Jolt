@@ -1,0 +1,76 @@
+// Slice step `obj[start:end:step]` for arrays and strings (PHASE 6.5).
+//
+// The step selects every `step`-th element; a negative step walks backwards.
+// The bounds follow Python's slice rule: with a positive step the defaults are
+// the start and the end of the sequence, with a negative step they are the end
+// and before the start, so `[::-1]` reverses. A zero step is a runtime error.
+
+// --- arrays: positive step -------------------------------------------------
+
+let a = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+assertEq(a[::2], [0, 2, 4, 6, 8]);
+assertEq(a[1::2], [1, 3, 5, 7, 9]);
+assertEq(a[1:8:2], [1, 3, 5, 7]);
+assertEq(a[::3], [0, 3, 6, 9]);
+assertEq(a[2:8:3], [2, 5]);
+
+// A step of 1 is the same as no step.
+assertEq(a[2:6:1], a[2:6]);
+
+// A step larger than the sequence keeps only the first selected element.
+assertEq(a[::100], [0]);
+assertEq(a[3::100], [3]);
+
+// --- arrays: negative step (reverse) ---------------------------------------
+
+assertEq(a[::-1], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]);
+assertEq(a[::-2], [9, 7, 5, 3, 1]);
+assertEq(a[8:2:-2], [8, 6, 4]);
+assertEq(a[100::-1], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]);
+
+// A negative step with a start/end that do not move yields an empty result.
+assertEq(a[2:8:-1], []);
+
+// --- arrays: the step composes with the other forms ------------------------
+
+assertEq(a[-3::1], [7, 8, 9]);
+assertEq(a[:-7:2], [0, 2]);
+assertEq(a[::1], a);
+assertEq(a[::-1][0], 9);
+
+// The step is an arbitrary expression.
+let s2 = 2;
+assertEq(a[::s2], [0, 2, 4, 6, 8]);
+assertEq(a[::1 + 1], [0, 2, 4, 6, 8]);
+
+// --- strings slice by UTF-8 character, step included -----------------------
+
+let s = "hello";
+assertEq(s[::2], "hlo");
+assertEq(s[::-1], "olleh");
+assertEq(s[1:4:2], "el");
+assertEq(s[::-2], "olh");
+
+let u = "aé😀b";
+assertEq(u[::-1], "b😀éa");
+assertEq(u[::2], "a😀");
+
+// --- a slice is a copy, never a view ---------------------------------------
+
+let src = [1, 2, 3, 4];
+let rev = src[::-1];
+rev[0] = 99;
+assertEq(src, [1, 2, 3, 4]);
+
+// --- errors ----------------------------------------------------------------
+
+// A non-integer step is a runtime error.
+let failed = pcall(() => [1, 2, 3][::1.5]);
+assertEq(failed.ok, false);
+
+// A zero step is a runtime error (it would never advance).
+let zero = pcall(() => [1, 2, 3][::0]);
+assertEq(zero.ok, false);
+
+print("ok");

@@ -1446,11 +1446,14 @@ numbers[0] = 10;
 numbers.push(4);
 ```
 
-A slice `a[start:end]` returns a new array with the half-open range
-`[start, end)`. Either bound may be omitted (`a[:]`, `a[2:]`, `a[:3]`);
-negative bounds count from the end and are clamped to the size, exactly like
-the `slice` method. A slice is a copy, so mutating it never touches the
-source, and it is not an assignment target.
+A slice `a[start:end:step]` returns a new array with the half-open range
+`[start, end)`, taking every `step`-th element. Every part may be omitted:
+`a[:]`, `a[2:]`, `a[:3]`, `a[::2]` and `a[::-1]` all parse. Negative bounds
+count from the end and are clamped to the size; a negative `step` walks
+backwards, and a `step` of 1 (the default) is the plain range. The bounds
+follow Python's rule: with a negative step the defaults are the end and
+before the start, so `a[::-1]` reverses. A slice is a copy, so mutating it
+never touches the source, and it is not an assignment target.
 
 ```jolt
 let a = [10, 20, 30, 40, 50];
@@ -1459,7 +1462,13 @@ assertEq(a[2:], [30, 40, 50]);
 assertEq(a[:2], [10, 20]);
 assertEq(a[-2:], [40, 50]);
 assertEq(a[:], a);
+assertEq(a[::2], [10, 30, 50]);
+assertEq(a[::-1], [50, 40, 30, 20, 10]);
+assertEq(a[3:0:-1], [40, 30, 20]);
 ```
+
+The same syntax works on strings, slicing by UTF-8 character
+(`"hello"[::-1]` is `"olleh"`). A zero step is a runtime error.
 
 ### 8.2 Members
 
@@ -1526,13 +1535,15 @@ assertEq(s[-1], "é");
 An out-of-range index is an error. You cannot assign to a string index.
 
 Strings also support slicing by code point, with the same rules as arrays
-(bounds omitted, negatives counted from the end, clamped):
+(bounds and step omitted, negatives counted from the end, clamped, negative
+step reverses):
 
 ```jolt
 let s = "hello";
 assertEq(s[1:3], "el");
 assertEq(s[2:], "llo");
 assertEq(s[:-1], "hell");
+assertEq(s[::-1], "olleh");
 ```
 
 ### 9.1 String methods
@@ -2101,7 +2112,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Map keys are always strings. Literals accept identifier, string, scalar (`int`, `float`, `double`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The bodies of `if`, `while` and `for` require braces.
 - `for ... in` does not accept parentheses around the variable and the iterable.
-- Slicing syntax `s[start:end]` works for strings and arrays (see §8.1 and §9); there is no step (`s[start:end:step]`), and the methods `substr`/`slice` remain available.
+- Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.

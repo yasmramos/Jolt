@@ -1307,13 +1307,15 @@ void registerBuiltins(Runtime& in) {
     return args[0];
   });
 
-  // Private helper for slice literals (`obj[start:end]`). A nil bound means
-  // "from the start" / "to the end"; a negative bound counts from the end and
-  // is clamped, matching the `slice`/`substr` methods. Strings slice by UTF-8
-  // character. Keeping the bounds check here gives the diagnostic at the
-  // slice's line/column.
+  // Private helper for slice literals (`obj[start:end:step]`). A nil bound
+  // means "from the start" / "to the end"; a negative bound counts from the
+  // end; a nil step means 1 and a negative step walks backwards. The bounds are
+  // clamped to the valid range following Python's rule, so the four forms
+  // (`[:]`, `[a:]`, `[:b]`, `[a:b]`, `[::s]`, ...) share one code path.
+  // Strings slice by UTF-8 character. Keeping the bounds check here gives the
+  // diagnostic at the slice's line/column.
   in.addNative("$slice", [](Runtime& in, Args args) -> Value {
-    need(in, "$slice", args, 3);
+    need(in, "$slice", args, 4);
     // A nil bound is "not given"; an integer is the bound (negative counts
     // from the end). The two are kept distinct so `s[-3:]` is not read as
     // "no start".
@@ -1328,28 +1330,55 @@ void registerBuiltins(Runtime& in) {
     };
     bool hasStart = false;
     bool hasEnd = false;
+    bool hasStep = false;
     int64_t start = bound(args[1], "start", hasStart);
     int64_t end = bound(args[2], "end", hasEnd);
-    auto resolve = [](int64_t value, bool present, int64_t length, bool isStart) -> int64_t {
-      if (!present) return isStart ? 0 : length;
-      return clampIndex(value, length);
+    int64_t step = bound(args[3], "step", hasStep);
+    if (!hasStep) step = 1;
+    if (step == 0) in.fail("slice step must not be zero");
+
+    // The selected indices, following Python's slice rule. For a positive step
+    // the defaults are `0`/`length`; for a negative step they are `length - 1`
+    // and `-1`, and the clamp bounds differ, so a reverse slice stops at index
+    // 0 and never wraps.
+    auto indices = [&](int64_t length) {
+      int64_t lower = step > 0 ? 0 : -1;
+      int64_t upper = step > 0 ? length : length - 1;
+      auto clamp = [&](int64_t value, bool present, bool isStart) -> int64_t {
+        if (!present) {
+          if (isStart) return step > 0 ? lower : upper;
+          return step > 0 ? upper : lower;
+        }
+        if (value < 0) value += length;
+        if (value < lower) value = lower;
+        if (value > upper) value = upper;
+        return value;
+      };
+      int64_t from = clamp(start, hasStart, true);
+      int64_t to = clamp(end, hasEnd, false);
+      std::vector<int64_t> out;
+      if (step > 0) {
+        for (int64_t i = from; i < to; i += step) out.push_back(i);
+      } else {
+        for (int64_t i = from; i > to; i += step) out.push_back(i);
+      }
+      return out;
     };
+
     if (args[0].isArray()) {
       const auto& items = args[0].arr().items;
-      int64_t length = static_cast<int64_t>(items.size());
-      int64_t from = resolve(start, hasStart, length, true);
-      int64_t to = resolve(end, hasEnd, length, false);
-      if (to < from) to = from;
-      std::vector<Value> out(items.begin() + from, items.begin() + to);
+      std::vector<Value> out;
+      for (int64_t index : indices(static_cast<int64_t>(items.size()))) {
+        out.push_back(items[static_cast<size_t>(index)]);
+      }
       return Value(makeArray(std::move(out)));
     }
     if (args[0].isStr()) {
       auto chars = utf8Chars(args[0].asStr());
-      int64_t length = static_cast<int64_t>(chars.size());
-      int64_t from = resolve(start, hasStart, length, true);
-      int64_t to = resolve(end, hasEnd, length, false);
-      if (to < from) to = from;
-      std::vector<std::string> out(chars.begin() + from, chars.begin() + to);
+      std::vector<std::string> out;
+      for (int64_t index : indices(static_cast<int64_t>(chars.size()))) {
+        out.push_back(chars[static_cast<size_t>(index)]);
+      }
       return Value(utf8Join(out));
     }
     in.fail(std::string("cannot slice a value of type '") + args[0].typeName() + "'");
