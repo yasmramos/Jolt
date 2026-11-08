@@ -1,0 +1,149 @@
+# Builds the three Windows/Linux/macOS deliverables and publishes them as
+# workflow artifacts. On a `v*` tag it also attaches them to a GitHub Release.
+#
+#   1. jolt-<platform>          - the development engine (`jolt`/`jolt.exe`)
+#                                 installed next to the standard library
+#                                 (`std/`), the layout `standardLibraryDir`
+#                                 looks for, so `import std.math` resolves from
+#                                 the unpacked archive.
+#   2. jolt-vscode-extension    - the packaged VS Code extension (`.vsix`),
+#                                 platform-independent, built once.
+#
+# This is separate from `cmake-multi-platform.yml`, which only builds and tests
+# on three toolchains: this one's job is to publish runnable artifacts.
+name: Artifacts and release
+
+on:
+  push:
+    branches: ["main", "develop"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main", "develop"]
+  workflow_dispatch:
+
+# One run per ref: a new push cancels the previous, still-running build.
+concurrency:
+  group: artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: jolt-linux-x64
+            archive: jolt-linux-x64.tar.gz
+          - os: windows-latest
+            artifact: jolt-windows-x64
+            archive: jolt-windows-x64.zip
+          # `macos-latest` is the Apple Silicon image (macOS 26, arm64). The
+          # dev engine is portable C++, so this builds natively; the native
+          # backend stays x86-64 Linux only (see AGENT.md PHASE 7).
+          - os: macos-latest
+            artifact: jolt-macos-arm64
+            archive: jolt-macos-arm64.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        # The default generator is Visual Studio on Windows (multi-config) and
+        # Unix Makefiles / Ninja elsewhere (single-config); the configuration
+        # is chosen at build/install time with --config either way.
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -S .
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        # Linux-only execution checks skip themselves on macOS and Windows; the
+        # FFI callback and struct-by-value tests are excluded by the build when
+        # their capability is missing (see CMakeLists.txt).
+        working-directory: build
+        run: ctest --build-config Release --output-on-failure
+
+      - name: Install into a staging prefix
+        # `cmake --install` produces the same layout as `make install`:
+        # stage/bin/jolt plus stage/share/jolt/std/*.jolt. The engine finds the
+        # library through `../share/jolt/std` relative to the executable, so the
+        # staged tree is self-contained and runs after unpacking.
+        run: cmake --install build --config Release --prefix stage
+
+      - name: Package the engine (Unix)
+        if: runner.os != 'Windows'
+        run: tar -czf "${{ matrix.archive }}" -C stage .
+
+      - name: Package the engine (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path stage\* -DestinationPath "${{ matrix.archive }}"
+
+      - name: Upload the engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Set up Node.js
+        # `@vscode/vsce` needs a modern Node; pin it so the extension packaging
+        # does not depend on the runner's preinstalled version. The extension
+        # is platform-independent, so it is packaged on one runner only.
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Package the VS Code extension
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: editors/vscode
+        # `--out` pins the file name so the upload and the release assets do not
+        # depend on the extension version in package.json.
+        run: npx --yes @vscode/vsce@3 package --out jolt-vscode.vsix
+
+      - name: Upload the VS Code extension
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-vscode-extension
+          path: editors/vscode/jolt-vscode.vsix
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish release
+    needs: build
+    # Only a `v*` tag publishes; branch pushes and pull requests stop at the
+    # artifacts above.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download every artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # `--generate-notes` writes the changelog from the commits since the
+        # previous tag; `--repo` lets the command run without a checkout.
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*
