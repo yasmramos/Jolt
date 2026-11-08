@@ -1,5 +1,6 @@
-# Builds the three Windows/Linux/macOS deliverables and publishes them as
-# workflow artifacts. On a `v*` tag it also attaches them to a GitHub Release.
+# Builds the desktop deliverables and publishes them as workflow artifacts. On
+# a `v*` tag it also attaches them to a GitHub Release together with a
+# `SHA256SUMS` file.
 #
 #   1. jolt-<platform>          - the development engine (`jolt`/`jolt.exe`)
 #                                 installed next to the standard library
@@ -9,7 +10,12 @@
 #   2. jolt-windows-x64-setup   - an Inno Setup installer that puts the engine
 #                                 in `Program Files`, adds it to the system
 #                                 PATH and optionally associates `.jolt` files.
-#   3. jolt-vscode-extension    - the packaged VS Code extension (`.vsix`),
+#   3. jolt-linux-packages      - `.deb` and `.rpm` packages that install into
+#                                 `/usr`, so `/usr/bin/jolt` finds
+#                                 `/usr/share/jolt/std`.
+#   4. jolt-macos-packages      - a `.pkg` installer and a `.dmg` disk image
+#                                 that install into `/usr/local`.
+#   5. jolt-vscode-extension    - the packaged VS Code extension (`.vsix`),
 #                                 platform-independent, built once.
 #
 # This is separate from `cmake-multi-platform.yml`, which only builds and tests
@@ -80,6 +86,24 @@ jobs:
         # staged tree is self-contained and runs after unpacking.
         run: cmake --install build --config Release --prefix stage
 
+      - name: Determine the version
+        id: version
+        shell: bash
+        # One source of truth for every package name: the tag being released,
+        # or `project(... VERSION x.y.z)` on a branch push or pull request.
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^project([^ ]* VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -n1)"
+          fi
+          if [ -z "$version" ]; then
+            echo "could not determine the version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Packaging Jolt $version"
+
       - name: Package the engine (Unix)
         if: runner.os != 'Windows'
         run: tar -czf "${{ matrix.archive }}" -C stage .
@@ -102,22 +126,13 @@ jobs:
         shell: pwsh
         # Inno Setup ships on the Windows image, but its directory is not on
         # PATH and the version in the path changes with the image, so it is
-        # located rather than hard-coded. The version comes from the tag being
-        # released, or from CMakeLists.txt on a branch push.
+        # located rather than hard-coded.
         run: |
           $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue |
                    Select-Object -First 1).FullName
           if (-not $iscc) { throw "ISCC.exe not found; the Windows image no longer ships Inno Setup" }
 
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $version = "${{ github.ref_name }}".TrimStart("v")
-          } else {
-            $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(.*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)' |
-                        Select-Object -First 1).Matches.Groups[1].Value
-          }
-          Write-Host "Building installer for Jolt $version"
-
-          & $iscc "/DAppVersion=$version" "/DStageDir=$PWD\stage" "packaging\windows\jolt.iss"
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" "/DStageDir=$PWD\stage" "packaging\windows\jolt.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
           Get-Item dist\jolt-windows-x64-setup.exe | Format-List Name, Length
@@ -128,6 +143,40 @@ jobs:
         with:
           name: jolt-windows-x64-setup
           path: dist/jolt-windows-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build the Linux packages
+        if: runner.os == 'Linux'
+        # `dpkg-deb` is on the image; the script installs `rpmbuild` on demand
+        # and skips the `.rpm` rather than failing if it cannot.
+        run: bash packaging/linux/package-linux.sh "${{ steps.version.outputs.version }}" stage dist
+
+      - name: Upload the Linux packages
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build the macOS packages
+        if: runner.os == 'macOS'
+        # `pkgbuild`/`productbuild`/`hdiutil` come with the Xcode command-line
+        # tools on the image. The `.pkg` is unsigned.
+        run: bash packaging/macos/package-macos.sh "${{ steps.version.outputs.version }}" stage dist
+
+      - name: Upload the macOS packages
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-macos-packages
+          path: |
+            dist/*.pkg
+            dist/*.dmg
           if-no-files-found: error
           retention-days: 30
 
@@ -172,6 +221,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        # One checksum line per release asset, in the `sha256sum -c` format, so
+        # `cd dist && sha256sum -c SHA256SUMS` verifies a download. Sorted for a
+        # stable file across runs.
+        run: |
+          sha256sum $(ls -1 | grep -v '^SHA256SUMS$' | sort) > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create the GitHub release
         env:
