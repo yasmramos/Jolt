@@ -1,0 +1,7 @@
+// expect-exit: 70
+// A declaration the host cannot resolve is a clear runtime error, not a wild
+// call: the VM reports the missing symbol before anything executes.
+extern "C" {
+  fn jolt_no_such_c_symbol_xyz(v: int): int;
+}
+print(jolt_no_such_c_symbol_xyz(1));

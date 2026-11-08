@@ -114,6 +114,14 @@ class VM : public Runtime {
 
   Value callNative(Function& fn, std::vector<Value> args, int line, int col);
 
+  // Resolves every `extern "C"` symbol in `proto` and its children and binds
+  // each to a marshalling native, before the proto runs. A symbol the platform
+  // cannot resolve is a clear runtime error, so a program never calls a wild
+  // address. Idempotent: a REPL entry that re-runs a proto re-binds the same
+  // globals.
+  void installExterns(const Bytecode& proto);
+  void installExtern(const ExternSymbol& symbol);
+
   const Value& constantAt(const Bytecode& bytecode, int index) const;
   const std::string& nameAt(const Bytecode& bytecode, int index) const;
 };

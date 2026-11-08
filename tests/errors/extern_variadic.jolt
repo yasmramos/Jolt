@@ -1,0 +1,6 @@
+// expect-exit: 65
+// C has no variadic declaration without `...` semantics we model, so a
+// variadic `extern "C"` function is a compile error.
+extern "C" {
+  fn bad(rest...): int;
+}

@@ -27,4 +27,6 @@ class PlatformPosix final : public Platform {
 
   void* alloc(std::size_t size, std::size_t alignment) override;
   void dealloc(void* pointer) override;
+
+  void* lookupSymbol(const char* name) override;
 };

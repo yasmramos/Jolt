@@ -138,6 +138,21 @@ struct UpvalDesc {
   int index = 0;
 };
 
+// One C function declared in an `extern "C"` block (PHASE 6.6). The
+// declaration carries the C symbol name and the signature, in the FFI
+// vocabulary. It is pure link metadata: the block emits no bytecode, and the
+// development engine resolves `name` through `Platform::lookupSymbol` when the
+// proto starts. The AOT backend (PHASE 7) reads the same entries to emit the
+// relocations of the generated binary.
+struct ExternSymbol {
+  std::string name;                     // the C symbol, e.g. "strlen"
+  std::vector<std::string> paramTypes;  // one type name per parameter, in order
+  // The declared return type, or an empty string when it was not annotated
+  // (which the FFI marshalling reads as C's implicit `int`). `void` is stored
+  // literally.
+  std::string returnType;
+};
+
 // A function prototype. The root chunk is the `<main>` proto and nested
 // functions are its `children`, instantiated by `CLOSURE` at runtime. Protos
 // are shared pointers so a closure keeps its code alive after the chunk that
@@ -155,6 +170,10 @@ struct Bytecode {
   std::vector<Value> constants;
   std::vector<std::shared_ptr<Bytecode>> children;
   std::vector<UpvalDesc> upvalues;
+  // C symbols declared in `extern "C"` blocks in this proto (PHASE 6.6). The
+  // development engine resolves each one before the proto runs; the AOT backend
+  // reads them to emit the binary's relocations.
+  std::vector<ExternSymbol> externs;
   // No per-proto capture storage: upvalue cells live in the `Function` value
   // produced by `CLOSURE` (`Function::upvalues`), so closures created from the
   // same proto in different frames never overwrite each other's captures.

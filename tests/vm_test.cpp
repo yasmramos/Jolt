@@ -65,6 +65,7 @@ struct StringPlatform final : Platform {
   [[noreturn]] void exit(int) override { std::abort(); }
   void* alloc(std::size_t, std::size_t) override { return nullptr; }
   void dealloc(void*) override {}
+  void* lookupSymbol(const char*) override { return nullptr; }
 };
 
 std::string runAndCapture(const std::string& source) {
@@ -1357,6 +1358,161 @@ void testFfiVoidTokenRoundTrip() {
   assert(!requireGlobal(vm, "distinct").asBool());
 }
 
+// C-linkage host functions the `extern "C"` tests resolve by name.
+extern "C" int joltTestAdd(int a, int b) { return a + b; }
+extern "C" double joltTestScale(double x) { return x * 2.0; }
+extern "C" const char* joltTestGreeting() { return "hi"; }
+extern "C" int joltTestBump(int* p) {
+  if (!p) return -1;
+  int previous = *p;
+  *p = previous + 1;
+  return previous;
+}
+
+// A host that resolves the symbols above. Everything else behaves like the
+// dev platform (writes go to captured strings, so a test can read them).
+struct SymbolPlatform final : Platform {
+  std::string out;
+  std::string err;
+  void write(int fd, const char* data, std::size_t length) override {
+    if (fd == kStdout) out.append(data, length);
+  }
+  void writeErr(const char* data, std::size_t length) override { err.append(data, length); }
+  void flush(int) override {}
+  std::size_t read(int, char*, std::size_t) override { return 0; }
+  int open(const char*, OpenMode) override { return kInvalidFd; }
+  void close(int) override {}
+  bool seek(int, std::int64_t, SeekOrigin) override { return false; }
+  [[noreturn]] void exit(int) override { std::abort(); }
+  void* alloc(std::size_t, std::size_t) override { return nullptr; }
+  void dealloc(void*) override {}
+  void* lookupSymbol(const char* name) override {
+    const std::string symbol = name;
+    if (symbol == "joltTestAdd") return reinterpret_cast<void*>(&joltTestAdd);
+    if (symbol == "joltTestScale") return reinterpret_cast<void*>(&joltTestScale);
+    if (symbol == "joltTestGreeting") return reinterpret_cast<void*>(&joltTestGreeting);
+    if (symbol == "joltTestBump") return reinterpret_cast<void*>(&joltTestBump);
+    return nullptr;
+  }
+};
+
+// Compiles `source` and runs it on a VM backed by `SymbolPlatform`, returning
+// the captured stdout. Runtime failures abort with their message, so a broken
+// marshalling is a clear failure rather than a wrong string.
+std::string runWithSymbols(const std::string& source) {
+  Bytecode bytecode = compileSource(source);
+  SymbolPlatform platform;
+  VM vm(platform);
+  registerBuiltins(vm);
+  try {
+    vm.run(bytecode);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "runtime failure in %s: %s\n", g_currentTest, error.what());
+    std::exit(1);
+  }
+  return platform.out;
+}
+
+void testExternResolvesAndMarshalsIntegers() {
+  TEST_SCOPE();
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestAdd(a: int, b: int): int; }\n"
+      "print(joltTestAdd(2, 40));\n");
+  assert(out == "42\n");
+}
+
+void testExternTruncatesNarrowReturnToDeclaredWidth() {
+  TEST_SCOPE();
+  // `joltTestAdd` returns a 32-bit `int`; the upper half of `rax` is undefined
+  // after the call. Reading it as a 64-bit value would surface garbage here,
+  // so a correct `int` (not `int64`) result proves the truncation.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestAdd(a: int, b: int): int; }\n"
+      "var total = 0;\n"
+      "for (var i = 0; i < 100; i = i + 1) { total = total + joltTestAdd(i, i); }\n"
+      "print(total);\n");
+  assert(out == "9900\n");
+}
+
+void testExternMarshalsDoubleReturnAndArgument() {
+  TEST_SCOPE();
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestScale(x: double): double; }\n"
+      "print(joltTestScale(21.0));\n");
+  assert(out == "42\n");
+}
+
+void testExternMarshalsStringReturnAsCString() {
+  TEST_SCOPE();
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestGreeting(): cstring; }\n"
+      "print(cstr(joltTestGreeting()));\n");
+  assert(out == "hi\n");
+}
+
+void testExternMarshalsPointerArgument() {
+  TEST_SCOPE();
+  // The buffer's bytes are passed as the address the callee writes through.
+  const std::string out = runWithSymbols(
+      "extern \"C\" { fn joltTestBump(p: ptr): int; }\n"
+      "let b = buffer(4);\n"
+      "storeByte(b, 0, 7);\n"
+      "let before = joltTestBump(b);\n"
+      "print(before);\n"
+      "print(loadByte(b, 0));\n");
+  assert(out == "7\n8\n");
+}
+
+void testExternMissingSymbolIsAClearRuntimeError() {
+  TEST_SCOPE();
+  Bytecode bytecode = compileSource(
+      "extern \"C\" { fn noSuchSymbolHere(x: int): int; }\n"
+      "print(noSuchSymbolHere(1));\n");
+  SymbolPlatform platform;
+  VM vm(platform);
+  registerBuiltins(vm);
+  std::string message;
+  try {
+    vm.run(bytecode);
+  } catch (const RuntimeError& error) {
+    message = error.message;
+  }
+  assert(message.find("noSuchSymbolHere") != std::string::npos);
+  assert(message.find("not found") != std::string::npos);
+}
+
+void testExternRejectsUnsupportedSignatureAtCompileTime() {
+  TEST_SCOPE();
+  // A `map` cannot cross the C boundary: the compiler must reject the
+  // declaration before any bytecode is produced.
+  bool threw = false;
+  try {
+    auto tokens = lex("extern \"C\" { fn bad(m: map): int; }");
+    Parser parser(std::move(tokens), "<vm-test>");
+    auto program = parser.parseProgram();
+    compileProgram(program);
+  } catch (const CompileError& error) {
+    threw = true;
+    assert(error.message.find("bad") != std::string::npos);
+  }
+  assert(threw);
+}
+
+void testExternRejectsVariadicDeclarationAtCompileTime() {
+  TEST_SCOPE();
+  bool threw = false;
+  try {
+    auto tokens = lex("extern \"C\" { fn bad(rest...): int; }");
+    Parser parser(std::move(tokens), "<vm-test>");
+    auto program = parser.parseProgram();
+    compileProgram(program);
+  } catch (const CompileError& error) {
+    threw = true;
+    assert(error.message.find("variadic") != std::string::npos);
+  }
+  assert(threw);
+}
+
 void testFfiErrorsAreCleanRuntimeFailures() {
   assert(runtimeError("loadByte(cstring(\"x\"), 9);").find("out of range") != std::string::npos);
   assert(runtimeError("storeByte(cstring(\"x\"), 0, 65);").find("read-only") != std::string::npos);
@@ -1450,6 +1606,14 @@ int main() {
   testFfiBufferLoadStore();
   testFfiVoidTokenRoundTrip();
   testFfiErrorsAreCleanRuntimeFailures();
+  testExternResolvesAndMarshalsIntegers();
+  testExternTruncatesNarrowReturnToDeclaredWidth();
+  testExternMarshalsDoubleReturnAndArgument();
+  testExternMarshalsStringReturnAsCString();
+  testExternMarshalsPointerArgument();
+  testExternMissingSymbolIsAClearRuntimeError();
+  testExternRejectsUnsupportedSignatureAtCompileTime();
+  testExternRejectsVariadicDeclarationAtCompileTime();
 
   std::puts("vm tests passed");
   return 0;
