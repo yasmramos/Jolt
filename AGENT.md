@@ -494,8 +494,11 @@ previous one.
   captures it and re-raises it once C returns; `pcall` catches it like any other
   runtime error. `nil` is the NULL function pointer. `libffi` is a
   **development-engine-only** dependency (§5.1/§8): the AOT backend lowers
-  callbacks to compile-time stubs and never links it. See `docs/language.md`
-  §4.6 and `tests/32_ffi_callback.jolt`.
+  callbacks to compile-time stubs and never links it. The boundary check
+  (`tests/check_compiler_boundary.cmake`) forbids the compiler and the native
+  backend from including `ffi_marshal.h` or `libffi`, so the split cannot
+  regress. See `docs/language.md` §4.6, `tests/32_ffi_callback.jolt` and
+  `tests/vm_test.cpp`.
 
 ### PHASE 6.7 — Error handling 🔶 in progress
 
