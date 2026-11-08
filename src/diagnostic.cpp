@@ -1,7 +1,6 @@
 #include "diagnostic.h"
 
 #include <algorithm>
-#include <algorithm>
 #include <string>
 
 #include "platform.h"
@@ -72,10 +71,31 @@ void printRuntimeError(const std::string& sourceName, const std::string& source,
   printSnippet(sourceName, source, error.line, error.col, "runtime error", error.message, platform);
 
   if (!error.stack.empty()) {
+    // Deep recursion (or a long call chain) can build a stack of thousands of
+    // frames; printing every one buries the actual error. Keep the innermost
+    // and the outermost frames and elide the middle, so the message stays
+    // readable and the trace stays bounded regardless of depth.
+    constexpr std::size_t kHead = 10;
+    constexpr std::size_t kTail = 10;
+    const std::size_t total = error.stack.size();
+    const bool elide = total > kHead + kTail;
+
     std::string out = "stack trace:\n";
-    for (auto it = error.stack.rbegin(); it != error.stack.rend(); ++it) {
-      out += "  at " + it->function + " (" + sourceName + ':' + std::to_string(it->line) + ':'
-             + std::to_string(it->col) + ")\n";
+    auto printFrame = [&](const Frame& frame) {
+      out += "  at " + frame.function + " (" + sourceName + ':' + std::to_string(frame.line) + ':'
+             + std::to_string(frame.col) + ")\n";
+    };
+
+    // The stored stack is innermost-first; the trace prints outermost-first.
+    const std::size_t headCount = elide ? kHead : total;
+    for (std::size_t i = 0; i < headCount; ++i) {
+      printFrame(error.stack[total - 1 - i]);
+    }
+    if (elide) {
+      out += "  ... " + std::to_string(total - kHead - kTail) + " more ...\n";
+      for (std::size_t i = 0; i < kTail; ++i) {
+        printFrame(error.stack[kTail - 1 - i]);
+      }
     }
     platform.writeErr(out.data(), out.size());
     platform.flush(Platform::kStderr);

@@ -1099,7 +1099,7 @@ for n in 1..=3 {
 }
 ```
 
-The iterable is evaluated only once. For arrays and maps, a snapshot of their elements or keys is taken when the loop starts. Ranges are iterated lazily: no intermediate array is created, so `for i in 0..1000000000 { ... }` runs in constant memory. The iteration variable gets a fresh binding on every turn, so closures created inside the body capture different values.
+The iterable is evaluated only once. Arrays and maps are iterated **live**: an array is walked by index and a map over its keys, both as they exist at each step, so mutating the collection inside the body changes what the loop sees. Appending to an array extends the loop; removing an element that the cursor has not reached skips it. Iterate over a copy (for example `for x in a.slice()` or `for k in m.keys()`) when the body mutates the collection. Ranges are iterated lazily: no intermediate array is created, so `for i in 0..1000000000 { ... }` runs in constant memory. The iteration variable gets a fresh binding on every turn, so closures created inside the body capture different values.
 
 ### 6.7 `break` and `continue`
 
@@ -1881,7 +1881,10 @@ script.jolt:3:11: runtime error: division by zero
   |           ^
 ```
 
-Runtime errors also include a stack trace with the active functions.
+Runtime errors also include a stack trace with the active functions. A deep
+call chain (for example an accidental infinite recursion) builds thousands of
+frames, so the trace prints the outermost ten and the innermost ten and elides
+the middle with a `... N more ...` line; a short trace is printed in full.
 
 A third kind of diagnostic is non-fatal: a **warning**. A warning is reported
 with the same snippet form but does not stop the program, which still compiles
