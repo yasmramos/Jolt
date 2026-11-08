@@ -1,0 +1,6 @@
+// expect-exit: 65
+// The `while (cond)` part is required after the `do` body.
+
+do {
+  print("hi");
+}

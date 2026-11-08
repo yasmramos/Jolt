@@ -117,6 +117,7 @@ class Parser {
   StmtPtr parseFunctionBody(const Token& arrow);
   StmtPtr parseIf();
   StmtPtr parseWhile();
+  StmtPtr parseDoWhile();
   StmtPtr parseFor();
   StmtPtr parseReturn();
   StmtPtr parseDefer();

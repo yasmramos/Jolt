@@ -375,6 +375,43 @@ void testBreakAndContinueBackpatch() {
   expectCompileError("continue;\n", "continue outside loop");
 }
 
+void testDoWhileBackpatch() {
+  Bytecode bc = compileSource("do { print(1); } while (false);\n");
+
+  // Body first, then the condition: GETGLOBAL "print", LOADK 1, CALL 0, 1,
+  // LOADK false, JMP_IF_TRUE (back to the body), HALT.
+  assert(bc.code.size() == 6);
+  assert(bc.code[0].op == OpCode::GETGLOBAL);  // "print"
+  assert(bc.code[1].op == OpCode::LOADK);
+  assert(bc.code[2].op == OpCode::CALL);
+  assert(bc.code[3].op == OpCode::LOADK);
+  assert(bc.code[4].op == OpCode::JMP_IF_TRUE);
+  assert(bc.code[4].jump == 0);  // loops back to the top of the body
+  assert(bc.code[5].op == OpCode::HALT);
+  // The loop is a post-test one: the body's first instruction is at index 0,
+  // so nothing jumps past it before it runs once.
+  assert(bc.code[0].op != OpCode::JMP_IF_FALSE);
+
+  // `continue` jumps to the condition, not to the top of the body.
+  Bytecode cont = compileSource("do { continue; } while (false);\n");
+  // JMP (continue -> condition), LOADK false, JMP_IF_TRUE, HALT
+  assert(cont.code.size() == 4);
+  assert(cont.code[0].op == OpCode::JMP && cont.code[0].jump == 1);
+  assert(cont.code[1].op == OpCode::LOADK);
+  assert(cont.code[2].op == OpCode::JMP_IF_TRUE && cont.code[2].jump == 0);
+
+  // `break` leaves the loop.
+  Bytecode brk = compileSource("do { break; } while (true);\n");
+  // JMP (break -> after), LOADK true, JMP_IF_TRUE (back), HALT
+  assert(brk.code.size() == 4);
+  assert(brk.code[0].op == OpCode::JMP && brk.code[0].jump == 3);
+  assert(brk.code[2].op == OpCode::JMP_IF_TRUE && brk.code[2].jump == 0);
+
+  // An empty body is a valid post-test loop, and `do`/`while` may appear
+  // outside a function (unlike `defer`).
+  expectCompiles("do { } while (false);\n");
+}
+
 void testSwitchBytecode() {
   // `switch (2) { case 1: {...} case 2: {...} }` compiles the subject once,
   // compares each label with EQ, jumps to the matching body and skips the rest.
@@ -1445,6 +1482,7 @@ int main() {
   testWhileBackpatch();
   testForBackpatch();
   testBreakAndContinueBackpatch();
+  testDoWhileBackpatch();
   testSwitchBytecode();
   testSwitchRangeUsesIn();
   testSwitchErrors();

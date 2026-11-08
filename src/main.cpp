@@ -231,7 +231,7 @@ bool isStatementStart(const std::string &text) {
   }
   std::string word = text.substr(0, end);
   return word == "let" || word == "var" || word == "const" || word == "fn" ||
-         word == "if" || word == "while" || word == "for" || word == "return" ||
+         word == "if" || word == "while" || word == "do" || word == "for" || word == "return" ||
          word == "break" || word == "continue" || word == "else" ||
          word == "import" || word == "switch" || word == "struct" ||
          word == "native" || word == "extern";

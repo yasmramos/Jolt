@@ -1036,6 +1036,7 @@ void Compiler::compileStmt(const Stmt& stmt) {
           [&](const ReturnStmt& s) { compileReturn(s); },
           [&](const IfStmt& s) { compileIf(s); },
           [&](const WhileStmt& s) { compileWhile(s); },
+          [&](const DoWhileStmt& s) { compileDoWhile(s); },
           [&](const ForStmt& s) { compileFor(s); },
           [&](const ForInStmt& s) { compileForIn(s); },
           [&](const SwitchStmt& s) { compileSwitch(s); },
@@ -1980,6 +1981,32 @@ void Compiler::compileWhile(const WhileStmt& s) {
   patchJump(exitJump, after);
   for (int index : loop.breaks) patchJump(index, after);
   for (int index : loop.continues) patchJump(index, loopStart);  // re-evaluates the condition
+}
+
+// `do { body } while (cond);` (PHASE 6.5). The body runs first, so its scope is
+// entered before the condition is compiled. `continue` jumps to the condition
+// test (not the top of the body), and `break` leaves the loop.
+void Compiler::compileDoWhile(const DoWhileStmt& s) {
+  int loopStart = currentOffset();
+
+  loops_.push_back(Loop{});
+  // The body is a block whose scope is one deeper than the loop's; a
+  // `break`/`continue` unwinds down to it so a `defer` in the body runs.
+  loops_.back().deferMinDepth = scopes_.size() + 1;
+  compileScopedBlock(*s.body);
+  Loop loop = std::move(loops_.back());
+  loops_.pop_back();
+
+  // The condition is tested after every iteration; `continue` re-tests it.
+  int conditionStart = currentOffset();
+  int condition = compileExpr(*s.condition);
+  freeReg();
+  int backJump = emitJump(OpCode::JMP_IF_TRUE, condition);
+  patchJump(backJump, loopStart);
+
+  int after = currentOffset();
+  for (int index : loop.breaks) patchJump(index, after);
+  for (int index : loop.continues) patchJump(index, conditionStart);
 }
 
 void Compiler::compileFor(const ForStmt& s) {

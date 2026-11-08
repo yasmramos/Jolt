@@ -76,7 +76,7 @@ Identifiers start with an ASCII letter or `_`, and continue with ASCII letters, 
 Reserved words:
 
 ```text
-break  case   catch  const  continue  default  defer  else  false  fn  for  if
+break  case   catch  const  continue  default  defer  do     else  false  fn  for  if
 import in     let    native nil       return   struct switch true  try  var
 while
 ```
@@ -1000,7 +1000,9 @@ if (age >= 18) {
 
 The brace-less form (`if (x) print(x);`) is not supported.
 
-### 6.4 `while`
+### 6.4 `while` and `do`/`while`
+
+`while` tests its condition before each iteration:
 
 ```jolt
 var i = 0;
@@ -1009,6 +1011,23 @@ while (i < 5) {
   i += 1;
 }
 ```
+
+`do { ... } while (cond);` is the post-test form: the body runs once before the
+condition is checked, so it always runs at least once. The trailing `;` after
+the condition is optional.
+
+```jolt
+var n = 0;
+do {
+  n += 1;
+} while (n < 3);   // runs three times
+
+do { n += 1; } while (false);   // runs once
+```
+
+In both loops `break` leaves the loop, `continue` re-tests the condition (in a
+`do`/`while` it jumps to the condition, not to the top of the body), and a
+`defer` in the body runs on every exit path.
 
 ### 6.5 Classic `for`
 
@@ -2074,7 +2093,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
 - No `try`/`catch` or catchable exceptions. Error handling uses `nil` (not found), `pcall(fn, ...)` for recoverable runtime errors (see §13.1) and `panic()` for unrecoverable ones. There are no plans to add catchable exceptions; `pcall` and errors as values are the model.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
-- No `do`/`while`, `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10).
+- No `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10), and so is the post-test loop `do { ... } while (cond);` (see §6.4).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
 - FFI with C is implemented for the development engine (PHASE 6.6). C functions are declared with `extern "C" { ... }` blocks or the single-line `extern fn ...;` form (implicit `"C"` ABI); both desugar to the same representation. The FFI type vocabulary is documented in §4.6: the compiler validates each signature, records it on the proto, and the engine resolves the symbol through `Platform::lookupSymbol` and binds it to a marshalling native. The call marshals its arguments and result across the System V AMD64 ABI without `libffi` for scalars and structs by value. A `fn(P...): R` parameter is a callback: the development engine builds a `libffi` closure that re-enters the VM, while the AOT backend (PHASE 7) lowers callbacks to compile-time stubs and never links `libffi`.
 - No UI library yet. Skia + SDL2 + declarative UI is planned for post-1.0.
