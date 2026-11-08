@@ -94,6 +94,16 @@ struct TypeSpec {
   std::string callbackReturn;  // "void" for a callback that returns nothing
 };
 
+// A Jolt `string` and a `cstring` are both a NUL-terminated `const char *` at
+// the C boundary, so a declaration may spell a parameter either way. A `string`
+// argument is a valid `const char *` (it is NUL-terminated and stays alive for
+// the whole call), and `cstring` remains the spelling for a returned pointer,
+// which the runtime wraps as an owned handle. `string` is not a valid *return*
+// type: a C function returns a `cstring` (see `classifyReturn`).
+inline bool isFfiCStringTypeName(const std::string& typeName) {
+  return typeName == "cstring" || typeName == "string";
+}
+
 // Byte size, alignment and register class of a scalar field type. Returns false
 // for a type that cannot be a C struct member (a nested struct, a map, ...).
 inline bool scalarFieldLayout(const std::string& typeName, std::size_t& size,
@@ -111,7 +121,7 @@ inline bool scalarFieldLayout(const std::string& typeName, std::size_t& size,
   if (typeName == "int64" || typeName == "uint64" || typeName == "size_t") {
     size = 8; alignment = 8; cls = ParamClass::Int; return true;
   }
-  if (typeName == "ptr" || typeName == "cstring") {
+  if (typeName == "ptr" || isFfiCStringTypeName(typeName)) {
     size = 8; alignment = 8; cls = ParamClass::Pointer; return true;
   }
   if (typeName == "float") { size = 4; alignment = 4; cls = ParamClass::Float; return true; }
@@ -185,7 +195,7 @@ inline bool classifyParam(const std::string& typeName, ParamClass& out) {
     out = ParamClass::Int;
     return true;
   }
-  if (typeName == "ptr" || typeName == "cstring") {
+  if (typeName == "ptr" || isFfiCStringTypeName(typeName)) {
     out = ParamClass::Pointer;
     return true;
   }

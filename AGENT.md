@@ -415,7 +415,8 @@ previous one.
 
 ### PHASE 6.6 — FFI with C (1.0)
 
-- `extern "C" { ... }` blocks.
+- `extern "C" { ... }` blocks, and the single-line `extern fn ...;` form
+  (implicit `"C"` ABI); both are sugar for the same representation.
 - Compile-time stubs (like Zig/Rust).
 - **No `libffi` in the AOT backend.** The development engine (`jolt`) may use
   libffi for callbacks; the freestanding AOT runtime never does (callbacks are
@@ -446,22 +447,28 @@ previous one.
   ordinary host natives. The AOT backend (PHASE 7) lowers the same handles to
   real C pointers. See `docs/language.md` §4.6, `tests/30_ffi_ptr.jolt` and
   `tests/value_test.cpp`.
-- **`extern "C"` blocks and marshalling (done)** — `extern "C" { fn ...; }`
-  declares C functions. The ABI is a plain string literal and only `"C"` is
-  accepted. Each entry is a bodyless `fn ...;` stored as a `FnDeclStmt` with
-  `isNative`, so it follows exactly the `native fn` path: the name binds to the
-  host function of the same name and the signature is checked at the call site.
-  The block emits no bytecode (a block compiles to the bytecode of the
-  equivalent `native fn` declarations), the declarations are hoisted, and the
-  block is module-level metadata (nesting it is a compile error). The engine
-  resolves each declared name through `Platform::lookupSymbol` and binds it to a
+- **`extern` declarations and marshalling (done)** — a C function is declared
+  with an `extern "C" { fn ...; }` block or the single-line `extern fn ...;`
+  form. The single-line form is sugar for a one-entry block with an implicit
+  `"C"` ABI, so both spellings parse into the same `ExternBlockStmt` (no new AST
+  node and no new opcode). The block's ABI is a plain string literal and only
+  `"C"` is accepted. Each entry is a bodyless `fn ...;` stored as a `FnDeclStmt`
+  with `isNative`, so it follows exactly the `native fn` path: the name binds to
+  the host function of the same name and the signature is checked at the call
+  site. A declaration emits no bytecode (it compiles to the bytecode of the
+  equivalent `native fn`), the declarations are hoisted, and they are
+  module-level metadata (nesting one is a compile error). The engine resolves
+  each declared name through `Platform::lookupSymbol` and binds it to a
   marshalling native that passes the arguments and reads the result across the
   System V AMD64 ABI **without `libffi`** (the scalar/struct call path uses
   compile-time thunks; only callbacks use libffi, and only in the development
-  engine): integers, bools and pointers in
-  general-purpose registers, `float`/`double` in SSE registers, and the result
-  read back at the exact declared width. See `docs/language.md` §4.6 and
-  `tests/29_extern_c.jolt`.
+  engine): integers, bools and pointers in general-purpose registers,
+  `float`/`double` in SSE registers, and the result read back at the exact
+  declared width. A parameter may be spelled `string` as well as `cstring`: a
+  Jolt string is NUL-terminated and alive for the whole call, so it is a valid
+  `const char *`; a `string` is not a valid *return* type (C returns a
+  `cstring`). See `docs/language.md` §4.6 and `tests/29_extern_c.jolt` /
+  `tests/33_extern_single.jolt`.
 - **Structs by value (done)** — a `struct` (see §4.7) crosses the C boundary as
   a parameter and as a return value. The compiler resolves the struct's fields
   from its declaration into a `ffi::TypeSpec` on the proto's `ExternSymbol`, and

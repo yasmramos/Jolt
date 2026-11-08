@@ -1,0 +1,32 @@
+// `extern fn ...;` single-line form (PHASE 6.6). It is sugar for a one-entry
+// `extern "C"` block with an implicit `"C"` ABI, so both spellings declare the
+// same C function and compile to the same bytecode. The functions below are
+// standard C library names, so the test runs on POSIX and on Windows.
+
+// The single-line form: no quotes, no braces.
+extern fn strlen(s: string): int;
+extern fn puts(s: string): int;
+extern fn sqrt(x: double): double;
+
+// A `string` parameter is a valid `const char *` (NUL-terminated and alive for
+// the whole call), so `strlen`/`puts` accept a Jolt string directly.
+assertEq(strlen("hello"), 5);
+assertEq(strlen(""), 0);
+
+// A single-line declaration is hoisted: a function may call one that appears
+// later, and the declared result type feeds inference.
+fn lengthOf(text: string): int {
+  return strlen(text);
+}
+let n: int = lengthOf("abcd");
+assertEq(n, 4);
+
+// The two spellings may be mixed in one module.
+extern "C" {
+  fn abs(x: int): int;
+}
+assertEq(abs(-7), 7);
+assertEq(sqrt(16.0), 4.0);
+
+puts("extern single ok");
+print("extern single ok");

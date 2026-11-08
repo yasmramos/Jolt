@@ -1072,6 +1072,28 @@ void testExternBlock() {
       "fn g(): double { return h(2.0); }\n"
       "extern \"C\" {\n  fn h(x: double): double;\n}\n");
 
+  // `extern fn ...;` is sugar for a one-entry `extern "C"` block: both spellings
+  // compile to the same bytecode, so the single-line form adds no new path.
+  Bytecode single = compileSource("extern fn f(): int;\n");
+  assert(single.code.size() == block.code.size());
+  for (size_t i = 0; i < single.code.size(); ++i) {
+    assert(single.code[i].op == block.code[i].op);
+    assert(single.code[i].a == block.code[i].a);
+    assert(single.code[i].b == block.code[i].b);
+  }
+  // The single-line form hoists too, and a call is checked against it.
+  expectCompiles("fn g(): int { return h(2); }\nextern fn h(x: int): int;\n");
+
+  // A `string` parameter is a valid `const char *`, exactly like `cstring`.
+  expectCompiles("extern fn strlen(s: string): size_t;\nprint(strlen(\"hi\"));\n");
+  expectCompiles("extern \"C\" { fn puts(s: string): int; }\nputs(\"hi\");\n");
+  // A `string` is not a valid return type: C returns a `cstring`.
+  expectCompileError("extern fn f(): string;\n", "string return");
+  // The single-line form is module-level metadata and bodyless, like the block.
+  expectCompileError("fn g() { extern fn f(): int; }\n", "nested single extern");
+  expectCompileError("extern fn f(): int { return 1; }\n", "single extern body");
+  expectCompileError("extern 42;\n", "single extern without fn");
+
   // The FFI vocabulary is accepted inside a block, and a `void` result too.
   expectCompiles("extern \"C\" { fn free(p: ptr): void; }\nfree(nil);\n");
   expectCompiles("extern \"C\" { fn strlen(s: cstring): size_t; }\n");

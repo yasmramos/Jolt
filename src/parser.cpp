@@ -617,13 +617,20 @@ StmtPtr Parser::parseNativeDecl() {
   return makeStmt(std::move(decl), keyword.line, keyword.col);
 }
 
-// `extern "C" { fn name(params): ret; ... }` (PHASE 6.6). A block of C
-// declarations. The ABI is a plain string literal (no interpolation): only
-// `"C"` is supported. Inside, each entry is a bodyless `fn ...;`, parsed with
-// the same grammar as `native fn` and stored with `isNative` set, so the
-// compiler handles it exactly like a top-level `native fn`. Like `import`,
-// `struct` and `native fn`, the block is module-level metadata: a nested one
-// is a compile error, and it emits no bytecode.
+// `extern "C" { fn name(params): ret; ... }` or `extern fn name(params): ret;`
+// (PHASE 6.6). A declaration of C functions. Two spellings are accepted:
+//
+//   extern "C" { fn sqrt(x: float): float; }   // block: explicit ABI
+//   extern fn sqrt(x: float): float;           // single: implicit "C" ABI
+//
+// Both desugar to the same `ExternBlockStmt`, so hoisting, signature checking
+// and the runtime binding are shared and no new AST node or opcode is needed.
+// The ABI is a plain string literal (no interpolation): only `"C"` is
+// supported. Inside a block each entry is a bodyless `fn ...;`, parsed with the
+// same grammar as `native fn` and stored with `isNative` set, so the compiler
+// handles it exactly like a top-level `native fn`. Like `import`, `struct` and
+// `native fn`, the declaration is module-level metadata: a nested one is a
+// compile error, and it emits no bytecode.
 StmtPtr Parser::parseExternDecl() {
   const Token& keyword = previous();
   if (nestingDepth_ > 0) {
@@ -631,7 +638,15 @@ StmtPtr Parser::parseExternDecl() {
                        keyword.col};
   }
 
-  const Token& abiToken = consume(Tok::Str, "expected an ABI string after 'extern'");
+  // `extern fn ...;`: the ABI is implicit, so the declaration is a one-entry
+  // block. `fn` cannot start an ABI string, so it is unambiguous.
+  if (match(Tok::Fn)) {
+    std::vector<FnDeclStmt> decls;
+    decls.push_back(parseExternFnDecl());
+    return makeStmt(ExternBlockStmt{"C", std::move(decls)}, keyword.line, keyword.col);
+  }
+
+  const Token& abiToken = consume(Tok::Str, "expected an ABI string or 'fn' after 'extern'");
   // A plain string literal has exactly one text part; an interpolated one has
   // an expression part and is meaningless as an ABI name.
   if (abiToken.parts.size() != 1 || abiToken.parts[0].isExpr) {
@@ -653,21 +668,28 @@ StmtPtr Parser::parseExternDecl() {
     if (!match(Tok::Fn)) {
       error(peek(), "only 'fn' declarations are allowed inside an 'extern' block");
     }
-    const Token& name = consume(Tok::Ident, "expected a function name");
-    auto params = parseParams();
-    TypeRef returnType = parseTypeAnnotation(/*allowVoid=*/true);
-    if (check(Tok::Arrow) || check(Tok::LBrace)) {
-      throw CompileError{"an 'extern' declaration has no body; it declares a C function",
-                         peek().line, peek().col};
-    }
-    consume(Tok::Semicolon, "expected ';' after the 'extern' declaration");
-    FnDeclStmt decl{name.lexeme, std::move(params), std::move(returnType), nullptr};
-    decl.isNative = true;
-    decls.push_back(std::move(decl));
+    decls.push_back(parseExternFnDecl());
   }
   consume(Tok::RBrace, "expected '}' to close the 'extern' block");
 
   return makeStmt(ExternBlockStmt{abi, std::move(decls)}, keyword.line, keyword.col);
+}
+
+// One bodyless `fn name(params): ret;` in an `extern` declaration (the caller
+// has already consumed the `fn`). Shared by the block and the single-line form,
+// so both accept exactly the same grammar and produce the same `FnDeclStmt`.
+FnDeclStmt Parser::parseExternFnDecl() {
+  const Token& name = consume(Tok::Ident, "expected a function name");
+  auto params = parseParams();
+  TypeRef returnType = parseTypeAnnotation(/*allowVoid=*/true);
+  if (check(Tok::Arrow) || check(Tok::LBrace)) {
+    throw CompileError{"an 'extern' declaration has no body; it declares a C function",
+                       peek().line, peek().col};
+  }
+  consume(Tok::Semicolon, "expected ';' after the 'extern' declaration");
+  FnDeclStmt decl{name.lexeme, std::move(params), std::move(returnType), nullptr};
+  decl.isNative = true;
+  return decl;
 }
 
 // `struct Name { field: T; other; ... }` (PHASE 6.5). A data-only type: fields

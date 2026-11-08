@@ -1,0 +1,6 @@
+// expect-exit: 65
+// The single-line `extern fn` form is module-level metadata, like the block
+// form; nesting it inside a function is a compile error.
+fn g() {
+  extern fn f(): int;
+}

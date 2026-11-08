@@ -439,13 +439,15 @@ struct SwitchStmt {
   StmtPtr defaultBody;  // may be null
 };
 
-// `extern "C" { fn name(params): ret; ... }` (PHASE 6.6). A block of C
-// declarations: the ABI string (`"C"` is the only one supported) plus the
-// functions it declares. Each declaration is a bodyless `FnDeclStmt` with
-// `isNative` set, so it follows exactly the `native fn` path: it emits no
-// bytecode and only records a signature for call checking. The block is
-// module-level metadata, like `import`, `struct` and `native fn`, and is
-// erased before the bytecode.
+// `extern "C" { fn name(params): ret; ... }` or `extern fn name(params): ret;`
+// (PHASE 6.6). A declaration of C functions: the ABI string (`"C"` is the only
+// one supported) plus the functions it declares. The single-line form is sugar
+// for a one-entry block with an implicit `"C"` ABI, so both spellings share one
+// representation. Each declaration is a bodyless `FnDeclStmt` with `isNative`
+// set, so it follows exactly the `native fn` path: it emits no bytecode and only
+// records a signature for call checking. The declaration is module-level
+// metadata, like `import`, `struct` and `native fn`, and is erased before the
+// bytecode.
 //
 // This is the *declaration* half of the FFI. Binding the symbol to a real C
 // function (the marshalling and the call lowering without `libffi`) is a later
