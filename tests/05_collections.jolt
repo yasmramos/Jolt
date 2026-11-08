@@ -137,6 +137,25 @@ for key in {b: 1, a: 2} {
 }
 assertEq(mapKeys, ["b", "a"]);
 
+// Arrays and maps are iterated live, not over a snapshot: a change the body
+// makes is seen by later turns. Appending extends the loop; deleting a key that
+// the cursor has not reached skips it. (See docs/language.md 6.6.)
+var growing = [1, 2];
+var grown = [];
+for x in growing {
+  grown.push(x);
+  if (x == 1) { growing.push(3); }
+}
+assertEq(grown, [1, 2, 3]);
+
+var shrinking = {a: 1, b: 2, c: 3};
+var seenKeys = [];
+for k in shrinking {
+  seenKeys.push(k);
+  if (k == "a") { shrinking.delete("b"); }
+}
+assertEq(seenKeys, ["a", "c"]);
+
 // Map keys: scalar literals are canonicalized to strings, and computed
 // keys use the [expr] syntax.
 fn keyOf(n) { return "k" + str(n); }
