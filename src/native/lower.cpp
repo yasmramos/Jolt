@@ -68,6 +68,27 @@ void loadNilImmediate(CodeGen& cg, int index) {
   cg.movImmToMem(kFileBase, slotOffset(index) + 8, 0);
 }
 
+// Loads a float/double immediate into a register slot. The payload is the
+// IEEE-754 bit pattern of the (already widened) binary64 value, exactly the
+// representation the runtime helpers expect.
+void loadFloatingImmediate(CodeGen& cg, int index, double value, AotTag tag) {
+  cg.movImmToMem(kFileBase, slotOffset(index), static_cast<std::int64_t>(tag));
+  cg.movImm(kTmpTag, static_cast<std::int64_t>(doubleBits(value)));
+  cg.movToMem(kFileBase, slotOffset(index) + 8, kTmpTag);
+}
+
+// Emits a call to a runtime helper that takes two `AotValue`s (rdi:rsi,
+// rdx:rcx) plus a 64-bit selector in r8, and stores the returned `AotValue`
+// (rax:rdx) in register `dst`.
+void callBinaryWithSelector(CodeGen& cg, CodeGen::Label helper, int lhs, int rhs,
+                            int dst, std::int64_t selector) {
+  loadValue(cg, lhs, X64Reg::Rdi, X64Reg::Rsi);
+  loadValue(cg, rhs, X64Reg::Rdx, X64Reg::Rcx);
+  cg.movImm(X64Reg::R8, selector);
+  cg.callLabel(helper);
+  storeValue(cg, dst, X64Reg::Rax, X64Reg::Rdx);
+}
+
 // PHASE 7c.1 still lowers a subset. Floats and strings need the arena and
 // their own tags (7c.1b); calls, globals, locals and collections need frames
 // and the allocator (7c.2/7c.3). Every other opcode raises a `LoweringError`
@@ -115,8 +136,12 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
         loadBoolImmediate(cg, instr.a, value.asBool());
       } else if (value.isNil()) {
         loadNilImmediate(cg, instr.a);
+      } else if (value.isFloat()) {
+        loadFloatingImmediate(cg, instr.a, value.asFloat(), AotTag::Float);
+      } else if (value.isDouble()) {
+        loadFloatingImmediate(cg, instr.a, value.asDouble(), AotTag::Double);
       } else {
-        unsupported("LOADK (float/string)", "PHASE 7c.1b");
+        unsupported("LOADK (string)", "PHASE 7c.1c");
       }
       break;
     }
@@ -127,13 +152,36 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       break;
 
     case OpCode::ADD:
-      callBinary(cg, rt.addValues, instr.b, instr.c, instr.a);
+      callBinaryWithSelector(cg, rt.arithValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotArithOp::Add));
       break;
     case OpCode::SUB:
-      callBinary(cg, rt.subValues, instr.b, instr.c, instr.a);
+      callBinaryWithSelector(cg, rt.arithValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotArithOp::Sub));
       break;
     case OpCode::MUL:
-      callBinary(cg, rt.mulValues, instr.b, instr.c, instr.a);
+      callBinaryWithSelector(cg, rt.arithValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotArithOp::Mul));
+      break;
+    case OpCode::DIV:
+      callBinaryWithSelector(cg, rt.arithValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotArithOp::Div));
+      break;
+    case OpCode::MOD:
+      callBinaryWithSelector(cg, rt.arithValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotArithOp::Mod));
+      break;
+    case OpCode::POW:
+      callBinary(cg, rt.powValues, instr.b, instr.c, instr.a);
+      break;
+
+    case OpCode::SHL:
+      callBinaryWithSelector(cg, rt.shiftValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotShiftOp::Shl));
+      break;
+    case OpCode::SHR:
+      callBinaryWithSelector(cg, rt.shiftValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(AotShiftOp::Shr));
       break;
 
     case OpCode::BAND:
@@ -146,11 +194,8 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
                                   ? AotBitwiseOp::And
                                   : (instr.op == OpCode::BOR ? AotBitwiseOp::Or
                                                              : AotBitwiseOp::Xor);
-      loadValue(cg, instr.b, X64Reg::Rdi, X64Reg::Rsi);
-      loadValue(cg, instr.c, X64Reg::Rdx, X64Reg::Rcx);
-      cg.movImm(X64Reg::R8, static_cast<std::int64_t>(op));
-      cg.callLabel(rt.bitwiseValues);
-      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      callBinaryWithSelector(cg, rt.bitwiseValues, instr.b, instr.c, instr.a,
+                             static_cast<std::int64_t>(op));
       break;
     }
 
@@ -224,16 +269,8 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       break;
 
     // The rest need runtime support and land in later slices of PHASE 7c.
-    // DIV/MOD/POW need the division-by-zero error path and libm.
-    case OpCode::DIV:
-    case OpCode::MOD:
-    case OpCode::POW:
-      unsupported("DIV/MOD/POW", "PHASE 7c.1b");
-    // SHL/SHR need the shift count in cl, which the register file rework
-    // settles in 7c.1b.
-    case OpCode::SHL:
-    case OpCode::SHR:
-      unsupported("SHL/SHR", "PHASE 7c.1b");
+    // Globals, locals, calls and closures need frames (7c.2); collections and
+    // iteration need the arena (7c.3).
     case OpCode::GETGLOBAL:
     case OpCode::SETGLOBAL:
       unsupported("GETGLOBAL/SETGLOBAL", "PHASE 7c.2");

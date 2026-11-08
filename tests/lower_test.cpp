@@ -89,12 +89,6 @@ static void testImageIsSelfContained() {
 // --- Error tests: the deferred opcodes must be rejected, not miscompiled ---
 
 static void testDeferredOpcodesThrow() {
-  check(loweringThrows(makeProto({instr(OpCode::DIV, 0, 0, 1), instr(OpCode::HALT)}, {}, 2),
-                       "DIV/MOD/POW"),
-        "DIV raises a LoweringError");
-  check(loweringThrows(makeProto({instr(OpCode::SHL, 0, 0, 1), instr(OpCode::HALT)}, {}, 2),
-                       "SHL/SHR"),
-        "SHL raises a LoweringError");
   check(loweringThrows(makeProto({instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)}, {}, 2),
                        "CALL/RETURN"),
         "CALL raises a LoweringError");
@@ -106,11 +100,6 @@ static void testDeferredOpcodesThrow() {
                       {Value(std::string("hi"))}, 1),
             "LOADK"),
         "LOADK of a string raises a LoweringError");
-  check(loweringThrows(
-            makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
-                      {Value(1.5)}, 1),
-            "LOADK"),
-        "LOADK of a float raises a LoweringError");
 }
 
 static void testBadJumpTargetThrows() {
@@ -349,6 +338,117 @@ static void testExecManyRegisters() {
   checkInt(proto, 11, "exec: 40 registers are usable (no physical-register ceiling)");
 }
 
+static void checkDouble(const Bytecode& proto, double expected, const char* what) {
+  AotValue value = run(proto);
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Double) &&
+            value.payload == aotDouble(expected).payload;
+  check(ok, what);
+  if (!ok) {
+    std::printf("      got tag=%llu payload=%016llx, expected Double %016llx\n",
+                static_cast<unsigned long long>(value.tag),
+                static_cast<unsigned long long>(value.payload),
+                static_cast<unsigned long long>(aotDouble(expected).payload));
+  }
+}
+
+// A `float` result stores the binary32 value widened to binary64, so the
+// expected payload is `aotFloat`, not `aotDouble`.
+static void checkFloat(const Bytecode& proto, double widened, const char* what) {
+  AotValue value = run(proto);
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Float) &&
+            value.payload == aotFloat(widened).payload;
+  check(ok, what);
+  if (!ok) {
+    std::printf("      got tag=%llu payload=%016llx, expected Float %016llx\n",
+                static_cast<unsigned long long>(value.tag),
+                static_cast<unsigned long long>(value.payload),
+                static_cast<unsigned long long>(aotFloat(widened).payload));
+  }
+}
+
+static void testExecFloatLoads() {
+  checkDouble(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)}, {Value(1.5)}, 1),
+              1.5, "exec: LOADK double 1.5");
+  checkFloat(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                       {Value::fromFloat(0.1f)}, 1),
+             static_cast<double>(0.1f), "exec: LOADK float 0.1f");
+}
+
+static void testExecFloatArithmetic() {
+  auto mk = [](OpCode op, Value x, Value y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 0, 0, 1), instr(OpCode::HALT)},
+                     {x, y}, 2);
+  };
+  checkDouble(mk(OpCode::ADD, Value(1.5), Value(2.5)), 4.0, "exec: 1.5 + 2.5 == 4.0 (double)");
+  checkDouble(mk(OpCode::SUB, Value(5.5), Value(2.0)), 3.5, "exec: 5.5 - 2.0 == 3.5 (double)");
+  checkDouble(mk(OpCode::MUL, Value(1.5), Value(2.0)), 3.0, "exec: 1.5 * 2.0 == 3.0 (double)");
+  checkDouble(mk(OpCode::DIV, Value(7.0), Value(2.0)), 3.5, "exec: 7.0 / 2.0 == 3.5 (double)");
+
+  // float + float stays binary32: 0.1f + 0.2f rounds to 0.3f.
+  checkFloat(mk(OpCode::ADD, Value::fromFloat(0.1f), Value::fromFloat(0.2f)),
+             static_cast<double>(0.3f), "exec: 0.1f + 0.2f == 0.3f (binary32 rounding)");
+
+  // int widens to float: 1 + 1.5f is a float.
+  checkFloat(mk(OpCode::ADD, Value(static_cast<int64_t>(1)), Value::fromFloat(1.5f)), 2.5,
+             "exec: 1 + 1.5f == 2.5 (float)");
+
+  // A float with a double promotes to double.
+  checkDouble(mk(OpCode::ADD, Value::fromFloat(1.5f), Value(1.5)), 3.0,
+              "exec: 1.5f + 1.5 == 3.0 (double)");
+}
+
+static void testExecIntDivModPow() {
+  auto mk = [](OpCode op, std::int64_t x, std::int64_t y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 0, 0, 1), instr(OpCode::HALT)},
+                     {Value(x), Value(y)}, 2);
+  };
+  checkInt(mk(OpCode::DIV, 7, 2), 3, "exec: 7 / 2 == 3 (int)");
+  checkInt(mk(OpCode::MOD, 7, 3), 1, "exec: 7 % 3 == 1 (int)");
+  checkInt(mk(OpCode::POW, 2, 10), 1024, "exec: 2 ** 10 == 1024 (int)");
+  checkInt(mk(OpCode::POW, 3, 0), 1, "exec: 3 ** 0 == 1 (int)");
+  // INT64_MIN / -1 is the `idiv` overflow; the hosted engine returns a itself.
+  checkInt(mk(OpCode::DIV, INT64_MIN, -1), INT64_MIN, "exec: INT64_MIN / -1 wraps (int)");
+  checkInt(mk(OpCode::MOD, INT64_MIN, -1), 0, "exec: INT64_MIN % -1 == 0 (int)");
+}
+
+static void testExecShifts() {
+  auto mk = [](OpCode op, std::int64_t x, std::int64_t y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 0, 0, 1), instr(OpCode::HALT)},
+                     {Value(x), Value(y)}, 2);
+  };
+  checkInt(mk(OpCode::SHL, 1, 4), 16, "exec: 1 << 4 == 16");
+  checkInt(mk(OpCode::SHR, -8, 1), -4, "exec: -8 >> 1 == -4 (arithmetic)");
+  checkInt(mk(OpCode::SHL, 1, 63), INT64_MIN, "exec: 1 << 63 == INT64_MIN");
+}
+
+static void testExecFloatComparisons() {
+  auto mk = [](OpCode op, Value x, Value y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 2, 0, 1), instr(OpCode::MOVE, 0, 2), instr(OpCode::HALT)},
+                     {x, y}, 3);
+  };
+  checkBool(mk(OpCode::EQ, Value(1.5), Value(1.5)), true, "exec: 1.5 == 1.5 is true");
+  checkBool(mk(OpCode::EQ, Value(1.5), Value(1.6)), false, "exec: 1.5 == 1.6 is false");
+  checkBool(mk(OpCode::LT, Value(1.5), Value(1.6)), true, "exec: 1.5 < 1.6 is true");
+  checkBool(mk(OpCode::GT, Value(1.5), Value(1.6)), false, "exec: 1.5 > 1.6 is false");
+  // Mixed numeric equality is numeric: an int and a double compare by value.
+  checkBool(mk(OpCode::EQ, Value(static_cast<int64_t>(1)), Value(1.0)), true,
+            "exec: 1 == 1.0 is true (numeric equality)");
+  checkBool(mk(OpCode::LT, Value(static_cast<int64_t>(1)), Value::fromFloat(1.5f)), true,
+            "exec: 1 < 1.5f is true (mixed ordering)");
+}
+
+static void testExecFloatNegate() {
+  auto neg = makeProto(
+      {instr(OpCode::LOADK, 0, 0),
+       instr(OpCode::UNOP, 0, 0, static_cast<int>(UnaryOp::Negate)), instr(OpCode::HALT)},
+      {Value(1.5)}, 1);
+  checkDouble(neg, -1.5, "exec: -(1.5) == -1.5 (double)");
+}
+
 #endif  // LOWER_EXEC_TESTS
 
 int main() {
@@ -367,6 +467,12 @@ int main() {
   testExecJumps();
   testExecBackwardJumpLoop();
   testExecManyRegisters();
+  testExecFloatLoads();
+  testExecFloatArithmetic();
+  testExecIntDivModPow();
+  testExecShifts();
+  testExecFloatComparisons();
+  testExecFloatNegate();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

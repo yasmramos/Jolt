@@ -64,6 +64,9 @@ enum class Jcc : std::uint8_t {
   A = 0x87,   // above (ja)
   S = 0x88,   // sign set
   Ns = 0x89,  // sign clear
+  // Parity, used to reject unordered (NaN) results of `ucomisd`.
+  P = 0x8A,   // parity even (PF=1, i.e. unordered)
+  Np = 0x8B,  // parity odd (PF=0, i.e. ordered)
 };
 
 class CodeGen {
@@ -115,15 +118,30 @@ class CodeGen {
   void orReg(X64Reg dst, X64Reg src);
   void xorReg(X64Reg dst, X64Reg src);
   void shlCl(X64Reg dst);   // dst <<= cl
+  void shrCl(X64Reg dst);   // dst >>= cl (logical)
   void sarCl(X64Reg dst);   // dst >>= cl (arithmetic)
 
   // SSE scalar double helpers (used by the float fast paths).
   void movsdToXmm(int xmm, X64Reg base, std::int64_t disp);    // movsd xmm, [base+disp]
   void movsdFromXmm(X64Reg base, std::int64_t disp, int xmm);  // movsd [base+disp], xmm
+  void movsdReg(int dstXmm, int srcXmm);                       // movsd xmm, xmm
+  // Bit-exact moves between a GPR and an xmm register (`movq`). They are how
+  // the runtime gets a float's payload bits into and out of an SSE register
+  // without going through memory: the payload of a Float/Double value is the
+  // IEEE-754 bit pattern, and `movq` moves it verbatim.
+  void movqToXmm(int xmm, X64Reg src);      // movq xmm, r64
+  void movqFromXmm(X64Reg dst, int xmm);    // movq r64, xmm
   void addsd(int dstXmm, int srcXmm);
   void subsd(int dstXmm, int srcXmm);
   void mulsd(int dstXmm, int srcXmm);
   void divsd(int dstXmm, int srcXmm);
+  // Narrowing/widening conversions between the two binary floating-point
+  // formats. `cvtsd2ss` rounds to binary32 using the current MXCSR mode
+  // (round-to-nearest-even by default), which is exactly what a C++ `float`
+  // cast does, so a `float` operation rounds the same way the hosted engine's
+  // `Value::fromFloat` does.
+  void cvtsd2ss(int dstXmm, int srcXmm);    // double -> float
+  void cvtss2sd(int dstXmm, int srcXmm);    // float -> double
   void ucomisd(int a, int b);
   void cvttsd2si(X64Reg dst, int srcXmm);  // truncate toward zero
   void cvtsi2sd(int dstXmm, X64Reg src);
@@ -133,6 +151,7 @@ class CodeGen {
   void cmpReg(X64Reg lhs, X64Reg rhs);
   void cmpImm32(X64Reg lhs, std::int32_t value);  // cmp r/m64, imm32
   void testReg(X64Reg reg);
+  void testImm32(X64Reg reg, std::int32_t value);  // test r/m64, imm32 (F7 /0)
   void setcc(Jcc cc, X64Reg dst);          // setcc r/m8: dst low byte = 0/1
   void movzx(X64Reg dst, X64Reg src);      // movzx r64, r/m8 (zero-extend)
   void jmp(Label label);

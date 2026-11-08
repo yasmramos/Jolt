@@ -10,9 +10,9 @@
 // Lowers a Bytecode proto to x86-64 machine code.
 //
 // PHASE 7c.1 lowers the runtime-free opcodes over the boxed `AotValue` (see
-// `native/value.h`): LOADK (nil/bool/int), MOVE, ADD, SUB, MUL, BAND, BOR,
-// BXOR, UNOP (negate/not/bit-not), EQ, NEQ, LT, LTE, GT, GTE, JMP,
-// JMP_IF_FALSE, JMP_IF_TRUE and HALT.
+// `native/value.h`): LOADK (nil/bool/int/float/double), MOVE, ADD, SUB, MUL,
+// DIV, MOD, POW, BAND, BOR, BXOR, SHL, SHR, UNOP (negate/not/bit-not), EQ,
+// NEQ, LT, LTE, GT, GTE, JMP, JMP_IF_FALSE, JMP_IF_TRUE and HALT.
 //
 // A bytecode register is a 16-byte slot in a register file on the stack, not a
 // physical CPU register: a boxed value does not fit in one, and the file is
@@ -23,10 +23,7 @@
 // no relocations).
 //
 // Every other opcode throws a `LoweringError`:
-//   - DIV, MOD, POW: need the division-by-zero error path and libm (7c.1b).
-//   - SHL, SHR: need the shift count in cl, which the register file rework
-//     settles (7c.1b).
-//   - LOADK of a float or string constant: no representation yet (7c.1b).
+//   - LOADK of a string constant: no representation yet (7c.1c).
 //   - GETGLOBAL, SETGLOBAL, DECLLOCAL, GETLOCAL, SETLOCAL, CALL, RETURN,
 //     CLOSURE, GETUPVAL, SETUPVAL: need frames and globals (7c.2).
 //   - NEWTABLE, GETTABLE, SETTABLE, IN, ITER: need the arena (7c.3).

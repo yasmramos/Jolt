@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 // Boxed value of the freestanding AOT runtime (PHASE 7c.1).
@@ -24,16 +25,19 @@
 
 // Value tags. The names and the ordering mirror the hosted `VType` where a
 // kind exists in both worlds, so the two engines agree on what a value *is*.
-// `Float` and `Str` are reserved for PHASE 7c.1b: their payloads will be a
-// binary64 bit pattern and an arena string pointer respectively, and no
-// opcode produces them yet, so the lowering rejects them instead of emitting
-// wrong code.
+// `Float` and `Double` carry the IEEE-754 binary64 bit pattern of the value in
+// their payload; a `Float` stores a double that holds exactly a binary32 value
+// (the hosted engine widens binary32 to binary64 the same way), so rounding it
+// back to binary32 is lossless. `Str` is reserved for PHASE 7c.1c: its payload
+// will be an arena string pointer, and no opcode produces it yet, so the
+// lowering rejects a string constant instead of emitting wrong code.
 enum class AotTag : std::uint64_t {
   Nil = 0,
   Bool = 1,
   Int = 2,
-  Float = 3,  // reserved: payload is the IEEE-754 binary64 bit pattern
-  Str = 4,    // reserved: payload is a pointer to an arena string object
+  Float = 3,   // payload is the IEEE-754 binary64 bit pattern of a binary32 value
+  Double = 4,  // payload is the IEEE-754 binary64 bit pattern
+  Str = 5,     // reserved: payload is a pointer to an arena string object
 };
 
 struct AotValue {
@@ -55,4 +59,21 @@ constexpr AotValue aotBool(bool value) {
 }
 constexpr AotValue aotInt(std::int64_t value) {
   return AotValue{static_cast<std::uint64_t>(AotTag::Int), static_cast<std::uint64_t>(value)};
+}
+
+// The payload of a float/double is the IEEE-754 bit pattern, not the numeric
+// value: a runtime helper moves it into an xmm register with `movq` and never
+// reinterprets it through an integer ALU, so a signalling NaN or a negative
+// zero survives the round trip unchanged. `memcpy` is the portable way to
+// reinterpret the bits and is a no-op at `-O2`.
+inline std::uint64_t doubleBits(double value) {
+  std::uint64_t bits = 0;
+  std::memcpy(&bits, &value, sizeof bits);
+  return bits;
+}
+inline AotValue aotDouble(double value) {
+  return AotValue{static_cast<std::uint64_t>(AotTag::Double), doubleBits(value)};
+}
+inline AotValue aotFloat(double value) {
+  return AotValue{static_cast<std::uint64_t>(AotTag::Float), doubleBits(value)};
 }

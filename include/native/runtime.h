@@ -29,9 +29,15 @@
 // second) and returned in rax:rdx.
 struct AotRuntimeHandles {
   CodeGen::Label printValue;     // void  jolt_print_value(AotValue v)
-  CodeGen::Label addValues;      // AotValue jolt_add(AotValue a, AotValue b)
-  CodeGen::Label subValues;      // AotValue jolt_sub(AotValue a, AotValue b)
-  CodeGen::Label mulValues;      // AotValue jolt_mul(AotValue a, AotValue b)
+  // Numeric binary arithmetic with the int/float/double promotion of the
+  // hosted engine. The selector (AotArithOp) is the third argument.
+  CodeGen::Label arithValues;    // AotValue jolt_arith(AotValue a, AotValue b, long op)
+  // `**`: integer power for int/int with a non-negative exponent (the hosted
+  // `intPow`); every other case needs libm and is rejected for now.
+  CodeGen::Label powValues;      // AotValue jolt_pow(AotValue a, AotValue b)
+  // Integer `<<`/`>>`, selected by AotShiftOp; the shift count is a second
+  // `AotValue` and is range-checked against 0..63.
+  CodeGen::Label shiftValues;    // AotValue jolt_shift(AotValue a, AotValue b, long op)
   CodeGen::Label bitwiseValues;  // AotValue jolt_bitwise(AotValue a, AotValue b, long op)
   CodeGen::Label negateValue;    // AotValue jolt_negate(AotValue a)
   CodeGen::Label notValue;       // AotValue jolt_not(AotValue a)
@@ -66,6 +72,24 @@ enum class AotBitwiseOp : std::int64_t {
   And = 1,
   Or = 2,
   Xor = 3,
+};
+
+// The selector `jolt_arith` accepts: `+`, `-`, `*`, `/` and `%`. `Add` and
+// `Sub` also concatenate strings once strings land (7c.1c); for now a
+// non-numeric operand is the "unsupported operand types" error.
+enum class AotArithOp : std::int64_t {
+  Add = 1,
+  Sub = 2,
+  Mul = 3,
+  Div = 4,
+  Mod = 5,
+};
+
+// The selector `jolt_shift` accepts. `>>` is arithmetic in Jolt (it preserves
+// the sign), so the two directions are distinct helpers.
+enum class AotShiftOp : std::int64_t {
+  Shl = 1,
+  Shr = 2,
 };
 
 // Appends every runtime helper to `code` and binds `handles`. `entry` comes
