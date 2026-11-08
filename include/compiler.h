@@ -83,6 +83,11 @@ class Compiler {
     return names;
   }
 
+  // The warnings collected by the last compilation (PHASE 6.7.5). Warnings are
+  // non-fatal: the program still runs. The CLI prints them to stderr; tests
+  // inspect them. Cleared at the start of every compilation.
+  const std::vector<Warning>& warnings() const { return warnings_; }
+
   // Provides the module loader used to resolve `import` declarations. The
   // callback receives a dotted module path and the position of the import
   // declaration, and returns the module's parsed program, or throws
@@ -121,6 +126,10 @@ class Compiler {
     // is checked against the native's signature; a plain local that shadows
     // the name is a different function, so the check is skipped for it.
     bool isNative = false;
+    // True when the binding was declared `@MustUse` (PHASE 6.7.5). Discarding
+    // a call to it is a warning. A local that shadows the name is a different
+    // function, so it carries its own flag.
+    bool isMustUse = false;
   };
 
   struct Scope {
@@ -253,8 +262,36 @@ class Compiler {
   struct NativeSig {
     std::vector<Param> params;
     TypeRef returnType;
+    bool mustUse = false;
   };
   std::unordered_map<std::string, NativeSig> nativeSigs_;
+
+  // Names declared `@MustUse` that are not natives (plain `fn`, or a global
+  // holding one). Kept parallel to the binding tables and part of the session
+  // state, like `nativeSigs_`: a REPL entry must still see the annotation of a
+  // function declared by an earlier entry. A local that shadows the name
+  // carries its own flag on the `LocalVar`, so it is not consulted here
+  // (PHASE 6.7.5).
+  std::unordered_set<std::string> mustUseGlobals_;
+
+  // Non-fatal diagnostics collected while compiling (PHASE 6.7.5). The CLI
+  // prints them to stderr; the program still runs. A hard error would violate
+  // the §4.6 principle that inference never rejects a program that would run.
+  std::vector<Warning> warnings_;
+
+  // Records a warning at the current node position.
+  void warn(const std::string& message, int line, int col);
+
+  // Whether the name resolves to a `@MustUse` binding. Resolution mirrors a
+  // variable read: a local or upvalue that shadows the name is a different
+  // function and yields its own flag, so the check is skipped for it.
+  bool mustUseFor(const std::string& name) const;
+
+  // Emits the `@MustUse` warning (PHASE 6.7.5) when `expr`, used as a
+  // statement, is a call to a `@MustUse` function whose result is discarded.
+  // `_ = f();` is an assignment, not a bare call, so it acknowledges the
+  // discard and never reaches this check.
+  void checkDiscardedCall(const Expr& expr);
 
   // Declared return type of the function currently being compiled, checked
   // against every `return` value. Empty means "unannotated".
@@ -373,6 +410,10 @@ class Compiler {
   // against its signature. It also descends into `extern "C"` blocks: their
   // declarations are natives too.
   void registerNativeDecls(const BlockStmt& block);
+  // Registers the `@MustUse` flag of non-native functions declared directly in
+  // `block` before it is compiled, so a call from an earlier (hoisted) function
+  // is checked whatever the declaration order (PHASE 6.7.5).
+  void registerMustUseDecls(const BlockStmt& block);
   // Compiles an `extern "C" { ... }` block (PHASE 6.6): each declaration
   // follows the `native fn` path, so the block emits no bytecode of its own.
   void compileExternBlock(const ExternBlockStmt& block, int line, int col);
@@ -408,6 +449,7 @@ class Compiler {
     std::unordered_map<std::string, TypeRef> globalTypes;
     std::unordered_map<std::string, std::vector<StructField>> structDefs;
     std::unordered_map<std::string, NativeSig> nativeSigs;
+    std::unordered_set<std::string> mustUseGlobals;
     std::map<std::string, ImportedModule> loadedModules;
     std::set<std::string> materializedModules;
     std::set<std::string> namespaces;

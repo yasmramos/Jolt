@@ -564,11 +564,17 @@ Slices, each independently shippable:
   "C"`/`native fn` signatures and in struct fields (`void` cannot be a member
   either). Tested by `tests/34_unions.jolt`, the `union_*` error cases and
   `testUnionTypes` in `compiler_test.cpp`.
-- **6.7.5 `@mustUse`** — a warning (never a hard error) when a `@mustUse`
-  return is discarded, matching Rust `#[must_use]` and Kotlin
+- **6.7.5 `@MustUse` (done)** — a warning (never a hard error) when a
+  `@MustUse` return is discarded, matching Rust `#[must_use]` and Kotlin
   `@CheckReturnValue`. A hard error would violate the §4.6 principle that
   inference never rejects a program that would have run. `_ = expr`
-  acknowledges a discard.
+  acknowledges a discard. `@` is a new lexer token (`Tok::At`), the only
+  grammar change: `@MustUse` precedes a `fn` or `native fn` and sets a
+  `mustUse` flag on the node, so it emits no bytecode. The compiler collects
+  warnings (`errors.h` `Warning`, `printCompileWarning` in `diagnostic.*`,
+  `Compiler::warnings()`), and the CLI prints them to stderr while the program
+  still runs. Tested by `tests/35_must_use.jolt`, the `unknown_attribute` and
+  `attribute_before_let` error cases and `testMustUse` in `compiler_test.cpp`.
 
 ### PHASE 7 — Bytecode → native backend (AOT, freestanding) 🔶 in progress
 - New module `src/native/` + `include/native/`: lowering of every opcode to
@@ -690,7 +696,7 @@ Phase 5: ✅ completed and tested
 Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end]` for strings and arrays (a `$slice` helper call, no new opcode)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
-Phase 6.7: 🔶 in progress (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch` and 6.7.4 unions `T | E` done; 6.7.5 `@mustUse` pending)
+Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
 Phase 7: 🔶 in progress (7a, 7b and 7c.0 done; 7c.1+, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)

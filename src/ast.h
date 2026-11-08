@@ -363,6 +363,11 @@ struct FnDeclStmt {
   // `registerBuiltins`). The parser rejects a body on a native declaration, so
   // `body` is null exactly when this is true.
   bool isNative = false;
+  // `@MustUse fn f() ...` (PHASE 6.7.5): the caller must do something with the
+  // return value. Discarding a call to it is a compile-time warning, not an
+  // error, so inference never rejects a program that would have run. `_ = f();`
+  // acknowledges the discard.
+  bool mustUse = false;
 };
 
 // `struct Point { x: int; y: int; }` (PHASE 6.5). A data-only type: no

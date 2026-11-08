@@ -40,6 +40,8 @@ enum class Tok {
   True,
   False,
   Nil,
+  // `@` starts an attribute (`@MustUse fn f() ...`).
+  At,
   // punctuation
   LParen,
   RParen,

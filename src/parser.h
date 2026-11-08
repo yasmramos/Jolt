@@ -91,10 +91,20 @@ class Parser {
 
   StmtPtr parseStatement();
   StmtPtr parseVarDecl();
-  StmtPtr parseFnDecl();
+  // `@MustUse fn f() ...` (PHASE 6.7.5): `mustUse` is true when an attribute
+  // was parsed before the declaration. Attributes are metadata, so they are
+  // stored on the node and never reach the bytecode.
+  StmtPtr parseFnDecl(bool mustUse = false);
   // `native fn name(params): ret;` (PHASE 6.5): a bodyless declaration that
   // binds a name to a host-registered native function.
-  StmtPtr parseNativeDecl();
+  StmtPtr parseNativeDecl(bool mustUse = false);
+  // One or more `@name` attributes before a declaration (PHASE 6.7.5). Only
+  // `@MustUse` is known; any other attribute is a compile error. The caller has
+  // already consumed the `@`.
+  bool parseAttributes();
+  // `@MustUse fn f() ...` / `@MustUse native fn f();` (PHASE 6.7.5): parses the
+  // attribute list and then the declaration it annotates.
+  StmtPtr parseAttributedDecl();
   // `extern "C" { fn ...; }` or `extern fn ...;` (PHASE 6.6): C declarations.
   StmtPtr parseExternDecl();
   // One bodyless `fn name(params): ret;` in an `extern` declaration. The caller
