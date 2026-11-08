@@ -15,8 +15,10 @@
 #include <vector>
 
 #include "compiler.h"
+#include "diagnostic.h"
 #include "lexer.h"
 #include "parser.h"
+#include "platform.h"
 
 namespace {
 
@@ -45,6 +47,17 @@ void expectCompiles(const std::string& source) {
                  error.message.c_str());
     std::exit(1);
   }
+}
+
+// Compiles `source` and returns the warnings the compiler collected, so a test
+// can assert on a non-fatal diagnostic (PHASE 6.7.5) without running the VM.
+std::vector<Warning> compileWarnings(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<compiler-test>");
+  auto program = parser.parseProgram();
+  Compiler compiler;
+  compiler.compile(program);
+  return compiler.warnings();
 }
 
 void testArithmeticAndPrint() {
@@ -827,6 +840,104 @@ void testUnionTypes() {
   expectCompileError("fn f(): void | int { return 1; }\n", "void union member");
 }
 
+// Captures stderr so a test can assert on the exact snippet a diagnostic
+// prints. The alignment of the `|` guide lines and the `^` caret is part of the
+// contract: a caret must sit under the character the column points at.
+class CapturingPlatform : public Platform {
+ public:
+  void write(int, const char* data, std::size_t length) override { out.append(data, length); }
+  void writeErr(const char* data, std::size_t length) override { out.append(data, length); }
+  void flush(int) override {}
+  std::size_t read(int, char*, std::size_t) override { return 0; }
+  int open(const char*, OpenMode) override { return kInvalidFd; }
+  void close(int) override {}
+  bool seek(int, std::int64_t, SeekOrigin) override { return false; }
+  [[noreturn]] void exit(int) override { std::abort(); }
+  void* alloc(std::size_t, std::size_t) override { return nullptr; }
+  void dealloc(void*) override {}
+  void* lookupSymbol(const char*) override { return nullptr; }
+
+  std::string out;
+};
+
+// Every line of a snippet must place its `|` (and the `^` after it) at the same
+// column, and the caret must line up with the offending character.
+void testDiagnosticSnippetAlignment() {
+  const std::string source = "fn g() {\n  f();\n}\n";
+  CapturingPlatform platform;
+  printCompileError("<test>", source, CompileError{"boom", 2, 4}, platform);
+
+  // Split into lines: header, guide, code, guide.
+  std::vector<std::string> lines;
+  std::string current;
+  for (char c : platform.out) {
+    if (c == '\n') {
+      lines.push_back(current);
+      current.clear();
+    } else {
+      current += c;
+    }
+  }
+  assert(lines.size() == 4);
+  // The `|` of the code line and of both guide lines share one column.
+  assert(lines[1].find('|') == lines[2].find('|'));
+  assert(lines[3].find('|') == lines[2].find('|'));
+  // The caret points at column 4 of the code line ("  f();" -> index 3). The
+  // guide line is `|` + ' ' + spaces + '^', so text index i sits at
+  // `bar + 2 + i`.
+  assert(lines[3].find('^') == lines[2].find('|') + 2 + 3);
+}
+
+void testMustUse() {
+  // PHASE 6.7.5: `@MustUse` is compile-time metadata that produces a warning,
+  // never an error, when a call result is discarded. The annotation adds no
+  // bytecode, so the same program with and without it compiles identically.
+  Bytecode annotated = compileSource("@MustUse fn f(): int { return 1; }\n_ = f();\n");
+  Bytecode plain = compileSource("fn f(): int { return 1; }\n_ = f();\n");
+  assert(annotated.code.size() == plain.code.size());
+
+  // Discarding the result warns; the warning names the function and the line.
+  std::vector<Warning> warned = compileWarnings("@MustUse fn f(): int { return 1; }\nf();\n");
+  assert(warned.size() == 1);
+  assert(warned[0].line == 2);
+  assert(warned[0].message.find("f") != std::string::npos);
+
+  // `_ = f();` acknowledges the discard, so it does not warn.
+  assert(compileWarnings("@MustUse fn f(): int { return 1; }\n_ = f();\n").empty());
+  // Using the result (binding it, returning it) does not warn.
+  assert(compileWarnings("@MustUse fn f(): int { return 1; }\nlet x = f();\n").empty());
+  assert(compileWarnings("@MustUse fn f(): int { return 1; }\nprint(f());\n").empty());
+  // A plain function never warns, even when its result is discarded.
+  assert(compileWarnings("fn f(): int { return 1; }\nf();\n").empty());
+
+  // A local declaration (inside a function body) is tracked too.
+  std::vector<Warning> localWarned = compileWarnings(
+      "fn outer() {\n  @MustUse fn inner(): int { return 1; }\n  inner();\n}\nouter();\n");
+  assert(localWarned.size() == 1);
+  assert(localWarned[0].line == 3);
+
+  // A shadowing binding is a different function, so the flag does not leak.
+  assert(compileWarnings(
+             "@MustUse fn f(): int { return 1; }\n"
+             "fn g() {\n  fn f(): int { return 2; }\n  f();\n}\n")
+             .empty());
+
+  // Declaration order does not matter: a hoisted function compiled before the
+  // `@MustUse` declaration still warns (functions are hoisted, so the call in
+  // `g` resolves to the top-level `f`).
+  assert(compileWarnings("fn g() { f(); }\n@MustUse fn f(): int { return 1; }\n").size() == 1);
+
+  // `@MustUse` is accepted on a `native fn` too.
+  assert(compileWarnings("@MustUse native fn f(x: int): int;\n_ = f(1);\n").empty());
+  assert(compileWarnings("@MustUse native fn f(x: int): int;\nf(1);\n").size() == 1);
+
+  // Only `@MustUse` is known; an unknown attribute is a compile error, and an
+  // attribute must precede a function declaration.
+  expectCompileError("@unknown fn f() {}\n", "unknown attribute");
+  expectCompileError("@MustUse\nlet x = 1;\n", "attribute before a non-function");
+  expectCompileError("@MustUse\nstruct S { x: int; }\n", "attribute before a struct");
+}
+
 void testTypeMismatchErrors() {
   expectCompileError("let x: int = \"s\";\n", "string into int");
   expectCompileError("let x: int = 1.5;\n", "float into int");
@@ -1293,6 +1404,8 @@ int main() {
   testTypeAnnotationsAreErased();
   testTypeAnnotationsAccepted();
   testUnionTypes();
+  testDiagnosticSnippetAlignment();
+  testMustUse();
   testTypeMismatchErrors();
   testNullCoalesceBytecode();
   testSafeMemberBytecode();

@@ -267,6 +267,7 @@ StmtPtr Parser::parseStatement() {
   const Token& token = peek();
 
   if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
+  if (check(Tok::At)) return parseAttributedDecl();
   if (match(Tok::Fn)) return parseFnDecl();
   if (match(Tok::Native)) return parseNativeDecl();
   if (match(Tok::Extern)) return parseExternDecl();
@@ -596,7 +597,36 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
   return false;
 }
 
-StmtPtr Parser::parseFnDecl() {
+StmtPtr Parser::parseAttributedDecl() {
+  // `@name` before a declaration (PHASE 6.7.5). Only `@MustUse` is known; an
+  // unknown attribute is rejected rather than ignored, so a typo cannot
+  // silently drop the check. Attributes are metadata: they set a flag on the
+  // declaration and add no bytecode.
+  advance();  // '@'
+  bool mustUse = parseAttributes();
+  if (match(Tok::Fn)) return parseFnDecl(mustUse);
+  if (match(Tok::Native)) return parseNativeDecl(mustUse);
+  error(peek(), "an attribute must precede a 'fn' or 'native fn' declaration");
+}
+
+// One or more `@name` attributes. The caller has already consumed the first
+// `@`. Returns whether `@MustUse` appeared; a duplicate is harmless.
+bool Parser::parseAttributes() {
+  bool mustUse = false;
+  for (;;) {
+    const Token& name = consume(Tok::Ident, "expected an attribute name after '@'");
+    if (name.lexeme == "MustUse") {
+      mustUse = true;
+    } else {
+      throw CompileError{"unknown attribute '@" + name.lexeme + "'", name.line, name.col};
+    }
+    if (!check(Tok::At)) break;
+    advance();  // consume the next '@'
+  }
+  return mustUse;
+}
+
+StmtPtr Parser::parseFnDecl(bool mustUse) {
   const Token& keyword = previous();
   if (check(Tok::LParen)) {
     error(peek(),
@@ -622,7 +652,7 @@ StmtPtr Parser::parseFnDecl() {
     match(Tok::Semicolon);
   }
   return makeStmt(FnDeclStmt{name.lexeme, std::move(params), std::move(returnType),
-                             std::move(body)},
+                             std::move(body), false, mustUse},
                   keyword.line, keyword.col);
 }
 
@@ -634,7 +664,7 @@ StmtPtr Parser::parseFnDecl() {
 // Like `struct` and `import`, it is module-level metadata, so it is only
 // allowed at the top level. It has no body: a `{ ... }` or `=>` body is
 // rejected, and the declaration ends with `;`.
-StmtPtr Parser::parseNativeDecl() {
+StmtPtr Parser::parseNativeDecl(bool mustUse) {
   const Token& keyword = previous();
   if (nestingDepth_ > 0) {
     throw CompileError{"'native fn' is only allowed at the top level of a module", keyword.line,
@@ -651,6 +681,7 @@ StmtPtr Parser::parseNativeDecl() {
   consume(Tok::Semicolon, "expected ';' after the 'native fn' declaration");
   FnDeclStmt decl{name.lexeme, std::move(params), std::move(returnType), nullptr};
   decl.isNative = true;
+  decl.mustUse = mustUse;
   return makeStmt(std::move(decl), keyword.line, keyword.col);
 }
 
