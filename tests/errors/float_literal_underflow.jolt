@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A nonzero `double` literal that underflows all the way to zero is out of
+// range (a representable subnormal such as `1e-320` is accepted instead).
+print(1e-400);

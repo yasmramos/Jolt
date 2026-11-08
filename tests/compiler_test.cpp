@@ -1062,6 +1062,22 @@ void testTypeMismatchErrors() {
   expectCompileError("let x: integer = 1;\n", "unknown type name");
 }
 
+void testFloatLiteralRange() {
+  // A representable subnormal is a valid literal: `strtod` reports ERANGE for
+  // underflow too, but only a value outside the finite range is an error.
+  expectCompiles("let a = 1e-320;\n");
+  expectCompiles("let a = 4.9e-324;\n");
+  expectCompiles("let a = 1e-45f;\n");
+  expectCompiles("let a = 0e400;\n");
+  expectCompiles("let a = 0.0e-400;\n");
+  // Overflow to infinity and underflow to zero are out of range.
+  expectCompileError("let a = 1e400;\n", "double literal overflow");
+  expectCompileError("let a = 1e-400;\n", "double literal underflow to zero");
+  // A `float` literal is narrowed to binary32 before the range check.
+  expectCompileError("let a = 1e40f;\n", "float literal overflow");
+  expectCompileError("let a = 1e-320f;\n", "float literal underflow to zero");
+}
+
 void testLogicalAssignmentBytecode() {
   // `x ??= v` (PHASE 6.5 operators, compound form): read the target once,
   // compare against nil with NEQ, and short-circuit with JMP_IF_TRUE. No new
@@ -1592,6 +1608,7 @@ int main() {
   testRuntimeTraceElision();
   testMustUse();
   testTypeMismatchErrors();
+  testFloatLiteralRange();
   testNullCoalesceBytecode();
   testLogicalAssignmentBytecode();
   testLogicalAssignmentErrors();

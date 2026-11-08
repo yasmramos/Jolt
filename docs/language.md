@@ -105,6 +105,11 @@ The convention is `camelCase` for variables, functions and methods, and the stan
 - A fractional literal with no suffix is a `double` (binary64); a trailing
   `f`/`F` makes it a `float` (binary32), like Java. The suffix also turns an
   integer-looking literal into a float: `1f` is a `float`.
+- A floating-point literal is a compile error only when it is outside the range
+  of its type: `1e400` (overflows to infinity) and `1e-400` (underflows to
+  zero) are rejected, as is `1e40f`, which is a valid `double` but overflows
+  binary32. A representable subnormal is a valid literal, so `4.9e-324` (the
+  smallest `double`) and `1e-45f` (the smallest `float`) are accepted.
 
 ### 2.4 Strings
 

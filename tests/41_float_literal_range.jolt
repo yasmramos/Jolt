@@ -1,0 +1,29 @@
+// Numeric literal range (PHASE 6.5 follow-up).
+//
+// `strtod` reports ERANGE both for overflow and for underflow, but a
+// representable subnormal is a valid literal. A `double` literal is rejected
+// only when it overflows to infinity (`1e400`) or underflows all the way to
+// zero (`1e-400`); a subnormal such as `4.9e-324` (the smallest `double`) is
+// accepted. A `float` literal is narrowed to binary32 first, so `1e-45f` (the
+// smallest `float` subnormal) is accepted while `1e-320f` (which would flush to
+// zero) is rejected, matching Java's compile-time range check.
+
+// `double` subnormals are accepted and agree with the runtime conversion.
+assertEq(1e-320, double("1e-320"));
+assertEq(4.9e-324, double("4.9e-324"));
+assertEq(1e-323, double("1e-323"));
+assertEq(type(1e-320), "double");
+
+// The smallest normal double is unaffected.
+assertEq(1e-308, double("1e-308"));
+
+// `float` subnormals are accepted and narrow to binary32.
+assertEq(1e-45f, float("1e-45"));
+assertEq(type(1e-45f), "float");
+
+// A literal that is exactly zero is never out of range, however large the
+// exponent, because the mantissa is zero.
+assertEq(0e400, 0.0);
+assertEq(0.0e-400, 0.0);
+
+print("float literal range ok");
