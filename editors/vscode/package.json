@@ -1,0 +1,35 @@
+{
+  "name": "jolt",
+  "displayName": "Jolt",
+  "description": "Syntax highlighting for the Jolt programming language (.jolt).",
+  "version": "0.1.0",
+  "publisher": "jolt-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yasmramos/Jolt.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": ["jolt", "language", "syntax", "highlighting"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jolt",
+        "aliases": ["Jolt", "jolt"],
+        "extensions": [".jolt"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jolt",
+        "scopeName": "source.jolt",
+        "path": "./syntaxes/jolt.tmLanguage.json"
+      }
+    ]
+  }
+}
