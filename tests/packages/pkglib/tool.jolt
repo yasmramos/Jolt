@@ -1,0 +1,5 @@
+// Test fixture: exists ONLY under the packages root, so it proves the
+// resolver falls back to packages when the project directory has no match.
+fn tool() {
+  return "package only";
+}

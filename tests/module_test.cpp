@@ -98,6 +98,38 @@ void testStdResolution() {
   check(file == "std/math.jolt", "std.math resolves to std/math.jolt");
 }
 
+void testPackageResolution() {
+  // A module that exists only under the packages root still resolves: the
+  // project directory is searched first, then packages (AGENT.md §18).
+  ModuleResolver resolver("tests", "std", "tests/packages");
+  std::string file;
+  std::string message;
+  check(resolver.resolve("pkglib.tool", file, message), "a package-only module resolves");
+  check(file == "tests/packages/pkglib/tool.jolt",
+        "a package-only module resolves to the packages root");
+
+  // When the same path exists in both roots, the project directory wins.
+  ModuleResolver shadowed("tests", "std", "tests/packages");
+  std::string shadowFile;
+  std::string shadowMessage;
+  check(shadowed.resolve("myapp.utils", shadowFile, shadowMessage),
+        "the shadowed module still resolves");
+  check(shadowFile == "tests/myapp/utils.jolt",
+        "the project directory shadows the packages root");
+}
+
+void testPackageModuleCompilesAndRuns() {
+  ModuleResolver resolver("tests", "std", "tests/packages");
+  VM vm;
+  compileAndRun(
+      "import pkglib.tool.*;\n"
+      "let got = tool();\n",
+      resolver, vm);
+  const Value* got = vm.findGlobal("got");
+  check(got != nullptr && got->isStr() && got->asStr() == "package only",
+        "a module loaded from the packages root runs");
+}
+
 void testQualifiedAccess() {
   VM vm;
   compileAndRun("import modules.util;\nlet got = modules.util.square(5);\n", fixtureResolver(), vm);
@@ -332,6 +364,8 @@ int main() {
   testReservedPrefix();
   testNotFoundMessage();
   testStdResolution();
+  testPackageResolution();
+  testPackageModuleCompilesAndRuns();
   testQualifiedAccess();
   testAlias();
   testWildcard();
