@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <charconv>
+#include <utility>
 
 const char* Value::typeName() const {
   switch (type()) {
@@ -43,6 +44,13 @@ bool Value::truthy() const {
 }
 
 bool Value::equals(const Value& other) const {
+  std::vector<std::pair<const RefCounted*, const RefCounted*>> visited;
+  return equalsImpl(other, visited);
+}
+
+bool Value::equalsImpl(
+    const Value& other,
+    std::vector<std::pair<const RefCounted*, const RefCounted*>>& visited) const {
   if (isNumber() && other.isNumber()) {
     if (isInt() && other.isInt()) return asInt() == other.asInt();
     return number() == other.number();
@@ -65,21 +73,36 @@ bool Value::equals(const Value& other) const {
       // `assertEq` and `==` useful for error results.
       return err().message == other.err().message && err().code == other.err().code;
     case VType::Array: {
+      // Two containers already being compared are assumed equal, so a cyclic
+      // structure compares equal to an isomorphic one instead of recursing
+      // forever.
+      const RefCounted* self = data.array.get();
+      const RefCounted* that = other.data.array.get();
+      for (const auto& pair : visited) {
+        if (pair.first == self && pair.second == that) return true;
+      }
+      visited.emplace_back(self, that);
       const auto& a = arr().items;
       const auto& b = other.arr().items;
       if (a.size() != b.size()) return false;
       for (size_t i = 0; i < a.size(); ++i) {
-        if (!a[i].equals(b[i])) return false;
+        if (!a[i].equalsImpl(b[i], visited)) return false;
       }
       return true;
     }
     case VType::Map: {
+      const RefCounted* self = data.map.get();
+      const RefCounted* that = other.data.map.get();
+      for (const auto& pair : visited) {
+        if (pair.first == self && pair.second == that) return true;
+      }
+      visited.emplace_back(self, that);
       const auto& a = map();
       const auto& b = other.map();
       if (a.size() != b.size()) return false;
       for (const auto& entry : a.entries) {
         const Value* v = b.get(entry.first);
-        if (!v || !entry.second.equals(*v)) return false;
+        if (!v || !entry.second.equalsImpl(*v, visited)) return false;
       }
       return true;
     }

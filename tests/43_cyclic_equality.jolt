@@ -1,0 +1,75 @@
+// Structural equality of arrays and maps must terminate on cyclic
+// (self-referential) values. Before the fix `Value::equals` recursed forever
+// and the process died with a stack overflow; a self-referential array compared
+// against another one crashed the VM instead of returning true or false.
+
+// Two self-referential arrays with the same contents are equal.
+let a = [1];
+a.push(a);
+let b = [1];
+b.push(b);
+assertEq(a == b, true);
+assertEq(b == a, true);
+
+// Same shape, different content: not equal.
+let c = [1];
+c.push(c);
+let d = [2];
+d.push(d);
+assertEq(c == d, false);
+
+// A value is always equal to itself, even when it is cyclic.
+assertEq(a == a, true);
+
+// Self-referential maps.
+let m1 = {v: 1};
+m1.set("self", m1);
+let m2 = {v: 1};
+m2.set("self", m2);
+assertEq(m1 == m2, true);
+
+let m3 = {v: 2};
+m3.set("self", m3);
+assertEq(m1 == m3, false);
+
+// Mutual cycles: a -> b -> a versus an isomorphic pair, and a mismatching one.
+let p = {};
+let q = {};
+p.set("next", q);
+q.set("next", p);
+let r = {};
+let s = {};
+r.set("next", s);
+s.set("next", r);
+assertEq(p == r, true);
+
+let t = {};
+let u = {};
+t.set("next", u);
+u.set("next", 5);
+assertEq(p == t, false);
+
+// A cycle nested inside another container is handled too.
+let holder1 = [a];
+let holder2 = [b];
+assertEq(holder1 == holder2, true);
+assertEq(holder1 == [a], true);
+
+// `in` uses the same equality, so membership with a cyclic needle terminates.
+assertEq(a in holder1, true);
+assertEq([1] in holder1, false);
+
+// Deeply nested (but acyclic) structures still compare correctly.
+fn chain() {
+  let head = [1];
+  var cur = head;
+  for i in 0..200 {
+    let next = [1];
+    cur.push(next);
+    cur = next;
+  }
+  return head;
+}
+assertEq(chain() == chain(), true);
+
+print("cyclic equality ok");
