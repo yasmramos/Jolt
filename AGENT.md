@@ -765,6 +765,11 @@ Without this checklist complete and approved, **do not proceed to code**.
   note) to a pull request, its title or its description. The PR is authored
   under the user's name and stays plain: no `Co-authored-by` trailer in
   commits and no attribution line in the PR body either.
+- ❌ Some PR tools append such a footer automatically after `create_pr`. Treat
+  that as a bug, not as the PR body: **read the PR back and strip the footer**
+  (the trailing `---`, the "created by an AI agent" line and the "click here
+  to continue refining" line) before considering the PR done. A PR is not
+  finished until its body ends on the real content.
 
 ---
 
