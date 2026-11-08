@@ -74,13 +74,15 @@ Name: "{group}\{#AppName}"; Filename: "{app}\bin\{#AppExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Registry]
-; `.jolt` file association. HKCU so it does not need a second elevation prompt
-; beyond the install itself; `uninsdeletevalue`/`uninsdeletekey` remove it on
-; uninstall.
-Root: HKCU; Subkey: "Software\Classes\.jolt"; ValueType: string; ValueName: ""; ValueData: "Jolt.Source"; Flags: uninsdeletevalue; Tasks: associate
-Root: HKCU; Subkey: "Software\Classes\Jolt.Source"; ValueType: string; ValueName: ""; ValueData: "Jolt source file"; Flags: uninsdeletekey; Tasks: associate
-Root: HKCU; Subkey: "Software\Classes\Jolt.Source\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#AppExeName},0"; Tasks: associate
-Root: HKCU; Subkey: "Software\Classes\Jolt.Source\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#AppExeName}"" ""%1"""; Tasks: associate
+; `.jolt` file association. `HKA` resolves to `HKLM` in this administrative
+; install, so the association is machine-wide and does not land in the
+; elevated user's hive (which is what a plain `HKCU` would do here, and what
+; Inno warns about). `Software\Classes` is the documented spelling of `HKCR`.
+; `uninsdeletevalue`/`uninsdeletekey` remove it on uninstall.
+Root: HKA; Subkey: "Software\Classes\.jolt"; ValueType: string; ValueName: ""; ValueData: "Jolt.Source"; Flags: uninsdeletevalue; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Jolt.Source"; ValueType: string; ValueName: ""; ValueData: "Jolt source file"; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Jolt.Source\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#AppExeName},0"; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Jolt.Source\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#AppExeName}"" ""%1"""; Tasks: associate
 
 [Run]
 Filename: "{app}\bin\{#AppExeName}"; Parameters: "--version"; Description: "Check the Jolt installation"; Flags: postinstall nowait skipifsilent
