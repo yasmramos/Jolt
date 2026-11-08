@@ -20,3 +20,24 @@ Repository-specific workflow for AI agents. Project conventions live in
 
 - Reply to the user in **Spanish**. All repository artifacts (code, comments,
   docs, commit messages, PR titles/bodies) stay in **English**.
+
+## Release and artifacts
+
+- `.github/workflows/artifacts.yml` builds the engine on Linux, Windows and
+  macOS, packages the VS Code extension and the Windows Inno Setup installer
+  (`packaging/windows/jolt.iss`), uploads them as artifacts, and publishes a
+  GitHub Release when a `v*` tag is pushed. Only a tag releases; branch pushes
+  and pull requests stop at the artifacts.
+- The engine ships as `bin/jolt` + `share/jolt/std/*.jolt`; `standardLibraryDir`
+  finds the standard library through `../share/jolt/std` relative to the
+  executable, so `import std.math` resolves from any unpacked archive with no
+  environment variable. Keep that layout in every packaging format.
+- `macos-latest` is the Apple Silicon image (arm64). The dev engine is portable
+  C++; the native backend stays x86-64 Linux only (AGENT.md PHASE 7), and its
+  execution tests skip on other platforms.
+- To verify the release path without a real release, push a throwaway tag
+  (`v0.1.0-<something>test`), confirm the assets, then delete both the release
+  and the tag. Do not leave test tags behind.
+- Inno Setup ships on the Windows runner but is not on `PATH` and its version
+  appears in its directory name, so the workflow locates `ISCC.exe` instead of
+  hard-coding the path.
