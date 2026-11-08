@@ -675,9 +675,23 @@ Slices, each independently shippable:
       are numeric across int/float/double (`1 == 1.0` is true), matching
       `Value::equals`/`lessThan`. Float `%`, float `**` (libm `fmod`/`pow`)
       and float-to-text for `print` stay deferred to 7c.1c.
-    - **7c.1c** — strings over the arena (the `Str` tag, `LOADK` of a string
-      constant, `+` concatenation), `MOD`/`POW` on floats (libm `fmod`/`pow`)
-      and float-to-text for `print` (own dtoa).
+    - **7c.1c** (done) — strings over the arena. The `Str` tag
+      (`include/native/value.h`) carries the address of an `AotString`, an
+      8-byte length followed by the bytes (no NUL terminator, so an embedded
+      NUL survives, like `std::string`). `LOADK` of a string constant no
+      longer throws: `lowerToX64` collects the bytes as data islands at the
+      end of the image and lowers the load to a `lea` of the header.
+      `jolt_print_value` writes a string's bytes verbatim; equality is content
+      equality (`jolt_str_equals`) and ordering is lexicographic over unsigned
+      bytes with a proper prefix smaller (`jolt_str_order`), both matching
+      `ops::binary`/`lessThan`. `_start`/the chunk map a 1 MiB anonymous
+      private region (`jolt_init_arena`) and keep the bump cursor/end in
+      `r13`/`r14`; `jolt_alloc` bumps it and `jolt_concat` joins two strings
+      with `rep movsb`. `jolt_arith` concatenates when both operands are
+      strings and the op is `+`. Float `%`/`**` (libm `fmod`/`pow`) and
+      float-to-text for `print` (own dtoa) remain for 7c.1d.
+    - **7c.1d** — `MOD`/`POW` on floats (libm `fmod`/`pow`) and float-to-text
+      for `print` (own dtoa).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not

@@ -406,6 +406,11 @@ void CodeGen::shlCl(X64Reg dst) { shiftCl(4, dst); }
 void CodeGen::shrCl(X64Reg dst) { shiftCl(5, dst); }
 void CodeGen::sarCl(X64Reg dst) { shiftCl(7, dst); }
 
+void CodeGen::repMovsb() {
+  emitByte(0xF3);  // REP prefix
+  emitByte(0xA4);  // MOVSB
+}
+
 // Signed divide rdx:rax by `divisor`, quotient in rax and remainder in rdx
 // (the `idiv` contract). rax must already hold the dividend; the helper
 // sign-extends it into rdx first, so a caller cannot forget the `cdq`.
@@ -472,6 +477,17 @@ void CodeGen::movzx(X64Reg dst, X64Reg src) {
   emitByte(0x0F);
   emitByte(0xB6);
   emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
+}
+
+void CodeGen::movzxFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
+  // movzx r64, r/m8: REX.W 0F B6 /r with a memory operand. Same opcode as the
+  // register form; only the ModRM stage differs.
+  std::uint8_t d = enc(dst);
+  std::uint8_t b = enc(base);
+  rex(true, d, false, 0, b);
+  emitByte(0x0F);
+  emitByte(0xB6);
+  modRmDisp(d, b, disp);
 }
 
 void CodeGen::sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int srcXmm) {

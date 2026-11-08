@@ -28,17 +28,32 @@
 // `Float` and `Double` carry the IEEE-754 binary64 bit pattern of the value in
 // their payload; a `Float` stores a double that holds exactly a binary32 value
 // (the hosted engine widens binary32 to binary64 the same way), so rounding it
-// back to binary32 is lossless. `Str` is reserved for PHASE 7c.1c: its payload
-// will be an arena string pointer, and no opcode produces it yet, so the
-// lowering rejects a string constant instead of emitting wrong code.
+// back to binary32 is lossless. `Str`'s payload is the address of an
+// `AotString` (see below): a string is a pointer, not a value, so `AotValue`
+// stays 16 bytes.
 enum class AotTag : std::uint64_t {
   Nil = 0,
   Bool = 1,
   Int = 2,
   Float = 3,   // payload is the IEEE-754 binary64 bit pattern of a binary32 value
   Double = 4,  // payload is the IEEE-754 binary64 bit pattern
-  Str = 5,     // reserved: payload is a pointer to an arena string object
+  Str = 5,     // payload is the address of an `AotString`
 };
+
+// On-image layout of a string: an 8-byte length followed by the bytes. The
+// bytes are not NUL-terminated -- a Jolt string can hold an embedded NUL -- so
+// every string helper carries the length explicitly, exactly like `std::string`
+// and unlike C. A `Str` payload points at the length word, so a helper reads
+// the length from `[ptr]` and the first byte from `[ptr + 8]`.
+//
+// The layout is fixed here for the same reason as `AotValue`: once machine
+// code walks strings with `movzx`, the offsets are part of the ABI.
+struct AotString {
+  std::uint64_t length;
+  // The bytes follow immediately; this struct only names the header.
+};
+
+constexpr std::size_t kAotStringHeaderSize = sizeof(std::uint64_t);
 
 struct AotValue {
   std::uint64_t tag;

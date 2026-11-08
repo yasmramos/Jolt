@@ -338,6 +338,64 @@ static void test_boxed_runtime_div_zero() {
         "the runtime error names the division by zero");
 }
 
+// Strings over the arena, end to end: lay out two `AotString`s in the image,
+// concatenate them with the runtime's `jolt_concat` (which bumps the mmap'd
+// arena) and print the result. Exercises the arena mapping in `_start`, the
+// allocator, the byte copy and the string print path in one static binary.
+static void test_boxed_runtime_string() {
+  CodeGen cg(Target::linuxX64());
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label mainLabel = cg.newLabel();
+
+  // Data islands: each is an 8-byte length followed by the bytes.
+  const std::string a = "hello, ";
+  const std::string b = "world!";
+  CodeGen::Label aLabel = cg.newLabel();
+  CodeGen::Label bLabel = cg.newLabel();
+
+  cg.bind(mainLabel);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.callLabel(entry.initArena);  // map the arena the concatenation allocates from
+  // rdi:rsi = a, rdx:rcx = b
+  cg.movImm(X64Reg::Rdi, static_cast<std::int64_t>(AotTag::Str));
+  cg.leaRipLabel(X64Reg::Rsi, aLabel);
+  cg.movImm(X64Reg::Rdx, static_cast<std::int64_t>(AotTag::Str));
+  cg.leaRipLabel(X64Reg::Rcx, bLabel);
+  cg.callLabel(rt.concat);          // rax:rdx = "hello, world!"
+  cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+  cg.callLabel(rt.printValue);
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t start = emitFreestandingRuntime(cg, entry, mainLabel);
+  emitAotRuntime(cg, rt, entry);
+
+  // Bind the string data islands after all code, then finalize.
+  auto emitString = [&](CodeGen::Label label, const std::string& text) {
+    cg.bind(label);
+    const std::uint64_t length = text.size();
+    cg.emitBytes(reinterpret_cast<const std::uint8_t*>(&length), sizeof length);
+    cg.emitBytes(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
+  };
+  emitString(aLabel, a);
+  emitString(bLabel, b);
+  cg.finalize();
+
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
+  const std::string path = "/tmp/jolt_boxed_string";
+  writeFile(path, elf);
+  RunResult result = runProgram(path);
+  check(result.output == "hello, world!\n",
+        "the boxed runtime concatenates and prints strings from the arena");
+  check(result.exitCode == 0, "the string program exits 0");
+}
+
 #endif  // FREESTANDING_EXEC_TESTS
 
 int main() {
@@ -348,6 +406,7 @@ int main() {
   test_boxed_runtime_print();
   test_boxed_runtime_error();
   test_boxed_runtime_div_zero();
+  test_boxed_runtime_string();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

@@ -77,6 +77,15 @@ void loadFloatingImmediate(CodeGen& cg, int index, double value, AotTag tag) {
   cg.movToMem(kFileBase, slotOffset(index) + 8, kTmpTag);
 }
 
+// Loads a string constant into a register slot. The payload is the address of
+// an `AotString` laid out in the image (see `StringConstant`): a `lea` of the
+// header, since the bytes live in the code buffer, not in the register file.
+void loadStringImmediate(CodeGen& cg, int index, CodeGen::Label dataLabel) {
+  cg.movImmToMem(kFileBase, slotOffset(index), static_cast<std::int64_t>(AotTag::Str));
+  cg.leaRipLabel(kTmpTag, dataLabel);
+  cg.movToMem(kFileBase, slotOffset(index) + 8, kTmpTag);
+}
+
 // Emits a call to a runtime helper that takes two `AotValue`s (rdi:rsi,
 // rdx:rcx) plus a 64-bit selector in r8, and stores the returned `AotValue`
 // (rax:rdx) in register `dst`.
@@ -124,9 +133,31 @@ CodeGen::Label jumpTarget(const Instruction& instr, const Bytecode& proto,
   return labels[static_cast<std::size_t>(instr.jump)];
 }
 
+// A string constant laid out in the image: an 8-byte length, then the bytes.
+// `label` is bound at the header once the code is complete.
+struct StringConstant {
+  CodeGen::Label label;
+  std::string bytes;
+};
+
+// Emits the string-constant data islands at the end of the code buffer. Called
+// after every code path has ended in `ret`/`ud2`, so control never falls into
+// them; the `lea` fixups emitted by `loadStringImmediate` resolve against these
+// labels.
+void emitStringConstants(CodeGen& cg, const std::vector<StringConstant>& constants) {
+  for (const StringConstant& constant : constants) {
+    cg.bind(constant.label);
+    const std::uint64_t length = constant.bytes.size();
+    cg.emitBytes(reinterpret_cast<const std::uint8_t*>(&length), sizeof length);
+    cg.emitBytes(reinterpret_cast<const std::uint8_t*>(constant.bytes.data()),
+                 constant.bytes.size());
+  }
+}
+
 void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& cg,
                       const std::vector<CodeGen::Label>& labels,
-                      const AotRuntimeHandles& rt) {
+                      const AotRuntimeHandles& rt,
+                      std::vector<StringConstant>& stringConstants) {
   switch (instr.op) {
     case OpCode::LOADK: {
       const Value& value = proto.constants.at(static_cast<std::size_t>(instr.b));
@@ -140,8 +171,12 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
         loadFloatingImmediate(cg, instr.a, value.asFloat(), AotTag::Float);
       } else if (value.isDouble()) {
         loadFloatingImmediate(cg, instr.a, value.asDouble(), AotTag::Double);
+      } else if (value.isStr()) {
+        StringConstant constant{cg.newLabel(), value.asStr()};
+        loadStringImmediate(cg, instr.a, constant.label);
+        stringConstants.push_back(std::move(constant));
       } else {
-        unsupported("LOADK (string)", "PHASE 7c.1c");
+        unsupported("LOADK (unsupported constant)", "PHASE 7c.2");
       }
       break;
     }
@@ -262,8 +297,14 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       // The chunk's result is R0, returned as an `AotValue` in rax:rdx (the
       // System V ABI's two-register return), so the test harness can read both
       // the tag and the payload. The process entry discards it and exits 0.
+      // Restore the callee-saved registers the chunk prologue pushed, in
+      // reverse order.
       loadValue(cg, 0, X64Reg::Rax, X64Reg::Rdx);
       cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+      cg.pop(X64Reg::R14);
+      cg.pop(X64Reg::R13);
+      cg.pop(X64Reg::R12);
+      cg.pop(X64Reg::Rbx);
       cg.pop(X64Reg::Rbp);
       cg.retInsn();
       break;
@@ -311,6 +352,7 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   AotRuntimeHandles rt = newAotRuntimeHandles(cg);
   CodeGen::Label chunkEntry = cg.newLabel();
   CodeGen::Label mainEntry = cg.newLabel();
+  std::vector<StringConstant> stringConstants;
 
   // One label per instruction index, so a jump (an absolute index into `code`)
   // can target any instruction, forward or backward.
@@ -322,15 +364,29 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
 
   const std::uint64_t chunkOffset = cg.offset();
   cg.bind(chunkEntry);
+  // Save the callee-saved registers the arena and the allocator use (rbx and
+  // r12-r14; see `native/entry.h`) before claiming them, and restore them on
+  // the way out, so the chunk honours the System V ABI. They are pushed
+  // *above* the register file's base, which `rbp` becomes only after the
+  // pushes, so the file (which grows down from `rbp`) never overlaps them.
   cg.push(X64Reg::Rbp);
+  cg.push(X64Reg::Rbx);
+  cg.push(X64Reg::R12);
+  cg.push(X64Reg::R13);
+  cg.push(X64Reg::R14);
   cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
   const std::int64_t fileBytes =
       16LL * (proto.numRegisters > 0 ? proto.numRegisters : 1);
   cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(fileBytes));
+  // Map the arena before the program runs, so the allocator has its
+  // cursor/end registers seeded from the first allocation (string
+  // concatenation in 7c.1c). rsp is 16-byte aligned here (five pushes plus a
+  // multiple-of-16 file size), which the call requires.
+  cg.callLabel(entry.initArena);
 
   for (std::size_t i = 0; i < proto.code.size(); ++i) {
     cg.bind(labels[i]);
-    lowerInstruction(proto.code[i], proto, cg, labels, rt);
+    lowerInstruction(proto.code[i], proto, cg, labels, rt, stringConstants);
   }
 
   // `main`: run the chunk and return 0, so the process exit code is a clean
@@ -349,6 +405,9 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
 
   std::uint64_t startOffset = emitFreestandingRuntime(cg, entry, mainEntry);
   emitAotRuntime(cg, rt, entry);
+  // String constants last: their bytes are addressed by `lea` from the code
+  // above, and no path falls through into them.
+  emitStringConstants(cg, stringConstants);
 
   cg.finalize();
 
