@@ -1,0 +1,4 @@
+// expect-exit: 0
+// `-c` compiles without running: this program prints, but -c must stay silent.
+
+print("this must not appear");
