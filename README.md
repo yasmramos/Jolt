@@ -88,7 +88,7 @@ g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe src\*.cpp
 jolt                      starts the REPL
 jolt <file.jolt>          runs a script
 jolt -e "<code>"          runs code from the command line
-jolt -c <file.jolt>       checks the script without running it
+jolt -c <file.jolt>       compiles the script without running it
 ```
 
 Options:
@@ -98,7 +98,7 @@ Options:
 | `-h`, `--help` | Shows the help. |
 | `-v`, `--version` | Shows the version. |
 | `-e`, `--eval <code>` | Runs the given code. |
-| `-c`, `--check` | Only checks the syntax, without running. |
+| `-c`, `--check` | Compiles without running; reports syntax, type and import errors. |
 | `--` | Marks the end of the options; the next argument is the file. |
 
 Arguments that follow the file (or the `-e` code) are passed to the script and can be read with `args()`:

@@ -1,0 +1,4 @@
+// expect-exit: 65
+// A syntax error is caught by the lexer/parser stage of -c.
+
+let = 3;

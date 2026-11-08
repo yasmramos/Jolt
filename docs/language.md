@@ -1909,7 +1909,7 @@ Process exit codes:
 | `70` | Runtime error. |
 | other | Code given to `exit(n)`. |
 
-`jolt -c file.jolt` only checks the lexer and the parser; it does not run the program.
+`jolt -c file.jolt` compiles the script without running it: the lexer, the parser, the compiler and import resolution all run, so syntax errors, type errors and a missing module are reported, but the VM never starts and no output is produced. Use it to validate a file in CI.
 
 ### 13.1 Recovering from an error: `pcall`
 
@@ -2086,7 +2086,7 @@ jolt> :vars
 jolt                      starts the REPL
 jolt <file.jolt>          runs a script
 jolt -e "<code>"          runs code from the command line
-jolt -c <file.jolt>       checks the syntax without running
+jolt -c <file.jolt>       compiles the script without running it
 ```
 
 | Option | Description |
@@ -2094,7 +2094,7 @@ jolt -c <file.jolt>       checks the syntax without running
 | `-h`, `--help` | Help. |
 | `-v`, `--version` | Version. |
 | `-e`, `--eval <code>` | Code to run. The remaining arguments go to the script. |
-| `-c`, `--check` | Syntax check only. |
+| `-c`, `--check` | Compiles without running; reports syntax, type and import errors. |
 | `--` | End of options; the next argument is the file. |
 
 Options must come before the file. Everything after the file is considered an argument of the script and is obtained with `args()`.
