@@ -44,8 +44,15 @@ fi
 
 # Debian versions may contain `-`, but it separates the upstream version from
 # the revision, so a pre-release tag (`0.1.0-rc1`) is rewritten with `~`, which
-# sorts *before* the final `0.1.0` — the ordering a pre-release wants.
+# sorts *before* the final `0.1.0` — the ordering a pre-release wants. This is
+# the version recorded in the package control file, which is what `dpkg`
+# compares.
 deb_version="${version//-/\~}"
+
+# GitHub rewrites `~` to `.` in release asset names, which would make the
+# uploaded `.deb` not match its line in `SHA256SUMS`. Name the file with the
+# safe form instead; only the control file keeps the `~`.
+deb_file_version="${deb_version//\~/.}"
 
 # RPM splits Version and Release at the first `-`, and Version may not contain
 # one at all, so `0.1.0-rc1` becomes Version `0.1.0` + Release `0.rc1`, and a
@@ -79,8 +86,8 @@ Description: Jolt programming language engine
  general-purpose language with a Lua-style bytecode architecture.
 EOF
 
-dpkg-deb --build --root-owner-group "$root" "$out/jolt_${deb_version}_amd64.deb"
-echo "wrote $out/jolt_${deb_version}_amd64.deb"
+dpkg-deb --build --root-owner-group "$root" "$out/jolt_${deb_file_version}_amd64.deb"
+echo "wrote $out/jolt_${deb_file_version}_amd64.deb"
 
 # ---------------------------------------------------------------------- .rpm
 if ! command -v rpmbuild >/dev/null 2>&1; then
