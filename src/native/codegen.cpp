@@ -214,6 +214,21 @@ void CodeGen::movImm(X64Reg dst, std::int64_t value) {
 
 void CodeGen::movReg(X64Reg dst, X64Reg src) { aluRegOp(0x89, dst, src); }
 
+// `mov r32, r32`: the same 89 /r opcode without REX.W, so the CPU writes the
+// low 32 bits and zeroes the upper 32 -- a free mask to 32 bits.
+void CodeGen::movReg32(X64Reg dst, X64Reg src) {
+  std::uint8_t d = enc(dst);
+  std::uint8_t s = enc(src);
+  if (d >= 8 || s >= 8) {
+    std::uint8_t byte = 0x40;
+    if (d >= 8) byte |= 0x04;
+    if (s >= 8) byte |= 0x01;
+    emitByte(byte);
+  }
+  emitByte(0x89);
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((s & 0x07) << 3) | (d & 0x07)));
+}
+
 void CodeGen::movToMem(X64Reg base, std::int64_t disp, X64Reg src) {
   // `enc()` returns the full register number (0-15); it must be widened to
   // int64_t before being passed as the `src` byte, otherwise a value above
@@ -253,6 +268,30 @@ void CodeGen::movFromMem(X64Reg dst, X64Reg base, std::int64_t disp) {
   std::uint8_t b = enc(base);
   std::uint8_t d = enc(dst);
   rex(true, d, false, 0, b);
+  emitByte(0x8B);
+  modRmDisp(d, b, disp);
+}
+
+// 32-bit store/load (`89 /r` / `8B /r`, no REX.W). A 32-bit load zero-extends
+// into the 64-bit register, which is exactly the bignum's limb model.
+void CodeGen::movToMem32(X64Reg base, std::int64_t disp, X64Reg src) {
+  std::uint8_t b = enc(base);
+  std::uint8_t s = enc(src);
+  std::uint8_t byte = 0x40;
+  if (s >= 8) byte |= 0x04;
+  if (b >= 8) byte |= 0x01;
+  if (byte != 0x40) emitByte(byte);
+  emitByte(0x89);
+  modRmDisp(s, b, disp);
+}
+
+void CodeGen::movFromMem32(X64Reg dst, X64Reg base, std::int64_t disp) {
+  std::uint8_t b = enc(base);
+  std::uint8_t d = enc(dst);
+  std::uint8_t byte = 0x40;
+  if (d >= 8) byte |= 0x04;
+  if (b >= 8) byte |= 0x01;
+  if (byte != 0x40) emitByte(byte);
   emitByte(0x8B);
   modRmDisp(d, b, disp);
 }
@@ -345,6 +384,16 @@ void CodeGen::subRegImm32(X64Reg dst, std::int32_t value) {
   emit32(value);
 }
 void CodeGen::andReg(X64Reg dst, X64Reg src) { aluRegOp(0x21, dst, src); }
+
+// and r/m64, imm32: opcode 0x81 with /4 in the ModRM reg field.
+void CodeGen::andImm32(X64Reg dst, std::int32_t value) {
+  std::uint8_t d = enc(dst);
+  rex(true, 4, false, 0, d);
+  emitByte(0x81);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (4 << 3) | (d & 0x07)));
+  emit32(value);
+}
+
 void CodeGen::orReg(X64Reg dst, X64Reg src) { aluRegOp(0x09, dst, src); }
 void CodeGen::xorReg(X64Reg dst, X64Reg src) { aluRegOp(0x31, dst, src); }
 void CodeGen::cmpReg(X64Reg lhs, X64Reg rhs) { aluRegOp(0x39, lhs, rhs); }
@@ -367,6 +416,16 @@ void CodeGen::imulReg(X64Reg dst, X64Reg src) {
   emitByte(0x0F);
   emitByte(0xAF);
   emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
+}
+
+// `imul dst, src, imm32` (69 /r id). `dst` may equal `src`.
+void CodeGen::imulImm32(X64Reg dst, X64Reg src, std::int32_t imm) {
+  std::uint8_t d = enc(dst);
+  std::uint8_t s = enc(src);
+  rex(true, d, false, 0, s);
+  emitByte(0x69);
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
+  emit32(imm);
 }
 
 void CodeGen::idiv(X64Reg divisor) {
@@ -406,6 +465,30 @@ void CodeGen::shlCl(X64Reg dst) { shiftCl(4, dst); }
 void CodeGen::shrCl(X64Reg dst) { shiftCl(5, dst); }
 void CodeGen::sarCl(X64Reg dst) { shiftCl(7, dst); }
 
+// Shift by an immediate count: C1 /4 ib (shl) and C1 /5 ib (shr). REX.W makes
+// it 64-bit. Used by the dtoa bignum, where the count is a compile-time
+// constant (splitting a limb, shifting by `rem`).
+void CodeGen::shiftImm8(std::uint8_t ext, X64Reg dst, std::uint8_t count) {
+  std::uint8_t d = enc(dst);
+  rex(true, ext, false, 0, d);
+  emitByte(0xC1);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (ext << 3) | (d & 0x07)));
+  emitByte(count);
+}
+
+void CodeGen::shlImm8(X64Reg dst, std::uint8_t count) { shiftImm8(4, dst, count); }
+void CodeGen::shrImm8(X64Reg dst, std::uint8_t count) { shiftImm8(5, dst, count); }
+
+// bsr r64, r/m64: 0F BD /r with REX.W. The destination is the reg field.
+void CodeGen::bsrReg(X64Reg dst, X64Reg src) {
+  std::uint8_t d = enc(dst);
+  std::uint8_t s = enc(src);
+  rex(true, d, false, 0, s);
+  emitByte(0x0F);
+  emitByte(0xBD);
+  emitByte(static_cast<std::uint8_t>(0xC0 | ((d & 0x07) << 3) | (s & 0x07)));
+}
+
 void CodeGen::repMovsb() {
   emitByte(0xF3);  // REP prefix
   emitByte(0xA4);  // MOVSB
@@ -427,6 +510,15 @@ void CodeGen::divUnsigned(X64Reg divisor) {
   xorReg(X64Reg::Rdx, X64Reg::Rdx);
   std::uint8_t e = enc(divisor);
   rex(true, 6, false, 0, e);  // F7 /6 is `div`, /7 is `idiv`
+  emitByte(0xF7);
+  emitByte(static_cast<std::uint8_t>(0xC0 | (6 << 3) | (e & 0x07)));
+}
+
+// `div r/m64` (F7 /6) with the caller's rdx:rax dividend, so the quotient is
+// rax and the remainder rdx. `divUnsigned` is this with rdx zeroed first.
+void CodeGen::divRaw(X64Reg divisor) {
+  std::uint8_t e = enc(divisor);
+  rex(true, 6, false, 0, e);
   emitByte(0xF7);
   emitByte(static_cast<std::uint8_t>(0xC0 | (6 << 3) | (e & 0x07)));
 }
