@@ -687,14 +687,20 @@ bool bindString(Runtime& in, StringPtr receiver, const std::string& name, Value&
       if (fill.empty()) in.fail(methodName + "() fill cannot be empty");
       int64_t current = static_cast<int64_t>(utf8Length(text));
       if (current >= width) return Value(text);
-      std::string padding;
-      while (static_cast<int64_t>(utf8Length(padding)) < width - current) padding += fill;
       int64_t keep = width - current;
-      auto chars = utf8Chars(padding);
-      std::string clipped;
-      for (int64_t i = 0; i < keep && i < static_cast<int64_t>(chars.size()); ++i) {
-        clipped += chars[static_cast<size_t>(i)];
+      if (static_cast<uint64_t>(keep) > 64ULL * 1024ULL * 1024ULL) {
+        in.fail(methodName + "() result is too large");
       }
+      // Build the padding once: the previous loop re-counted the whole buffer
+      // with `utf8Length` on every turn, making a wide pad quadratic.
+      int64_t fillChars = static_cast<int64_t>(utf8Length(fill));
+      std::string padding;
+      padding.reserve(static_cast<size_t>(keep) + fill.size());
+      for (int64_t filled = 0; filled < keep; filled += fillChars) padding += fill;
+      // Clip to `keep` characters (the last repetition may overshoot).
+      std::vector<std::string> chars = utf8Chars(padding);
+      std::string clipped = utf8Join(std::vector<std::string>(
+          chars.begin(), chars.begin() + static_cast<size_t>(keep)));
       return Value(atStart ? clipped + text : text + clipped);
     });
     return true;

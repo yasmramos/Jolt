@@ -1631,7 +1631,7 @@ Details:
 - `lines` does not add an empty trailing line if the string ends with `\n`.
 - `indexOf` searches bytes but returns the index in code points.
 - `substr` counts code points; a negative `length` produces an empty string.
-- `padStart` and `padEnd` pad by code points and trim the fill to the exact width.
+- `padStart` and `padEnd` pad by code points and trim the fill to the exact width. The result has the same 64 MB limit as `repeat`.
 - `repeat` has a 64 MB limit on the result.
 
 ```jolt
