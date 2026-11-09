@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -327,6 +329,11 @@ struct Expr {
   ExprNode node;
   int line = 1;
   int col = 1;
+
+  // Frees the tree iteratively instead of recursively, so a deep tree (a long
+  // chain of binary operators, or nesting just under the parser's limit) does
+  // not overflow the stack while being destroyed. See `teardownAst` below.
+  ~Expr();
 };
 
 // ----------------------------------------------------------------- statements
@@ -513,7 +520,165 @@ struct Stmt {
   StmtNode node;
   int line = 1;
   int col = 1;
+
+  // Iterative teardown, same rationale as `Expr::~Expr`.
+  ~Stmt();
 };
+
+// Moves the child nodes of `expr`/`stmt` into the work lists, so the caller can
+// free the whole subtree without recursing: the node itself stays alive until
+// its own `ExprPtr`/`StmtPtr` is dropped, but it no longer owns its children
+// once they are moved out. A null child is skipped.
+inline void pushChild(std::vector<ExprPtr>& exprs, ExprPtr& child) {
+  if (child) exprs.push_back(std::move(child));
+}
+inline void pushChild(std::vector<StmtPtr>& stmts, StmtPtr& child) {
+  if (child) stmts.push_back(std::move(child));
+}
+
+inline void collectExprChildren(Expr& expr, std::vector<ExprPtr>& exprs,
+                                std::vector<StmtPtr>& stmts) {
+  std::visit(
+      [&](auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, InterpExpr>) {
+          for (InterpPart& part : node.parts) {
+            if (auto* inner = std::get_if<ExprPtr>(&part.content)) pushChild(exprs, *inner);
+          }
+        } else if constexpr (std::is_same_v<T, ArrayExpr>) {
+          for (ExprPtr& element : node.elements) pushChild(exprs, element);
+        } else if constexpr (std::is_same_v<T, MapExpr>) {
+          for (MapEntry& entry : node.entries) {
+            pushChild(exprs, entry.keyExpr);
+            pushChild(exprs, entry.value);
+          }
+        } else if constexpr (std::is_same_v<T, StructLitExpr>) {
+          for (StructLitEntry& entry : node.entries) pushChild(exprs, entry.value);
+        } else if constexpr (std::is_same_v<T, UnaryExpr>) {
+          pushChild(exprs, node.operand);
+        } else if constexpr (std::is_same_v<T, BinaryExpr>) {
+          pushChild(exprs, node.lhs);
+          pushChild(exprs, node.rhs);
+        } else if constexpr (std::is_same_v<T, AssignExpr>) {
+          pushChild(exprs, node.target);
+          pushChild(exprs, node.value);
+        } else if constexpr (std::is_same_v<T, TernaryExpr>) {
+          pushChild(exprs, node.condition);
+          pushChild(exprs, node.thenExpr);
+          pushChild(exprs, node.elseExpr);
+        } else if constexpr (std::is_same_v<T, CallExpr>) {
+          pushChild(exprs, node.callee);
+          for (ExprPtr& arg : node.args) pushChild(exprs, arg);
+        } else if constexpr (std::is_same_v<T, IndexExpr>) {
+          pushChild(exprs, node.object);
+          pushChild(exprs, node.index);
+        } else if constexpr (std::is_same_v<T, SliceExpr>) {
+          pushChild(exprs, node.object);
+          pushChild(exprs, node.start);
+          pushChild(exprs, node.end);
+          pushChild(exprs, node.step);
+        } else if constexpr (std::is_same_v<T, MemberExpr>) {
+          pushChild(exprs, node.object);
+        } else if constexpr (std::is_same_v<T, NonNullExpr>) {
+          pushChild(exprs, node.operand);
+        } else if constexpr (std::is_same_v<T, RangeExpr>) {
+          pushChild(exprs, node.start);
+          pushChild(exprs, node.end);
+        } else if constexpr (std::is_same_v<T, TryExpr>) {
+          pushChild(exprs, node.operand);
+        } else if constexpr (std::is_same_v<T, CatchExpr>) {
+          pushChild(exprs, node.operand);
+          pushChild(exprs, node.fallback);
+        } else if constexpr (std::is_same_v<T, LambdaExpr>) {
+          pushChild(stmts, node.body);
+        }
+        // LiteralExpr and VariableExpr are leaves: nothing to collect.
+      },
+      expr.node);
+}
+
+inline void collectStmtChildren(Stmt& stmt, std::vector<ExprPtr>& exprs,
+                                std::vector<StmtPtr>& stmts) {
+  std::visit(
+      [&](auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ExprStmt>) {
+          pushChild(exprs, node.expr);
+        } else if constexpr (std::is_same_v<T, LetStmt>) {
+          pushChild(exprs, node.init);
+        } else if constexpr (std::is_same_v<T, FnDeclStmt>) {
+          pushChild(stmts, node.body);
+        } else if constexpr (std::is_same_v<T, BlockStmt>) {
+          for (StmtPtr& inner : node.stmts) pushChild(stmts, inner);
+        } else if constexpr (std::is_same_v<T, IfStmt>) {
+          pushChild(exprs, node.condition);
+          pushChild(stmts, node.thenBranch);
+          pushChild(stmts, node.elseBranch);
+        } else if constexpr (std::is_same_v<T, WhileStmt>) {
+          pushChild(exprs, node.condition);
+          pushChild(stmts, node.body);
+        } else if constexpr (std::is_same_v<T, DoWhileStmt>) {
+          pushChild(stmts, node.body);
+          pushChild(exprs, node.condition);
+        } else if constexpr (std::is_same_v<T, ForStmt>) {
+          pushChild(stmts, node.init);
+          pushChild(exprs, node.condition);
+          pushChild(exprs, node.step);
+          pushChild(stmts, node.body);
+        } else if constexpr (std::is_same_v<T, ForInStmt>) {
+          pushChild(exprs, node.iterable);
+          pushChild(stmts, node.body);
+        } else if constexpr (std::is_same_v<T, ReturnStmt>) {
+          pushChild(exprs, node.value);
+        } else if constexpr (std::is_same_v<T, SwitchStmt>) {
+          pushChild(exprs, node.subject);
+          for (SwitchCase& entry : node.cases) {
+            for (ExprPtr& value : entry.values) pushChild(exprs, value);
+            pushChild(stmts, entry.body);
+          }
+          pushChild(stmts, node.defaultBody);
+        } else if constexpr (std::is_same_v<T, DeferStmt>) {
+          pushChild(stmts, node.body);
+        } else if constexpr (std::is_same_v<T, ExternBlockStmt>) {
+          for (FnDeclStmt& decl : node.decls) pushChild(stmts, decl.body);
+        }
+        // StructDeclStmt, BreakStmt, ContinueStmt and ImportStmt hold no child
+        // nodes.
+      },
+      stmt.node);
+}
+
+inline void teardownAst(std::vector<ExprPtr> exprs, std::vector<StmtPtr> stmts) {
+  while (!exprs.empty() || !stmts.empty()) {
+    if (!exprs.empty()) {
+      ExprPtr node = std::move(exprs.back());
+      exprs.pop_back();
+      // A tree node is the sole owner of its children; a shared node (which a
+      // tree never has) is left to its other owners. Moving the children out
+      // before the node's last reference drops keeps the destructor from
+      // recursing: when it runs, it finds nothing left to free.
+      if (node && node.use_count() == 1) collectExprChildren(*node, exprs, stmts);
+    } else {
+      StmtPtr node = std::move(stmts.back());
+      stmts.pop_back();
+      if (node && node.use_count() == 1) collectStmtChildren(*node, exprs, stmts);
+    }
+  }
+}
+
+inline Expr::~Expr() {
+  std::vector<ExprPtr> exprs;
+  std::vector<StmtPtr> stmts;
+  collectExprChildren(*this, exprs, stmts);
+  teardownAst(std::move(exprs), std::move(stmts));
+}
+
+inline Stmt::~Stmt() {
+  std::vector<ExprPtr> exprs;
+  std::vector<StmtPtr> stmts;
+  collectStmtChildren(*this, exprs, stmts);
+  teardownAst(std::move(exprs), std::move(stmts));
+}
 
 template <class T>
 ExprPtr makeExpr(T node, int line, int col) {
