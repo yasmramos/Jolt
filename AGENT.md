@@ -702,16 +702,31 @@ Slices, each independently shippable:
       covered byte-for-byte in `tests/codegen_test.cpp`; `tests/lower_test.cpp`
       runs the remainder and `tests/freestanding_test.cpp` checks it inside a
       real static ELF.
+    - **7c.1d.3** (done) — float-to-text for `print`/`str` (own dtoa). The
+      hosted engine prints a `double` with the shortest text that round-trips
+      through binary64 (`std::to_chars`, e.g. `0.1 + 0.2` → `"0.3"`) and a
+      `float` with the shortest binary32 round-trip (`0.1f` → `"0.1"`,
+      `1.0f/3.0f` → `"0.33333334"`). `src/native/dtoa.cpp` implements a
+      freestanding Dragon4 (Steele & White free-format) over a small fixed
+      bignum (32-bit limbs in 64-bit slots), emitted as x86-64 through the
+      shared `CodeGen` — no libc, no `printf`, no table of powers of ten. It
+      handles both widths, including subnormals (a widened binary32 subnormal
+      is a *normal* double, so the float path rebuilds the original 23-bit
+      fraction from the double significand) and reproduces the
+      fixed-versus-scientific choice of the hosted formatter. The emitter gains
+      32-bit load/store, immediate `and`/`imul`, immediate shifts, `bsr` and a
+      raw `div`. `jolt_print_value` routes `Float`/`Double` through
+      `jolt_format_double` into a stack `Scratch` block plus text buffer and
+      writes the returned bytes. `tests/dtoa_test.cpp` maps the emitted code and
+      compares it with `std::to_chars` over millions of random values;
+      `tests/codegen_test.cpp` covers the new encodings byte for byte, and
+      `tests/freestanding_test.cpp` prints doubles and floats from a real static
+      ELF.
     - **7c.1d.2** — `**` on floats. `std::pow` is *correctly rounded* (glibc,
       ~0.5 ulp) and the hosted engine calls it; an x87 `2^(y·log2 x)` sequence
       (`fyl2x`/`f2xm1`/`fscale`) does *not* reproduce it in the last digit, so
       matching `std::pow` needs a correctly rounded implementation (large).
       Deferred pending a fidelity decision.
-    - **7c.1d.3** — float-to-text for `print`/`str` (own dtoa). The hosted
-      engine prints a `double` with the shortest text that round-trips through
-      binary64 (`std::to_chars`, e.g. `0.1 + 0.2` → `"0.3"`) and a `float` with
-      the shortest binary32 round-trip (`0.1f` → `"0.1"`, `1.0f/3.0f` →
-      `"0.33333334"`), the latter needing a Grisu/Ryu-style dtoa.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
