@@ -91,8 +91,19 @@ class CodeGen {
   // Data movement.
   void movImm(X64Reg dst, std::int64_t value);  // mov r/m64, imm32 (sign-extended) or movabs
   void movReg(X64Reg dst, X64Reg src);                    // mov reg, reg
+  // `mov r32, r32` (89 /r without REX.W). Zero-extends the source into the
+  // 64-bit destination, so it is the cheapest way to mask a value to its low
+  // 32 bits -- the dtoa bignum keeps 32-bit limbs in 64-bit slots and uses
+  // this after every multiply to drop the high half.
+  void movReg32(X64Reg dst, X64Reg src);
   void movToMem(X64Reg base, std::int64_t disp, X64Reg src);
   void movFromMem(X64Reg dst, X64Reg base, std::int64_t disp);
+  // 32-bit forms (`89 /r` / `8B /r` without REX.W). The dtoa bignum keeps
+  // 32-bit limbs: a 32-bit load zero-extends into the 64-bit register, so a
+  // limb is a clean machine word for the 64-bit `imul`, and a 32-bit store
+  // writes exactly the limb without a mask.
+  void movToMem32(X64Reg base, std::int64_t disp, X64Reg src);
+  void movFromMem32(X64Reg dst, X64Reg base, std::int64_t disp);
   void movImmToMem(X64Reg base, std::int64_t disp, std::int64_t value);
   void movImmByteToMem(X64Reg base, std::int64_t disp, std::uint8_t value);  // mov byte [m], imm8
   void movByteToMem(X64Reg base, std::int64_t disp, X64Reg src);             // mov [m], r8
@@ -108,18 +119,38 @@ class CodeGen {
   void subReg(X64Reg dst, X64Reg src);
   void subRegImm32(X64Reg dst, std::int32_t value);  // sub r/m64, imm32
   void imulReg(X64Reg dst, X64Reg src);
+  // `imul dst, src, imm32` (69 /r id): dst = src * imm, without needing src in
+  // dst first. The dtoa power-of-ten scaling multiplies by 10 repeatedly.
+  void imulImm32(X64Reg dst, X64Reg src, std::int32_t imm);
   void idiv(X64Reg divisor);  // signed divide rdx:rax by divisor -> rax, remainder rdx
-  void cdq();                 // sign-extend rax into rdx:rax (needed before idiv)
+  void cdq();                 // sign-extend rax into rdx:rax (CQO, 64-bit)
   void divReg(X64Reg divisor);  // cdq + idiv: rax / divisor -> rax, remainder rdx
   void divUnsigned(X64Reg divisor);  // rdx=0 + div: unsigned rax / divisor
+  // `div r/m64` with the caller-supplied rdx:rax dividend (opcode F7 /6). The
+  // bignum long division keeps a running remainder in rdx, so it cannot use
+  // `divUnsigned`, which zeroes rdx.
+  void divRaw(X64Reg divisor);
   void negReg(X64Reg dst);
   void notReg(X64Reg dst);
   void andReg(X64Reg dst, X64Reg src);
+  // `and dst, imm32` (81 /4 id). The float/double unpack masks the exponent
+  // and fraction fields out of the raw bit pattern.
+  void andImm32(X64Reg dst, std::int32_t value);
   void orReg(X64Reg dst, X64Reg src);
   void xorReg(X64Reg dst, X64Reg src);
   void shlCl(X64Reg dst);   // dst <<= cl
   void shrCl(X64Reg dst);   // dst >>= cl (logical)
   void sarCl(X64Reg dst);   // dst >>= cl (arithmetic)
+  // Shift by an immediate count (`C1 /4 ib` / `C1 /5 ib`). The dtoa bignum
+  // splits a 32-bit limb with `>> 32` and shifts a limb by `rem` bits, both
+  // with a count known at emit time, so no `cl` setup is needed.
+  void shlImm8(X64Reg dst, std::uint8_t count);
+  void shrImm8(X64Reg dst, std::uint8_t count);
+  // `bsr dst, src`: index of the most significant set bit of `src` (0 for bit
+  // 0). Undefined for src == 0, so the caller must test first. The dtoa
+  // generator uses it to measure the mantissa's bit length for the decimal
+  // exponent estimate.
+  void bsrReg(X64Reg dst, X64Reg src);
   // `rep movsb`: copy rcx bytes from [rsi] to [rdi], advancing both. Assumes
   // DF=0 (the ABI guarantees it). The string concatenation uses it to join two
   // byte ranges without a per-byte loop.
@@ -260,6 +291,7 @@ class CodeGen {
   void aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src);
   void unaryAlu(std::uint8_t ext, X64Reg dst);
   void shiftCl(std::uint8_t ext, X64Reg dst);
+  void shiftImm8(std::uint8_t ext, X64Reg dst, std::uint8_t count);
   void sseRegOp(std::uint8_t prefix, std::uint8_t opcode, int dstXmm, int srcXmm);
   void sseMemOp(std::uint8_t prefix, std::uint8_t opcode, int xmm, X64Reg base,
                 std::int64_t disp);
