@@ -1,0 +1,39 @@
+// `padStart`/`padEnd` used to re-count the whole padding buffer with
+// `utf8Length` on every iteration, which is quadratic: a pad of a few hundred
+// thousand characters took minutes. The padding is now built in one pass and
+// capped, so a huge width fails with a clean runtime error.
+
+// Basic padding with the default fill.
+assertEq("ab".padStart(5), "   ab");
+assertEq("ab".padEnd(5), "ab   ");
+
+// An explicit fill is repeated and clipped to the exact width.
+assertEq("ab".padStart(5, "*"), "***ab");
+assertEq("ab".padEnd(5, "*"), "ab***");
+assertEq("ab".padStart(6, "xy"), "xyxyab");
+assertEq("ab".padEnd(6, "xy"), "abxyxy");
+
+// A width that is already satisfied returns the string unchanged.
+assertEq("abc".padStart(3), "abc");
+assertEq("abc".padEnd(3), "abc");
+assertEq("abc".padStart(1), "abc");
+
+// The width counts characters, not bytes: the fill is clipped per character.
+assertEq("é".padStart(3, "*"), "**é");
+assertEq("x".padStart(4, "é"), "éééx");
+assertEq("x".padEnd(4, "é"), "xééé");
+assertEq("héllo".padStart(7, "xy"), "xyhéllo");
+assertEq("héllo".padEnd(7, "xy"), "hélloxy");
+
+// An empty fill is rejected.
+assertEq(pcall(() => "ab".padStart(5, "")).ok, false);
+assertEq(pcall(() => "ab".padEnd(5, "")).ok, false);
+
+// A wide pad is linear now and a huge one is refused instead of allocating
+// forever.
+assertEq("ab".padStart(1000000).length, 1000000);
+assertEq("ab".padEnd(1000000).length, 1000000);
+assertEq(pcall(() => "ab".padStart(100000000)).ok, false);
+assertEq(pcall(() => "ab".padEnd(100000000)).ok, false);
+
+print("string pad ok");
