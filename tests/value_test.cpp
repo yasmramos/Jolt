@@ -152,6 +152,40 @@ void testCyclicEqualityTerminates() {
   assert(!p.equals(t));
 }
 
+void testDeepContainerTeardownDoesNotRecurse() {
+  // A chain of nested arrays far deeper than the C++ stack could hold if the
+  // destructor recursed one frame per level. Building it is iterative; dropping
+  // it must be too, or this test crashes instead of finishing.
+  Value chain = makeArray({Value(int64_t(0))});
+  for (int i = 0; i < 300000; ++i) chain = makeArray({chain});
+  assert(chain.isArray());
+  chain = Value();  // drop the whole chain
+}
+
+void testSharedTailSurvivesChainTeardown() {
+  // The tail of a long chain is also bound elsewhere, so dropping the chain
+  // must release only the levels the chain owned and leave the shared value
+  // intact.
+  Value shared = makeArray({Value(int64_t(1)), Value(int64_t(2))});
+  Value chain = shared;
+  for (int i = 0; i < 200000; ++i) chain = makeArray({chain});
+  chain = Value();
+  assert(shared.isArray());
+  assert(shared.arr().items.size() == 2);
+}
+
+void testRepeatedChildInOneContainerIsFreedOnce() {
+  // The same child appears twice in one container. Dropping the container must
+  // release both references and leave only the external one, without freeing the
+  // child early or leaking the two references it held.
+  Value child = makeArray({Value(int64_t(7))});
+  Value parent = makeArray({child, child});
+  assert(child.arr().refs == 3);  // the binding plus the two slots
+  parent = Value();
+  assert(child.arr().refs == 1);  // only the binding remains
+  assert(child.arr().items.size() == 1);
+}
+
 int main() {
   testCStringKindAndBytes();
   testVoidPointerReportsPtr();
@@ -161,6 +195,9 @@ int main() {
   testDoubleFormattingRoundTrips();
   testFloatFormattingRoundTrips();
   testCyclicEqualityTerminates();
+  testDeepContainerTeardownDoesNotRecurse();
+  testSharedTailSurvivesChainTeardown();
+  testRepeatedChildInOneContainerIsFreedOnce();
   std::puts("value tests passed");
   return 0;
 }
