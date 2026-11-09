@@ -151,6 +151,20 @@ class CodeGen {
   void cvtsi2sd(int dstXmm, X64Reg src);
   void xorps(int dstXmm, int srcXmm);  // also zeroes the upper bits of xmm
 
+  // x87 FPU helpers, used only by float `%`. SSE and x87 do not share
+  // registers, so a value crosses through memory: the caller stores the
+  // operand with `movsdFromXmm`, loads it with `fldM64`, and reads the result
+  // back with `movsdToXmm`. Every path drains the x87 stack before returning,
+  // so no x87 state survives a call and the rest of the backend stays SSE.
+  void fldM64(X64Reg base, std::int64_t disp);   // DD /0: push st(0) = double [base+disp]
+  void fstpM64(X64Reg base, std::int64_t disp);  // DD /3: store st(0) to [base+disp] and pop
+  void fstpSt0();                                // DD D8: pop st(0)
+  void fprem();                                  // D9 F8: st(0) = partial remainder st(0)/st(1)
+  void fnstswAx();                               // DF E0: FPU status word -> ax
+  // `test ah, imm8` (F6 /0): the x87 status word's condition flags live in
+  // `ah` after `fnstsw ax`, and `fprem`'s C2 (incomplete) bit is bit 2 of `ah`.
+  void testAhImm8(std::uint8_t value);
+
   // Comparisons and control flow.
   void cmpReg(X64Reg lhs, X64Reg rhs);
   void cmpImm32(X64Reg lhs, std::int32_t value);  // cmp r/m64, imm32

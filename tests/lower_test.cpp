@@ -393,6 +393,27 @@ static void testExecFloatArithmetic() {
               "exec: 1.5f + 1.5 == 3.0 (double)");
 }
 
+static void testExecFloatMod() {
+  auto mk = [](OpCode op, Value x, Value y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 0, 0, 1), instr(OpCode::HALT)},
+                     {x, y}, 2);
+  };
+  // `7 % 2.5` is 2.0: the truncated remainder, matching `std::fmod`.
+  checkDouble(mk(OpCode::MOD, Value(7.0), Value(2.5)), 2.0, "exec: 7.0 % 2.5 == 2.0 (double)");
+  // The sign follows the dividend.
+  checkDouble(mk(OpCode::MOD, Value(-7.0), Value(3.0)), -1.0, "exec: -7.0 % 3.0 == -1.0 (double)");
+  checkDouble(mk(OpCode::MOD, Value(7.0), Value(-3.0)), 1.0, "exec: 7.0 % -3.0 == 1.0 (double)");
+  // A divisor larger than the dividend leaves the dividend unchanged.
+  checkDouble(mk(OpCode::MOD, Value(1.0), Value(3.0)), 1.0, "exec: 1.0 % 3.0 == 1.0 (double)");
+  // float % float stays binary32.
+  checkFloat(mk(OpCode::MOD, Value::fromFloat(5.5f), Value::fromFloat(2.0f)),
+             static_cast<double>(1.5f), "exec: 5.5f % 2.0f == 1.5f (float)");
+  // An int operand widens: 7 % 2.5 is a double.
+  checkDouble(mk(OpCode::MOD, Value(static_cast<int64_t>(7)), Value(2.5)), 2.0,
+              "exec: 7 % 2.5 == 2.0 (int widens to double)");
+}
+
 static void testExecIntDivModPow() {
   auto mk = [](OpCode op, std::int64_t x, std::int64_t y) {
     return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
@@ -530,6 +551,7 @@ int main() {
   testExecManyRegisters();
   testExecFloatLoads();
   testExecFloatArithmetic();
+  testExecFloatMod();
   testExecIntDivModPow();
   testExecShifts();
   testExecFloatComparisons();

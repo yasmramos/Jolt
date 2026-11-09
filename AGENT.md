@@ -688,10 +688,30 @@ Slices, each independently shippable:
       private region (`jolt_init_arena`) and keep the bump cursor/end in
       `r13`/`r14`; `jolt_alloc` bumps it and `jolt_concat` joins two strings
       with `rep movsb`. `jolt_arith` concatenates when both operands are
-      strings and the op is `+`. Float `%`/`**` (libm `fmod`/`pow`) and
-      float-to-text for `print` (own dtoa) remain for 7c.1d.
-    - **7c.1d** — `MOD`/`POW` on floats (libm `fmod`/`pow`) and float-to-text
-      for `print` (own dtoa).
+      strings and the op is `+`. Float `%` lands in 7c.1d.1 (x87 `fprem`);
+      float `**` and float-to-text for `print` (own dtoa) follow in 7c.1d.2/3.
+    - **7c.1d.1** (done) — float `%`. `jolt_arith` implements `Mod` for
+      float/double operands with the x87 unit: SSE has no remainder
+      instruction, so the operands cross through the stack (`movsdFromXmm` /
+      `fldM64`) and `fprem` reduces them in a loop until its C2 (incomplete)
+      bit clears, which is exactly `std::fmod` (the truncated remainder, sign
+      following the dividend) — bit-for-bit, unlike x87 `pow`. A zero divisor
+      reports the same "division by zero" error as `/`. The x87 stack is
+      drained on every path, so the rest of the backend stays SSE. `codegen`
+      gains `fldM64`/`fstpM64`/`fstpSt0`/`fprem`/`fnstswAx`/`testAhImm8`,
+      covered byte-for-byte in `tests/codegen_test.cpp`; `tests/lower_test.cpp`
+      runs the remainder and `tests/freestanding_test.cpp` checks it inside a
+      real static ELF.
+    - **7c.1d.2** — `**` on floats. `std::pow` is *correctly rounded* (glibc,
+      ~0.5 ulp) and the hosted engine calls it; an x87 `2^(y·log2 x)` sequence
+      (`fyl2x`/`f2xm1`/`fscale`) does *not* reproduce it in the last digit, so
+      matching `std::pow` needs a correctly rounded implementation (large).
+      Deferred pending a fidelity decision.
+    - **7c.1d.3** — float-to-text for `print`/`str` (own dtoa). The hosted
+      engine prints a `double` with the shortest text that round-trips through
+      binary64 (`std::to_chars`, e.g. `0.1 + 0.2` → `"0.3"`) and a `float` with
+      the shortest binary32 round-trip (`0.1f` → `"0.1"`, `1.0f/3.0f` →
+      `"0.33333334"`), the latter needing a Grisu/Ryu-style dtoa.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not

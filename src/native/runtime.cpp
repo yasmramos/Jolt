@@ -292,7 +292,7 @@ void emitWriteInt(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel) 
 // 64-bit wrapping arithmetic; anything with a float promotes to double, and a
 // float/float result rounds back to binary32 so `0.1f + 0.2f == 0.3f` holds,
 // exactly like the hosted engine. `Add` on two strings concatenates (7c.1c);
-// `%` on floats needs `fmod` (libm) and stays deferred.
+// `%` on floats uses x87 `fprem` (7c.1d.1).
 void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
                const DataBlob& msgTypes, const DataBlob& msgDivZero,
                CodeGen::Label concatLabel) {
@@ -315,6 +315,9 @@ void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   CodeGen::Label floatSub = cg.newLabel();
   CodeGen::Label floatMul = cg.newLabel();
   CodeGen::Label floatDiv = cg.newLabel();
+  CodeGen::Label floatMod = cg.newLabel();
+  CodeGen::Label floatModGo = cg.newLabel();
+  CodeGen::Label floatModLoop = cg.newLabel();
   CodeGen::Label floatDivZero = cg.newLabel();
   CodeGen::Label floatNotZero = cg.newLabel();
   CodeGen::Label floatDone = cg.newLabel();
@@ -430,7 +433,9 @@ void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.jcc(Jcc::Eq, floatMul);
   cg.cmpImm32(R8, static_cast<std::int32_t>(AotArithOp::Div));
   cg.jcc(Jcc::Eq, floatDiv);
-  cg.jmp(bad);  // float `%` needs fmod (7c.1c)
+  cg.cmpImm32(R8, static_cast<std::int32_t>(AotArithOp::Mod));
+  cg.jcc(Jcc::Eq, floatMod);
+  cg.jmp(bad);  // float `**` needs a correctly rounded pow (7c.1d.2)
 
   cg.bind(floatAdd);
   cg.addsd(Xmm0, Xmm1);
@@ -452,6 +457,35 @@ void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.jmp(floatDone);
   cg.bind(floatDivZero);
   emitFailCall(cg, fail, msgDivZero);
+
+  // float/double `%`: the truncated remainder, matching `std::fmod` (the sign
+  // follows the dividend). SSE has no remainder instruction, so the operands
+  // cross to the x87 unit through the stack. `fprem` produces a partial
+  // remainder and sets C2 while the result is not yet complete; the loop runs
+  // until C2 is clear. Dividing by zero is the same error as `/` (the hosted
+  // engine checks `right.number() == 0` before `fmod`). The x87 stack is
+  // drained on every path, so the rest of the backend keeps seeing a clean FPU.
+  cg.bind(floatMod);
+  cg.xorps(Xmm2, Xmm2);  // xmm2 = 0.0
+  cg.ucomisd(Xmm1, Xmm2);
+  cg.jcc(Jcc::P, floatModGo);  // unordered (NaN) divisor is not zero
+  cg.jcc(Jcc::Eq, floatDivZero);
+  cg.bind(floatModGo);
+  cg.subRegImm32(Rsp, 16);         // scratch for st(1), kept 16-byte aligned
+  cg.movsdFromXmm(Rsp, 0, Xmm0);   // [rsp] = a
+  cg.movsdFromXmm(Rsp, 8, Xmm1);   // [rsp+8] = b
+  cg.fldM64(Rsp, 8);               // st0 = b
+  cg.fldM64(Rsp, 0);               // st0 = a, st1 = b
+  cg.bind(floatModLoop);
+  cg.fprem();                      // st0 = partial remainder
+  cg.fnstswAx();
+  cg.testAhImm8(0x04);             // C2 -> incomplete, keep reducing
+  cg.jcc(Jcc::Ne, floatModLoop);
+  cg.fstpM64(Rsp, 0);              // [rsp] = result, pop st0
+  cg.fstpSt0();                    // pop st1 (the divisor)
+  cg.movsdToXmm(Xmm0, Rsp, 0);
+  cg.addImm32(Rsp, 16);
+  cg.jmp(floatDone);
 
   cg.bind(floatDone);
   // The result is a double unless neither operand is one, in which case it
