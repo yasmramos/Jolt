@@ -17,10 +17,13 @@
 #include <vector>
 
 #include "bytecode.h"
+#include "compiler.h"
+#include "lexer.h"
 #include "native/codegen.h"
 #include "native/lower.h"
 #include "native/target.h"
 #include "native/value.h"
+#include "parser.h"
 
 #if defined(__linux__) && defined(__x86_64__)
 #define LOWER_EXEC_TESTS 1
@@ -100,6 +103,16 @@ static void testDeferredOpcodesThrow() {
 static void testBadJumpTargetThrows() {
   auto proto = makeProto({instr(OpCode::JMP, 0, 0, 0, 99), instr(OpCode::HALT)}, {}, 1);
   check(loweringThrows(proto, "outside the code"), "an out-of-range jump target throws");
+}
+
+static void testUnassignedGlobalThrows() {
+  // A GETGLOBAL whose name is never SETGLOBAL is a lowering error naming the
+  // variable, the compile-time counterpart of the hosted engine's run-time
+  // "undefined variable".
+  auto proto = makeProto({instr(OpCode::GETGLOBAL, 0, 0), instr(OpCode::HALT)},
+                         {Value(std::string("missing"))}, 1);
+  check(loweringThrows(proto, "global 'missing' is read but never assigned"),
+        "reading an unassigned global throws");
 }
 
 static void testInvalidUnopSelectorThrows() {
@@ -531,12 +544,70 @@ static void testExecStringCompare() {
   checkBool(mk(OpCode::LT, "Z", "a"), true, "exec: \"Z\" < \"a\" (unsigned byte order)");
 }
 
+// Global variables (PHASE 7c.2a). The compiler names a global by a string
+// constant; the lowerer assigns each a slot in a flat table the chunk
+// allocates at entry. A program assigns a global and reads it back; a second
+// assignment overwrites it; two globals keep separate slots; and a read of an
+// unassigned global is rejected at lowering time.
+static void testExecGlobals() {
+  // let x = 5; (R0) then return x (R1): R0 <- 5, SETGLOBAL x, GETGLOBAL x, HALT.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 0),
+                      instr(OpCode::GETGLOBAL, 1, 0), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5)), Value(std::string("x"))}, 2),
+           5, "exec: a global assigned 5 reads back 5");
+
+  // Reassignment: x = 5; x = 7; return x -> 7.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 0),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETGLOBAL, 1, 0),
+                      instr(OpCode::GETGLOBAL, 2, 0), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7)),
+                      Value(std::string("x"))}, 3),
+           7, "exec: reassigning a global keeps the last value");
+
+  // Two distinct globals do not share a slot: a = 3; b = 4; return a -> 3.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETGLOBAL, 1, 2),
+                      instr(OpCode::GETGLOBAL, 2, 1), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(3)), Value(std::string("a")),
+                      Value(static_cast<int64_t>(4)), Value(std::string("b"))}, 3),
+           3, "exec: distinct globals keep separate slots");
+
+  // A global holding a string: s = "hi"; return s.
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(std::string("hi")), Value(std::string("s"))}, 2),
+           "hi", "exec: a global holds a string");
+}
+
+// The real compiler drives the lowering: compile source, then lower it and run
+// the chunk. This locks the compiler/lowerer contract for globals -- in
+// particular that a `let` and its later reads share one string constant, so the
+// lowerer's name-to-slot map finds them.
+static void testExecCompiledGlobals() {
+  auto runSource = [](const std::string& source) {
+    auto tokens = lex(source);
+    Parser parser(std::move(tokens), "<lower-test>");
+    Bytecode proto = compileProgram(parser.parseProgram());
+    return run(proto);
+  };
+
+  AotValue value = runSource("let x = 5; let y = x + 2;");
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 7,
+        "compiled: let x = 5; let y = x + 2; yields 7 in R0");
+}
+
 #endif  // LOWER_EXEC_TESTS
 
 int main() {
   testImageIsSelfContained();
   testDeferredOpcodesThrow();
   testBadJumpTargetThrows();
+  testUnassignedGlobalThrows();
   testInvalidUnopSelectorThrows();
 
 #ifdef LOWER_EXEC_TESTS
@@ -559,6 +630,8 @@ int main() {
   testExecStringLoad();
   testExecStringConcat();
   testExecStringCompare();
+  testExecGlobals();
+  testExecCompiledGlobals();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

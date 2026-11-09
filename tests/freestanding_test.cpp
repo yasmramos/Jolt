@@ -321,6 +321,59 @@ static void test_boxed_runtime_print() {
   check(result.exitCode == 0, "the printing program exits 0");
 }
 
+// The global table (PHASE 7c.2a) inside a real static ELF: the chunk allocates
+// it from the arena at entry, every slot starts nil, and set/get round-trip
+// through r15. The helpers are driven directly, like the printer above.
+static void test_boxed_runtime_globals() {
+  CodeGen cg(Target::linuxX64());
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label mainLabel = cg.newLabel();
+
+  auto printSlot = [&](int slot) {
+    cg.movImm(X64Reg::Rdi, slot);
+    cg.callLabel(rt.globalGet);
+    cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+    cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+    cg.callLabel(rt.printValue);
+  };
+  auto setInt = [&](int slot, std::int64_t value) {
+    cg.movImm(X64Reg::Rdi, slot);
+    cg.movImm(X64Reg::Rsi, static_cast<std::int64_t>(AotTag::Int));
+    cg.movImm(X64Reg::Rdx, value);
+    cg.callLabel(rt.globalSet);
+  };
+
+  cg.bind(mainLabel);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.callLabel(entry.initArena);
+  cg.movImm(X64Reg::Rdi, 3);
+  cg.callLabel(rt.initGlobals);
+  setInt(0, 7);
+  setInt(2, -9);
+  printSlot(0);  // 7
+  printSlot(2);  // -9
+  printSlot(1);  // nil: never assigned
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t start = emitFreestandingRuntime(cg, entry, mainLabel);
+  emitAotRuntime(cg, rt, entry);
+  cg.finalize();
+
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
+  const std::string path = "/tmp/jolt_boxed_globals";
+  writeFile(path, elf);
+  RunResult result = runProgram(path);
+  check(result.output == "7\n-9\nnil\n",
+        "the boxed runtime keeps globals in distinct slots and starts them nil");
+  check(result.exitCode == 0, "the global program exits 0");
+}
+
 // A type mismatch in a lowered operation must report an error and exit 70,
 // matching the development engine's runtime-error exit code.
 static void test_boxed_runtime_error() {
@@ -467,6 +520,7 @@ int main() {
   test_platform_roundtrip();
   test_end_to_end();
   test_boxed_runtime_print();
+  test_boxed_runtime_globals();
   test_boxed_runtime_error();
   test_boxed_runtime_div_zero();
   test_boxed_runtime_string();

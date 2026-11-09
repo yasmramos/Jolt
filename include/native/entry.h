@@ -43,6 +43,14 @@ inline RuntimeHandles newRuntimeHandles(CodeGen& code) {
 constexpr X64Reg kAotArenaCursor = X64Reg::R13;
 constexpr X64Reg kAotArenaEnd = X64Reg::R14;
 
+// Base of the global table (PHASE 7c.2a): a contiguous array of `AotValue`
+// slots the chunk allocates from the arena once at entry. Like the arena
+// cursor, it is a callee-saved register no helper touches, so the chunk and
+// every frame reach the globals without a writable data segment. The runtime
+// helpers use none of r12-r15, so the arena, the global table and the register
+// file never collide.
+constexpr X64Reg kAotGlobalBase = X64Reg::R15;
+
 // Region `_start` maps for the arena, and the offset of the first allocation
 // (so a live pointer is never null, which is the allocator's failure value).
 constexpr std::int64_t kAotArenaSize = 1 << 20;  // 1 MiB

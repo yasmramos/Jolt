@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -140,6 +141,40 @@ struct StringConstant {
   std::string bytes;
 };
 
+// Global variables (PHASE 7c.2a). The compiler names a global by a string
+// constant index (`instruction.b`), but the binary has no strings: each
+// distinct name gets an index into a flat `AotValue` array. The lowerer
+// derives the map from the code itself, in first-assignment order, so the
+// `Bytecode` structure and the `.jolc` format stay unchanged.
+//
+// A `GETGLOBAL` of a name the chunk never assigns is a lowering error naming
+// the variable, the compile-time counterpart of the hosted engine's run-time
+// `undefined variable`. Builtins (`print`, ...) are globals the hosted engine
+// installs up front; the AOT backend has no builtins until calls land
+// (7c.2c), at which point they will be seeded as pre-assigned here.
+struct GlobalSlots {
+  std::unordered_map<int, int> slotOfConstant;  // constant index -> slot
+  int count = 0;
+};
+
+GlobalSlots collectGlobals(const Bytecode& proto) {
+  GlobalSlots globals;
+  for (const Instruction& instr : proto.code) {
+    if (instr.op != OpCode::SETGLOBAL) continue;
+    if (globals.slotOfConstant.find(instr.b) != globals.slotOfConstant.end()) continue;
+    globals.slotOfConstant[instr.b] = globals.count++;
+  }
+  for (const Instruction& instr : proto.code) {
+    if (instr.op != OpCode::GETGLOBAL) continue;
+    if (globals.slotOfConstant.find(instr.b) != globals.slotOfConstant.end()) continue;
+    const Value& name = proto.constants.at(static_cast<std::size_t>(instr.b));
+    throw LoweringError("lowering: global '" +
+                        (name.isStr() ? name.asStr() : std::string("<non-string>")) +
+                        "' is read but never assigned");
+  }
+  return globals;
+}
+
 // Emits the string-constant data islands at the end of the code buffer. Called
 // after every code path has ended in `ret`/`ud2`, so control never falls into
 // them; the `lea` fixups emitted by `loadStringImmediate` resolve against these
@@ -156,7 +191,7 @@ void emitStringConstants(CodeGen& cg, const std::vector<StringConstant>& constan
 
 void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& cg,
                       const std::vector<CodeGen::Label>& labels,
-                      const AotRuntimeHandles& rt,
+                      const AotRuntimeHandles& rt, const GlobalSlots& globals,
                       std::vector<StringConstant>& stringConstants) {
   switch (instr.op) {
     case OpCode::LOADK: {
@@ -301,6 +336,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       // reverse order.
       loadValue(cg, 0, X64Reg::Rax, X64Reg::Rdx);
       cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+      cg.pop(X64Reg::R15);
       cg.pop(X64Reg::R14);
       cg.pop(X64Reg::R13);
       cg.pop(X64Reg::R12);
@@ -310,11 +346,22 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       break;
 
     // The rest need runtime support and land in later slices of PHASE 7c.
-    // Globals, locals, calls and closures need frames (7c.2); collections and
+    // Locals, calls and closures need frames (7c.2b/7c.2c); collections and
     // iteration need the arena (7c.3).
-    case OpCode::GETGLOBAL:
-    case OpCode::SETGLOBAL:
-      unsupported("GETGLOBAL/SETGLOBAL", "PHASE 7c.2");
+    case OpCode::GETGLOBAL: {
+      const int slot = globals.slotOfConstant.at(instr.b);
+      cg.movImm(X64Reg::Rdi, slot);
+      cg.callLabel(rt.globalGet);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
+    case OpCode::SETGLOBAL: {
+      const int slot = globals.slotOfConstant.at(instr.b);
+      cg.movImm(X64Reg::Rdi, slot);
+      loadValue(cg, instr.a, X64Reg::Rsi, X64Reg::Rdx);
+      cg.callLabel(rt.globalSet);
+      break;
+    }
     case OpCode::DECLLOCAL:
     case OpCode::GETLOCAL:
     case OpCode::SETLOCAL:
@@ -353,6 +400,7 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   CodeGen::Label chunkEntry = cg.newLabel();
   CodeGen::Label mainEntry = cg.newLabel();
   std::vector<StringConstant> stringConstants;
+  const GlobalSlots globals = collectGlobals(proto);
 
   // One label per instruction index, so a jump (an absolute index into `code`)
   // can target any instruction, forward or backward.
@@ -365,7 +413,7 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   const std::uint64_t chunkOffset = cg.offset();
   cg.bind(chunkEntry);
   // Save the callee-saved registers the arena and the allocator use (rbx and
-  // r12-r14; see `native/entry.h`) before claiming them, and restore them on
+  // r12-r15; see `native/entry.h`) before claiming them, and restore them on
   // the way out, so the chunk honours the System V ABI. They are pushed
   // *above* the register file's base, which `rbp` becomes only after the
   // pushes, so the file (which grows down from `rbp`) never overlaps them.
@@ -374,19 +422,24 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   cg.push(X64Reg::R12);
   cg.push(X64Reg::R13);
   cg.push(X64Reg::R14);
+  cg.push(X64Reg::R15);
   cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
   const std::int64_t fileBytes =
       16LL * (proto.numRegisters > 0 ? proto.numRegisters : 1);
   cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(fileBytes));
   // Map the arena before the program runs, so the allocator has its
   // cursor/end registers seeded from the first allocation (string
-  // concatenation in 7c.1c). rsp is 16-byte aligned here (five pushes plus a
-  // multiple-of-16 file size), which the call requires.
+  // concatenation in 7c.1c, the global table below). rsp is 16-byte aligned
+  // here (six pushes plus a multiple-of-16 file size), which the calls require.
   cg.callLabel(entry.initArena);
+  // Allocate and clear the global table (7c.2a). Every global reads as nil
+  // until assigned, matching the hosted engine's "unset" state.
+  cg.movImm(X64Reg::Rdi, globals.count);
+  cg.callLabel(rt.initGlobals);
 
   for (std::size_t i = 0; i < proto.code.size(); ++i) {
     cg.bind(labels[i]);
-    lowerInstruction(proto.code[i], proto, cg, labels, rt, stringConstants);
+    lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, stringConstants);
   }
 
   // `main`: run the chunk and return 0, so the process exit code is a clean

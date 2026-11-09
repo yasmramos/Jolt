@@ -727,6 +727,21 @@ Slices, each independently shippable:
       (`fyl2x`/`f2xm1`/`fscale`) does *not* reproduce it in the last digit, so
       matching `std::pow` needs a correctly rounded implementation (large).
       Deferred pending a fidelity decision.
+    - **7c.2a** (done) — globals. `GETGLOBAL`/`SETGLOBAL` lower to a flat
+      `AotValue` table the chunk allocates from the arena once at entry (its
+      base lives in r15, a callee-saved register no helper touches, so no
+      writable data segment is needed). The compiler names a global by a string
+      constant; the lowerer derives the name-to-slot map from the code in
+      first-assignment order, so the `Bytecode` structure and the `.jolc` format
+      are unchanged and the binary carries no global names. `jolt_init_globals`
+      clears every slot to nil (the hosted engine's "unset" state),
+      `jolt_global_set`/`jolt_global_get` are one shift and a store/load. A
+      `GETGLOBAL` of a name the chunk never assigns is a `LoweringError` naming
+      the variable -- the compile-time counterpart of the hosted engine's
+      run-time "undefined variable". `tests/lower_test.cpp` runs globals
+      (assign, reassign, distinct slots, a string global) and drives the real
+      compiler into the lowerer; `tests/freestanding_test.cpp` exercises the
+      table inside a real static ELF. Locals and calls stay for 7c.2b/7c.2c.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -758,8 +773,8 @@ Slices, each independently shippable:
   comparison and truthiness helpers plus the int/bool/nil printer are emitted
   as machine code into the program's own buffer. 7c.1b adds floats and doubles
   (`Double` tag, `jolt_arith`/`jolt_shift`/`jolt_pow`), with the int/float/double
-  promotion of the hosted engine. Still missing: strings (7c.1c), the
-  embedded runtime calls (7c.2/7c.3) and `jolt build` (7d).
+  promotion of the hosted engine. Still missing: locals and calls (7c.2b/7c.2c),
+  collections (7c.3) and `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -796,7 +811,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a and 7c.1b done; 7c.1c+, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a done; 7c.2b+, 7c.3, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

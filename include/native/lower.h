@@ -10,9 +10,10 @@
 // Lowers a Bytecode proto to x86-64 machine code.
 //
 // PHASE 7c.1 lowers the runtime-free opcodes over the boxed `AotValue` (see
-// `native/value.h`): LOADK (nil/bool/int/float/double), MOVE, ADD, SUB, MUL,
-// DIV, MOD, POW, BAND, BOR, BXOR, SHL, SHR, UNOP (negate/not/bit-not), EQ,
-// NEQ, LT, LTE, GT, GTE, JMP, JMP_IF_FALSE, JMP_IF_TRUE and HALT.
+// `native/value.h`): LOADK (nil/bool/int/float/double/string), MOVE, ADD, SUB,
+// MUL, DIV, MOD, POW, BAND, BOR, BXOR, SHL, SHR, UNOP (negate/not/bit-not),
+// EQ, NEQ, LT, LTE, GT, GTE, JMP, JMP_IF_FALSE, JMP_IF_TRUE, HALT and, from
+// 7c.2a, GETGLOBAL/SETGLOBAL over a flat global table in the arena.
 //
 // A bytecode register is a 16-byte slot in a register file on the stack, not a
 // physical CPU register: a boxed value does not fit in one, and the file is
@@ -23,10 +24,10 @@
 // no relocations).
 //
 // Every other opcode throws a `LoweringError`:
-//   - LOADK of a string constant: no representation yet (7c.1c).
-//   - GETGLOBAL, SETGLOBAL, DECLLOCAL, GETLOCAL, SETLOCAL, CALL, RETURN,
-//     CLOSURE, GETUPVAL, SETUPVAL: need frames and globals (7c.2).
-//   - NEWTABLE, GETTABLE, SETTABLE, IN, ITER: need the arena (7c.3).
+//   - DECLLOCAL, GETLOCAL, SETLOCAL, CALL, RETURN, CLOSURE, GETUPVAL, SETUPVAL:
+//     need frames (7c.2b/7c.2c).
+//   - NEWTABLE, GETTABLE, SETTABLE, IN, ITER: need collections (7c.3).
+// A GETGLOBAL of a name the chunk never assigns is also a `LoweringError`.
 struct LoweringError : std::exception {
   explicit LoweringError(std::string message) : message(std::move(message)) {}
   std::string message;

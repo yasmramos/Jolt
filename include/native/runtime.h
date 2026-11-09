@@ -52,6 +52,15 @@ struct AotRuntimeHandles {
   // combined length and bytes, and returns an `AotValue` (tag Str). Used by
   // `jolt_arith` for `Add` when both operands are strings.
   CodeGen::Label concat;         // AotValue jolt_concat(AotValue a, AotValue b)
+  // The global table (PHASE 7c.2a). It is a contiguous array of `AotValue`
+  // slots in the arena; the chunk allocates it once at entry and keeps its
+  // base in r15. `initGlobals` takes the slot count in rdi. `globalSet` takes
+  // the slot index in rdi and the value in rsi:rdx; `globalGet` takes the slot
+  // index in rdi and returns the value in rax:rdx. Global names never reach
+  // the binary: the compiler assigns each one an index, exactly like a local.
+  CodeGen::Label initGlobals;    // void jolt_init_globals(long count)
+  CodeGen::Label globalSet;      // void jolt_global_set(long slot, AotValue v)
+  CodeGen::Label globalGet;      // AotValue jolt_global_get(long slot)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
@@ -59,6 +68,7 @@ inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(),
   };
 }
 

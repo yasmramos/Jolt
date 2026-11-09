@@ -1096,6 +1096,80 @@ void emitConcat(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   emitFailCall(cg, fail, msgOom);
 }
 
+// `void jolt_init_globals(long count)`: allocate `count` `AotValue` slots
+// (16 bytes each) from the arena, clear them to nil, and keep the base in r15
+// (`kAotGlobalBase`). Called once by the chunk entry, before the program runs,
+// so every global reads as nil until it is assigned -- the same "unset" state
+// the hosted engine's `GETGLOBAL` checks. Reports "out of memory" on a null
+// allocation.
+void emitInitGlobals(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                     CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label clear = cg.newLabel();
+  CodeGen::Label clearDone = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+
+  cg.bind(label);
+  cg.push(Rbp);
+  cg.movReg(Rbp, Rsp);
+  cg.push(Rbx);
+
+  cg.movReg(Rbx, Rdi);                 // rbx = count
+  cg.shlImm8(Rdi, 4);                  // count * 16 bytes
+  cg.callLabel(allocLabel);            // rax = base (or null)
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movReg(kAotGlobalBase, Rax);
+
+  // Zero every slot: tag = Nil (0), payload = 0. `rep stosq` would need rdi
+  // and rcx; a short explicit loop keeps the register use obvious and the
+  // count is small (one slot per distinct global in the program).
+  cg.movReg(R10, Rax);
+  cg.movReg(R11, Rbx);
+  cg.shlImm8(R11, 4);                  // byte count again
+  cg.testReg(R11);
+  cg.jcc(Jcc::Eq, clearDone);
+  cg.bind(clear);
+  cg.movImmToMem(R10, 0, 0);
+  cg.movImmToMem(R10, 8, 0);
+  cg.addImm32(R10, 16);
+  cg.subRegImm32(R11, 16);
+  cg.jcc(Jcc::Ne, clear);
+  cg.bind(clearDone);
+
+  cg.pop(Rbx);
+  cg.movReg(Rsp, Rbp);
+  cg.pop(Rbp);
+  cg.retInsn();
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
+}
+
+// `void jolt_global_set(long slot, AotValue v)`: store `v` (rsi:rdx) into
+// slot `rdi` of the global table at r15. One multiply and two stores; no
+// hashing, no strings.
+void emitGlobalSet(CodeGen& cg, CodeGen::Label label) {
+  cg.bind(label);
+  cg.shlImm8(Rdi, 4);                  // slot * 16
+  cg.addReg(Rdi, kAotGlobalBase);
+  cg.movToMem(Rdi, 0, Rsi);            // tag
+  cg.movToMem(Rdi, 8, Rdx);            // payload
+  cg.retInsn();
+}
+
+// `AotValue jolt_global_get(long slot)`: load slot `rdi` of the global table
+// into rax:rdx. The slot is nil until assigned, matching the hosted engine's
+// "unset" state; the lowerer rejects a read of a global that is never assigned
+// in the chunk, so a program never observes that nil by accident.
+void emitGlobalGet(CodeGen& cg, CodeGen::Label label) {
+  cg.bind(label);
+  cg.shlImm8(Rdi, 4);                  // slot * 16
+  cg.addReg(Rdi, kAotGlobalBase);
+  cg.movFromMem(Rax, Rdi, 0);          // tag
+  cg.movFromMem(Rdx, Rdi, 8);          // payload
+  cg.retInsn();
+}
+
 }  // namespace
 
 void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
@@ -1135,6 +1209,9 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitWriteInt(cg, writeInt, entry.write);
   emitAlloc(cg, handles.alloc);
   emitConcat(cg, handles.concat, handles.alloc, fail, msgOom);
+  emitInitGlobals(cg, handles.initGlobals, handles.alloc, fail, msgOom);
+  emitGlobalSet(cg, handles.globalSet);
+  emitGlobalGet(cg, handles.globalGet);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
                  dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
                  textNewline);
