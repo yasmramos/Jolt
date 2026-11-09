@@ -12,8 +12,9 @@
 // PHASE 7c.1 lowers the runtime-free opcodes over the boxed `AotValue` (see
 // `native/value.h`): LOADK (nil/bool/int/float/double/string), MOVE, ADD, SUB,
 // MUL, DIV, MOD, POW, BAND, BOR, BXOR, SHL, SHR, UNOP (negate/not/bit-not),
-// EQ, NEQ, LT, LTE, GT, GTE, JMP, JMP_IF_FALSE, JMP_IF_TRUE, HALT and, from
-// 7c.2a, GETGLOBAL/SETGLOBAL over a flat global table in the arena.
+// EQ, NEQ, LT, LTE, GT, GTE, JMP, JMP_IF_FALSE, JMP_IF_TRUE, HALT; from 7c.2a,
+// GETGLOBAL/SETGLOBAL over a flat global table in the arena; and from 7c.2b,
+// DECLLOCAL/GETLOCAL/SETLOCAL over a second stack region.
 //
 // A bytecode register is a 16-byte slot in a register file on the stack, not a
 // physical CPU register: a boxed value does not fit in one, and the file is
@@ -24,8 +25,7 @@
 // no relocations).
 //
 // Every other opcode throws a `LoweringError`:
-//   - DECLLOCAL, GETLOCAL, SETLOCAL, CALL, RETURN, CLOSURE, GETUPVAL, SETUPVAL:
-//     need frames (7c.2b/7c.2c).
+//   - CALL, RETURN, CLOSURE, GETUPVAL, SETUPVAL: need frames (7c.2c).
 //   - NEWTABLE, GETTABLE, SETTABLE, IN, ITER: need collections (7c.3).
 // A GETGLOBAL of a name the chunk never assigns is also a `LoweringError`.
 struct LoweringError : std::exception {
