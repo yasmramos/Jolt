@@ -1753,7 +1753,7 @@ assertEq((3..=0).toArray(), [3, 2, 1, 0]);
 
 The `range(end)` function produces `0..end`, and `range(start, end)` produces `start..end` (always exclusive).
 
-Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `toArray()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements.
+Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `toArray()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements. A range wider than `INT64_MAX` elements reports a `.length` of `9223372036854775807` (the count saturates rather than overflowing).
 
 ```jolt
 assertEq(2 in 1..5, true);
