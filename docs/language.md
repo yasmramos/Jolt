@@ -1787,7 +1787,7 @@ assertEq(len(5..0), 5);
 | `double(value)` | Converts to `double` (binary64). |
 | `bool(value)` | Applies Jolt's truthiness. |
 
-`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error.
+`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error. `int(float)` and `int(double)` truncate toward zero and are an error when the value is outside the `int` range (a non-finite value is an error too).
 
 A floating-point value prints with the shortest decimal text that round-trips through its type: parsing the printed form back yields exactly the same value. A `double` uses binary64 precision (`str(1.0 / 3.0)` is `"0.3333333333333333"`) and a `float` uses binary32 (`str(0.1f)` is `"0.1"`). Values that fit in fewer digits keep the shortest form (`str(1.5)` is `"1.5"`).
 
