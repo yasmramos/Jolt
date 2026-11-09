@@ -293,6 +293,13 @@ static void test_boxed_runtime_print() {
   printValue(AotTag::Bool, 1);
   printValue(AotTag::Bool, 0);
   printValue(AotTag::Nil, 0);
+  // Float/Double render through the embedded dtoa with the hosted engine's
+  // shortest round-trip text: a double uses binary64, a float binary32.
+  printValue(AotTag::Double, static_cast<std::int64_t>(aotDouble(0.1 + 0.2).payload));
+  printValue(AotTag::Double, static_cast<std::int64_t>(aotDouble(1.0 / 3.0).payload));
+  printValue(AotTag::Double, static_cast<std::int64_t>(aotDouble(-2.5).payload));
+  printValue(AotTag::Float, static_cast<std::int64_t>(aotFloat(1.0f / 3.0f).payload));
+  printValue(AotTag::Float, static_cast<std::int64_t>(aotFloat(0.1f).payload));
   cg.xorReg(X64Reg::Rax, X64Reg::Rax);
   cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
   cg.pop(X64Reg::Rbp);
@@ -307,8 +314,10 @@ static void test_boxed_runtime_print() {
   const std::string path = "/tmp/jolt_boxed_print";
   writeFile(path, elf);
   RunResult result = runProgram(path);
-  check(result.output == "42\n-7\ntrue\nfalse\nnil\n",
-        "the boxed runtime prints int, negative int, bool and nil");
+  check(result.output == "42\n-7\ntrue\nfalse\nnil\n"
+                         "0.30000000000000004\n0.3333333333333333\n-2.5\n"
+                         "0.33333334\n0.1\n",
+        "the boxed runtime prints int, bool, nil, double and float");
   check(result.exitCode == 0, "the printing program exits 0");
 }
 

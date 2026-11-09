@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "native/dtoa.h"
+
 namespace {
 
 // Shorthand for the registers the runtime uses, so the emit helpers read like
@@ -50,6 +52,14 @@ constexpr int Xmm2 = kXmmBase + 2;
 // Exit code of an uncaught runtime error, matching the development engine
 // (`main.cpp` returns 70 after a `RuntimeError`).
 constexpr std::int64_t kRuntimeErrorExit = 70;
+
+// Stack frame `jolt_print_value` builds for a Float/Double: the dtoa `Scratch`
+// block followed by a text buffer. Both sizes are rounded so the frame is a
+// multiple of 16, keeping rsp 16-byte aligned at the `call` to the formatter
+// (the ABI requires it, and the formatter's own `call`s rely on it).
+constexpr std::int64_t kDtoaScratchBytes = static_cast<std::int64_t>(dtoa::kScratchBytes);
+constexpr std::int64_t kDtoaTextBytes = 400;
+constexpr std::int64_t kDtoaFrameBytes = kDtoaScratchBytes + kDtoaTextBytes;
 
 // Every helper keeps the System V stack invariant: it is entered with
 // rsp % 16 == 8 (the `call` pushed a return address), it pushes rbp so rsp is
@@ -163,17 +173,18 @@ void emitTruthy(CodeGen& cg, CodeGen::Label label) {
 }
 
 // `void jolt_print_value(AotValue v)`: prints the value followed by a newline.
-// int, bool, nil and str are representable; a float/double needs its own dtoa
-// and lands in a later slice.
+// int, bool, nil and str render directly; a Float/Double is formatted with the
+// embedded dtoa (`jolt_format_double`) into an arena buffer, then written.
 void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                     CodeGen::Label fail, CodeGen::Label writeInt,
-                    const DataBlob& badValue, const DataBlob& textTrue,
-                    const DataBlob& textFalse, const DataBlob& textNil,
-                    const DataBlob& textNewline) {
+                    CodeGen::Label formatDouble, const DataBlob& badValue,
+                    const DataBlob& textTrue, const DataBlob& textFalse,
+                    const DataBlob& textNil, const DataBlob& textNewline) {
   CodeGen::Label asInt = cg.newLabel();
   CodeGen::Label asBool = cg.newLabel();
   CodeGen::Label asNil = cg.newLabel();
   CodeGen::Label asStr = cg.newLabel();
+  CodeGen::Label asNum = cg.newLabel();
   CodeGen::Label boolFalse = cg.newLabel();
   CodeGen::Label newline = cg.newLabel();
 
@@ -188,11 +199,34 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
   cg.jcc(Jcc::Eq, asNil);
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
   cg.jcc(Jcc::Eq, asStr);
+  // The remaining tags are Float (3) and Double (4); everything else is not
+  // printable.
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFloat));
+  cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagDouble));
+  cg.jcc(Jcc::Eq, asNum);
   emitFailCall(cg, fail, badValue);
 
   cg.bind(asInt);
   cg.movReg(Rdi, Rsi);
   cg.callLabel(writeInt);
+  cg.jmp(newline);
+
+  // A Float/Double: format into an arena buffer with the embedded dtoa, then
+  // write the returned length. The `Scratch` block and the text buffer live on
+  // the stack for the call; `kDtoaScratchBytes` is padded to a multiple of 16
+  // so rsp stays 16-byte aligned (the ABI requirement at every `call`).
+  cg.bind(asNum);
+  cg.subRegImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.movReg(Rcx, Rsp);                        // scratch = rsp
+  cg.movReg(Rdx, Rsp);
+  cg.addImm32(Rdx, static_cast<std::int32_t>(kDtoaScratchBytes));  // out = rsp + scratch
+  cg.callLabel(formatDouble);                 // rdi=tag, rsi=payload (unchanged)
+  cg.movReg(Rsi, Rax);                        // length
+  cg.movReg(Rdi, Rsp);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kDtoaScratchBytes));
+  cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  inlineWriteStdout(cg, writeLabel);
   cg.jmp(newline);
 
   cg.bind(asBool);
@@ -1093,12 +1127,17 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   CodeGen::Label fail = cg.newLabel();
   CodeGen::Label writeInt = cg.newLabel();
 
+  // The float/double formatter is part of the embedded runtime: bind its
+  // handles and emit the whole dtoa routine so `jolt_print_value` can call it.
+  dtoa::DtoaHandles dtoaHandles = dtoa::newDtoaHandles(cg);
+
   emitFail(cg, fail, entry.write, entry.exit);
   emitWriteInt(cg, writeInt, entry.write);
   emitAlloc(cg, handles.alloc);
   emitConcat(cg, handles.concat, handles.alloc, fail, msgOom);
-  emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt, msgPrint,
-                 textTrue, textFalse, textNil, textNewline);
+  emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
+                 dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
+                 textNewline);
   emitTruthy(cg, handles.truthy);
   emitArith(cg, handles.arithValues, fail, msgTypes, msgDivZero, handles.concat);
   emitPow(cg, handles.powValues, fail, msgPow);
@@ -1108,6 +1147,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitBitNot(cg, handles.bitNotValue, fail, msgBitNot);
   emitNot(cg, handles.notValue);
   emitCompare(cg, handles.compareValues, fail, msgCompare);
+  dtoa::emitDtoa(cg, dtoaHandles);
 
   // Data islands last: every code path above ends in `ret` or `ud2`, so
   // control never reaches them, and their addresses are already referenced by
