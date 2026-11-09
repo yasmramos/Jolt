@@ -519,6 +519,41 @@ void CodeGen::cvtss2sd(int dstXmm, int srcXmm) { sseRegOp(0xF3, 0x5A, dstXmm, sr
 void CodeGen::ucomisd(int a, int b) { sseRegOp(0x66, 0x2E, a, b); }
 void CodeGen::xorps(int dstXmm, int srcXmm) { sseRegOp(0x00, 0x57, dstXmm, srcXmm); }
 
+// x87 FPU: memory operands take no REX prefix (the FPU is legacy), so the
+// ModRM/SIB/displacement encoding is shared with `modRmDisp`.
+void CodeGen::fldM64(X64Reg base, std::int64_t disp) {
+  std::uint8_t b = enc(base);
+  emitByte(0xDD);
+  modRmDisp(0, b, disp);  // DD /0 loads a 64-bit double (D9 /0 would be a 32-bit float)
+}
+
+void CodeGen::fstpM64(X64Reg base, std::int64_t disp) {
+  std::uint8_t b = enc(base);
+  emitByte(0xDD);
+  modRmDisp(3, b, disp);  // DD /3
+}
+
+void CodeGen::fstpSt0() {
+  emitByte(0xDD);  // DD D8: fstp st(0)
+  emitByte(0xD8);
+}
+
+void CodeGen::fprem() {
+  emitByte(0xD9);  // D9 F8: fprem
+  emitByte(0xF8);
+}
+
+void CodeGen::fnstswAx() {
+  emitByte(0xDF);  // DF E0: fnstsw ax
+  emitByte(0xE0);
+}
+
+void CodeGen::testAhImm8(std::uint8_t value) {
+  emitByte(0xF6);  // F6 /0: test r/m8, imm8 -- ModRM rm=100 (ah), reg=/0
+  emitByte(0xC4);
+  emitByte(value);
+}
+
 void CodeGen::movqToXmm(int xmm, X64Reg src) {
   // 66 REX.W 0F 6E /r: reg field = xmm (REX.R), rm field = GPR (REX.B).
   std::uint8_t d = static_cast<std::uint8_t>(xmm - kXmmBase);
