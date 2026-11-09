@@ -970,7 +970,11 @@ void registerBuiltins(Runtime& in) {
     if (value.isFloat() || value.isDouble()) {
       double number = value.number();
       if (!std::isfinite(number)) in.fail("cannot convert a non-finite float to int");
-      if (number < -9223372036854775808.0 || number > 9223372036854775807.0) {
+      // The upper bound is compared against 2^63 (exclusive), not against
+      // 9223372036854775807.0: that literal rounds to 2^63, so a double equal to
+      // 2^63 slipped past a `>` check and the cast returned INT64_MIN instead of
+      // reporting the overflow.
+      if (number < -9223372036854775808.0 || number >= 9223372036854775808.0) {
         in.fail("float is out of the integer range");
       }
       return Value(static_cast<int64_t>(number));
