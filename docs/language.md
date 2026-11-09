@@ -2175,7 +2175,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Source nesting is bounded: deeply nested expressions and statements (nested parentheses, arrays, blocks, string interpolation, or a very long operator chain) are rejected at compile time with `expression nesting is too deep` instead of overflowing the stack. The limit is far above any nesting a real program reaches.
-- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed. Tearing down a deeply nested container (for example `a = [a]` in a loop) is iterative, so a deep structure is freed without overflowing the stack.
+- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed. Destruction is deferred to an explicit work list, so a deeply nested structure — a container chain (`a = [a]` in a loop), a closure chain (each closure capturing the previous one) or any mix — is freed with a constant C++ stack depth instead of overflowing the stack.
 - Sorting with custom comparators relies on the comparator defining a strict order.
 
 ---

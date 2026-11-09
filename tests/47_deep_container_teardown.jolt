@@ -1,9 +1,9 @@
-// `Array` and `Map` own their children by `Value`, so the compiler-generated
-// destructor recursed one C++ frame per nesting level. A structure built at run
-// time (for example `a = [a]` in a loop) can be arbitrarily deep, so tearing it
-// down overflowed the stack and crashed the process with no error. The
-// destructors now drain an explicit work list, keeping the C++ stack depth
-// independent of the nesting.
+// A `Value` owns its children (array items, map entries, captured cells) and
+// the compiler-generated destructors recursed one C++ frame per level, so a
+// structure built at run time (for example `a = [a]` in a loop) could be
+// arbitrarily deep and overflowed the stack while being torn down, crashing the
+// process with no error. Destruction is now deferred to an explicit work list,
+// keeping the C++ stack depth independent of the depth of the chain.
 
 // A deep array chain is built and dropped without crashing. The depth is chosen
 // past the point where the old recursive destructor overflowed a 1 MiB stack
@@ -31,5 +31,19 @@ for (i in 0..100000) {
 chain = nil;
 assertEq(len(shared), 3);
 assertEq(shared[0], 1);
+
+// A deep closure chain exercises the same teardown through a different edge:
+// each closure captures the previous one in an upvalue cell, so the chain is
+// Function -> Cell -> Function. It must be freed just as iteratively.
+fn makeChain(n) {
+  var f = () => 1;
+  for (i in 0..n) {
+    let g = f;
+    f = () => g;
+  }
+  return f;
+}
+let closures = makeChain(200000);
+assertEq(type(closures()), "function");
 
 print("deep container teardown ok");
