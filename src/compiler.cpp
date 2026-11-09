@@ -17,6 +17,28 @@ namespace {
   throw CompileError{message, line, col};
 }
 
+// Maximum nesting depth of the compiler's recursive AST walk. It bounds the C++
+// stack a single compilation can consume: the default thread stack (8 MiB on
+// Linux, 1 MiB on Windows) is far larger than the per-level cost, so this limit
+// turns a stack overflow into a clean `CompileError` while staying above any
+// nesting a real program reaches. It is larger than the parser's own limit
+// because a left-associative chain (`1 + 1 + ...`) is parsed iteratively and
+// reaches the compiler as a deep tree that the parser never counted.
+constexpr int kMaxCompileDepth = 512;
+
+}  // namespace
+
+Compiler::DepthGuard::DepthGuard(const Compiler& compiler) : compiler_(compiler) {
+  if (++compiler_.depth_ > kMaxCompileDepth) {
+    --compiler_.depth_;
+    fail("expression nesting is too deep", compiler_.currentLine_, compiler_.currentCol_);
+  }
+}
+
+Compiler::DepthGuard::~DepthGuard() { --compiler_.depth_; }
+
+namespace {
+
 // Splits a dotted module path into its segments: "std.math" -> {"std","math"}.
 std::vector<std::string> splitDotted(const std::string& path) {
   std::vector<std::string> segments;
@@ -581,6 +603,7 @@ void Compiler::checkDiscardedCall(const Expr& expr) {
 }
 
 TypeRef Compiler::inferExprType(const Expr& expr) const {
+  DepthGuard guard(*this);
   if (const auto* literal = std::get_if<LiteralExpr>(&expr.node)) {
     TypeRef type;
     type.name = literal->value.typeName();  // "nil" for a nil literal
@@ -1014,6 +1037,7 @@ void Compiler::compileScopedBlock(const Stmt& stmt) {
 }
 
 void Compiler::compileStmt(const Stmt& stmt) {
+  DepthGuard guard(*this);
   currentLine_ = stmt.line;
   currentCol_ = stmt.col;
   std::visit(
@@ -2669,6 +2693,7 @@ int Compiler::compileInterpolation(const InterpExpr& interpolation, int /*line*/
 }
 
 int Compiler::compileExpr(const Expr& expr) {
+  DepthGuard guard(*this);
   currentLine_ = expr.line;
   currentCol_ = expr.col;
   return std::visit(

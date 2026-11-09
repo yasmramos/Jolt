@@ -208,6 +208,24 @@ bool isAssignable(const ExprPtr& expr) {
 Parser::Parser(std::vector<Token> tokens, std::string where)
     : tokens_(std::move(tokens)), where_(std::move(where)) {}
 
+namespace {
+// Maximum nesting depth of the recursive-descent parser. It bounds the C++
+// stack a single parse can consume: the default thread stack (8 MiB on Linux,
+// 1 MiB on Windows) is comfortably larger than the ~1 KiB per level the parser
+// uses, so this limit keeps a hostile input from crashing the process with a
+// stack overflow while staying far above any nesting a real program reaches.
+constexpr int kMaxParseDepth = 512;
+}  // namespace
+
+Parser::DepthGuard::DepthGuard(const Parser& parser) : parser_(parser) {
+  if (++parser_.depth_ > kMaxParseDepth) {
+    --parser_.depth_;
+    parser_.error(parser_.peek(), "expression nesting is too deep");
+  }
+}
+
+Parser::DepthGuard::~DepthGuard() { --parser_.depth_; }
+
 const Token& Parser::peek(size_t ahead) const {
   size_t index = pos_ + ahead;
   if (index >= tokens_.size()) return tokens_.back();
@@ -267,6 +285,7 @@ ExprPtr Parser::parseFullExpression() {
 // ---------------------------------------------------------------- statements
 
 StmtPtr Parser::parseStatement() {
+  DepthGuard guard(*this);
   const Token& token = peek();
 
   if (match(Tok::Var) || match(Tok::Let) || match(Tok::Const)) return parseVarDecl();
@@ -348,6 +367,7 @@ StmtPtr Parser::parseVarDecl() {
 // `void` is a return-only annotation (it maps to C's `void` in the FFI, PHASE
 // 6.6), so `allowVoid` is true only in the `fn`/`native fn` return position.
 TypeRef Parser::parseTypeAnnotation(bool allowVoid) {
+  DepthGuard guard(*this);
   if (!match(Tok::Colon)) return TypeRef{};
   // A callback signature (PHASE 6.6): `fn(int, int): int`. `fn` is a keyword,
   // so it cannot be read as an ordinary type name; the parameter and return
@@ -425,6 +445,7 @@ TypeRef Parser::parseTypeAlternative(bool allowVoid) {
 // Anything else (calls, arrays/maps, non-const variables) is rejected with
 // a human-readable reason.
 bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) const {
+  DepthGuard guard(*this);
   // Variant alternatives are addressed by type (never by raw index): the
   // order of ExprNode alternatives changes as nodes are added to the AST.
   if (const auto* lit = std::get_if<LiteralExpr>(&expr.node)) {
@@ -1037,6 +1058,7 @@ StmtPtr Parser::parseBody() {
 }
 
 StmtPtr Parser::parseBlock() {
+  DepthGuard guard(*this);
   const Token& open = consume(Tok::LBrace, "expected '{'");
   ++nestingDepth_;
   std::vector<StmtPtr> statements;
@@ -1200,6 +1222,7 @@ StmtPtr Parser::parseExpressionStatement() {
 ExprPtr Parser::parseExpression() { return parseAssignment(); }
 
 ExprPtr Parser::parseAssignment() {
+  DepthGuard guard(*this);
   auto target = parseTernary();
   if (isAssignOp(peek().type)) {
     const Token& op = advance();
@@ -1392,6 +1415,7 @@ ExprPtr Parser::parsePower() {
 }
 
 ExprPtr Parser::parseUnary() {
+  DepthGuard guard(*this);
   // `try expr` (PHASE 6.7.3): prefix propagation. It binds like the other
   // prefix operators (`-`, `!`, `~`), so it applies to the whole postfix
   // operand: `try f().x` propagates the result of the member access.
@@ -1602,6 +1626,10 @@ ExprPtr Parser::buildString(const Token& token) {
       try {
         auto tokens = lex(part.text, part.line, part.col);
         Parser sub(std::move(tokens), where_);
+        // Carry the current depth over: a nested interpolation (`"${"${...}"}"`)
+        // recurses through a fresh sub-parser per level, so without this the
+        // guard would reset to zero at every level and never fire.
+        sub.depth_ = depth_;
         piece.content = sub.parseFullExpression();
       } catch (const CompileError& err) {
         throw CompileError{"in string interpolation: " + err.message, err.line, err.col};

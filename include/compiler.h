@@ -315,6 +315,29 @@ class Compiler {
   int currentLine_ = 1;
   int currentCol_ = 1;
 
+  // Current recursion depth of the AST walk. `compileExpr`, `compileStmt` and
+  // `inferExprType` recurse once per nested node, so a deeply nested program
+  // (for example a very long chain of left-associative operators, which the
+  // parser accepts iteratively) would otherwise overflow the stack and crash
+  // instead of reporting an error. Every recursive entry point holds a
+  // `DepthGuard`, which raises a `CompileError` past `kMaxCompileDepth`.
+  // `mutable` so the guard also works from the const type-inference walk.
+  mutable int depth_ = 0;
+
+  // RAII guard for the recursive AST walk. Constructing it enters one level and
+  // throws `CompileError` past `kMaxCompileDepth`; destroying it leaves the
+  // level.
+  class DepthGuard {
+   public:
+    explicit DepthGuard(const Compiler& compiler);
+    ~DepthGuard();
+    DepthGuard(const DepthGuard&) = delete;
+    DepthGuard& operator=(const DepthGuard&) = delete;
+
+   private:
+    const Compiler& compiler_;
+  };
+
   int allocReg();
   void freeReg(int count = 1);
 
