@@ -2174,6 +2174,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
+- Source nesting is bounded: deeply nested expressions and statements (nested parentheses, arrays, blocks, string interpolation, or a very long operator chain) are rejected at compile time with `expression nesting is too deep` instead of overflowing the stack. The limit is far above any nesting a real program reaches.
 - Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.
 - Sorting with custom comparators relies on the comparator defining a strict order.
 
