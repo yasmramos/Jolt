@@ -43,12 +43,14 @@ static void check(bool condition, const char* what) {
 }
 
 static Bytecode makeProto(const std::vector<Instruction>& code,
-                          const std::vector<Value>& constants, int numRegisters) {
+                          const std::vector<Value>& constants, int numRegisters,
+                          int numLocals = 0) {
   Bytecode proto;
   proto.name = "<test>";
   proto.code = code;
   proto.constants = constants;
   proto.numRegisters = numRegisters;
+  proto.numLocals = numLocals;
   return proto;
 }
 
@@ -583,6 +585,55 @@ static void testExecGlobals() {
            "hi", "exec: a global holds a string");
 }
 
+// Locals (PHASE 7c.2b). A local is a 16-byte slot in the second region of the
+// chunk frame. A program declares a local and reads it back; `SETLOCAL`
+// overwrites it; two locals keep separate slots; and a local coexists with a
+// global. Unlike a global, a `GETLOCAL` of a slot the chunk never declares is
+// not rejected: a stack slot cannot hold a null cell, so a well-formed chunk
+// (the compiler always emits `DECLLOCAL` first) is assumed.
+static void testExecLocals() {
+  // { var x = 5; } then read it back: R0 <- 5, DECLLOCAL 0, GETLOCAL 0, HALT.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::GETLOCAL, 1, 0), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5))}, 2, 1),
+           5, "exec: a local declared 5 reads back 5");
+
+  // Overwrite through SETLOCAL: x = 5; x = 7; return x -> 7.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETLOCAL, 1, 0),
+                      instr(OpCode::GETLOCAL, 2, 0), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))}, 3, 1),
+           7, "exec: overwriting a local keeps the last value");
+
+  // Two distinct locals do not share a slot: a = 3; b = 4; return a -> 3.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::DECLLOCAL, 1, 1),
+                      instr(OpCode::GETLOCAL, 2, 0), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(3)), Value(static_cast<int64_t>(4))}, 3, 2),
+           3, "exec: distinct locals keep separate slots");
+
+  // A local and a global coexist: g = 10; { var x = 4; g = g + x; } return g.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::LOADK, 1, 2), instr(OpCode::DECLLOCAL, 1, 0),
+                      instr(OpCode::GETGLOBAL, 0, 1), instr(OpCode::GETLOCAL, 1, 0),
+                      instr(OpCode::ADD, 0, 0, 1), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(10)), Value(std::string("g")),
+                      Value(static_cast<int64_t>(4))}, 2, 1),
+           14, "exec: a local and a global do not collide");
+
+  // A local holding a string survives the slot round trip.
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::GETLOCAL, 1, 0), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(std::string("hi"))}, 2, 1),
+           "hi", "exec: a local holds a string");
+}
+
 // The real compiler drives the lowering: compile source, then lower it and run
 // the chunk. This locks the compiler/lowerer contract for globals -- in
 // particular that a `let` and its later reads share one string constant, so the
@@ -599,6 +650,32 @@ static void testExecCompiledGlobals() {
   check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
             static_cast<std::int64_t>(value.payload) == 7,
         "compiled: let x = 5; let y = x + 2; yields 7 in R0");
+}
+
+// Same, for locals: the compiler emits DECLLOCAL/GETLOCAL/SETLOCAL for a nested
+// block, and the chunk runs it. A nested block is a local scope even at the top
+// level, so this exercises the local region without a call frame.
+static void testExecCompiledLocals() {
+  auto runSource = [](const std::string& source) {
+    auto tokens = lex(source);
+    Parser parser(std::move(tokens), "<lower-test>");
+    Bytecode proto = compileProgram(parser.parseProgram());
+    return run(proto);
+  };
+
+  AotValue value = runSource("{ var x = 5; x = x + 2; }");
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 7,
+        "compiled: a nested block with a local yields 7 in R0");
+
+  // A classic `for` keeps its induction variable in a local slot and loops.
+  // The trailing `var r = s;` reads the sum back into R0, since the loop's last
+  // value (its exit condition) is what would otherwise sit there.
+  AotValue sum =
+      runSource("var s = 0; for (var i = 0; i < 4; i = i + 1) { s = s + i; } var r = s;");
+  check(sum.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(sum.payload) == 6,
+        "compiled: a classic for over a local induction variable sums 0..3");
 }
 
 #endif  // LOWER_EXEC_TESTS
@@ -631,7 +708,9 @@ int main() {
   testExecStringConcat();
   testExecStringCompare();
   testExecGlobals();
+  testExecLocals();
   testExecCompiledGlobals();
+  testExecCompiledLocals();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

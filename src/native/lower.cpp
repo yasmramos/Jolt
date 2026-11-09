@@ -34,6 +34,14 @@ constexpr X64Reg kTmpPayload = X64Reg::Rdx;
 // *below* R0, hence the negative offset.
 constexpr std::int64_t slotOffset(int index) { return -16LL * (index + 1); }
 
+// Local cells (PHASE 7c.2b) live in a second region of the same frame, right
+// below the register file. Slot `b` sits at `[rbp - 16 * (numRegisters + b + 1)]`.
+// The `numRegisters` argument is the *allocated* file size (at least 1), which
+// is what the frame actually reserved, not the proto's declared count.
+constexpr std::int64_t localSlotOffset(int numRegisters, int index) {
+  return -16LL * (numRegisters + index + 1);
+}
+
 // Loads register `index` into `tag`:`payload`. Two moves, the tagged load the
 // lowering table budgets.
 void loadValue(CodeGen& cg, int index, X64Reg tag, X64Reg payload) {
@@ -100,8 +108,8 @@ void callBinaryWithSelector(CodeGen& cg, CodeGen::Label helper, int lhs, int rhs
 }
 
 // PHASE 7c.1 still lowers a subset. Floats and strings need the arena and
-// their own tags (7c.1b); calls, globals, locals and collections need frames
-// and the allocator (7c.2/7c.3). Every other opcode raises a `LoweringError`
+// their own tags (7c.1b); calls and collections need frames and the allocator
+// (7c.2c/7c.3). Every other opcode raises a `LoweringError`
 // instead of emitting wrong code.
 [[noreturn]] void unsupported(const char* opName, const char* phase) {
   throw LoweringError(std::string("lowering: opcode '") + opName +
@@ -192,6 +200,7 @@ void emitStringConstants(CodeGen& cg, const std::vector<StringConstant>& constan
 void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& cg,
                       const std::vector<CodeGen::Label>& labels,
                       const AotRuntimeHandles& rt, const GlobalSlots& globals,
+                      int fileRegisters,
                       std::vector<StringConstant>& stringConstants) {
   switch (instr.op) {
     case OpCode::LOADK: {
@@ -362,13 +371,30 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       cg.callLabel(rt.globalSet);
       break;
     }
+    // Locals (PHASE 7c.2b). `b` is the cell index in the current frame. Until
+    // frames and closures land (7c.2c) a local is a plain 16-byte slot in the
+    // second region of the chunk frame -- no `Cell`, no arena -- because a
+    // `CLOSURE` (the only way to capture one) is not lowered yet, so a captured
+    // local cannot reach the backend. `DECLLOCAL` boxes R[a] into the slot and
+    // `SETLOCAL` overwrites it; the hosted engine's "undefined local" check
+    // needs a null cell, which a stack slot cannot express, so a well-formed
+    // chunk (the compiler always emits `DECLLOCAL` first) is assumed.
     case OpCode::DECLLOCAL:
-    case OpCode::GETLOCAL:
-    case OpCode::SETLOCAL:
-      unsupported("DECLLOCAL/GETLOCAL/SETLOCAL", "PHASE 7c.2");
+    case OpCode::SETLOCAL: {
+      loadValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      cg.movToMem(kFileBase, localSlotOffset(fileRegisters, instr.b), X64Reg::Rax);
+      cg.movToMem(kFileBase, localSlotOffset(fileRegisters, instr.b) + 8, X64Reg::Rdx);
+      break;
+    }
+    case OpCode::GETLOCAL: {
+      cg.movFromMem(X64Reg::Rax, kFileBase, localSlotOffset(fileRegisters, instr.b));
+      cg.movFromMem(X64Reg::Rdx, kFileBase, localSlotOffset(fileRegisters, instr.b) + 8);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
     case OpCode::CALL:
     case OpCode::RETURN:
-      unsupported("CALL/RETURN", "PHASE 7c.2");
+      unsupported("CALL/RETURN", "PHASE 7c.2c");
     case OpCode::CLOSURE:
     case OpCode::GETUPVAL:
     case OpCode::SETUPVAL:
@@ -424,8 +450,13 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   cg.push(X64Reg::R14);
   cg.push(X64Reg::R15);
   cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
-  const std::int64_t fileBytes =
-      16LL * (proto.numRegisters > 0 ? proto.numRegisters : 1);
+  // The frame holds the register file (R0..RnumRegisters-1) and, from 7c.2b,
+  // the local cells, in one contiguous block below rbp. `fileRegisters` is the
+  // register count the frame actually reserved (at least 1), so the local
+  // region starts right below it. The size stays a multiple of 16.
+  const int fileRegisters = proto.numRegisters > 0 ? proto.numRegisters : 1;
+  const int fileLocals = proto.numLocals > 0 ? proto.numLocals : 0;
+  const std::int64_t fileBytes = 16LL * (fileRegisters + fileLocals);
   cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(fileBytes));
   // Map the arena before the program runs, so the allocator has its
   // cursor/end registers seeded from the first allocation (string
@@ -439,7 +470,8 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
 
   for (std::size_t i = 0; i < proto.code.size(); ++i) {
     cg.bind(labels[i]);
-    lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, stringConstants);
+    lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, fileRegisters,
+                     stringConstants);
   }
 
   // `main`: run the chunk and return 0, so the process exit code is a clean

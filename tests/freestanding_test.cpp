@@ -260,12 +260,14 @@ static Instruction instr(OpCode op, int a = 0, int b = 0, int c = 0, int jump = 
 }
 
 static Bytecode makeProto(const std::vector<Instruction>& code,
-                          const std::vector<Value>& constants, int numRegisters) {
+                          const std::vector<Value>& constants, int numRegisters,
+                          int numLocals = 0) {
   Bytecode proto;
   proto.name = "<freestanding-test>";
   proto.code = code;
   proto.constants = constants;
   proto.numRegisters = numRegisters;
+  proto.numLocals = numLocals;
   return proto;
 }
 
@@ -400,6 +402,22 @@ static void test_boxed_runtime_div_zero() {
         "the runtime error names the division by zero");
 }
 
+// Locals (PHASE 7c.2b) through the real process entry: a chunk with a local
+// region must build, allocate its larger frame and run cleanly under `_start`.
+// The value itself is covered by direct execution in `lower_test.cpp`; here the
+// subject is the frame-size math on the freestanding path, so a clean exit and
+// no output is the assertion.
+static void test_boxed_runtime_locals() {
+  Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                              instr(OpCode::LOADK, 1, 1), instr(OpCode::SETLOCAL, 1, 0),
+                              instr(OpCode::GETLOCAL, 0, 0), instr(OpCode::HALT)},
+                             {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))},
+                             2, 1);
+  RunResult result = buildAndRun("/tmp/jolt_boxed_locals", proto);
+  check(result.output.empty(), "a locals-only chunk prints nothing");
+  check(result.exitCode == 0, "a chunk with a local region exits 0 through _start");
+}
+
 // Strings over the arena, end to end: lay out two `AotString`s in the image,
 // concatenate them with the runtime's `jolt_concat` (which bumps the mmap'd
 // arena) and print the result. Exercises the arena mapping in `_start`, the
@@ -523,6 +541,7 @@ int main() {
   test_boxed_runtime_globals();
   test_boxed_runtime_error();
   test_boxed_runtime_div_zero();
+  test_boxed_runtime_locals();
   test_boxed_runtime_string();
   test_boxed_runtime_float_mod();
 #else
