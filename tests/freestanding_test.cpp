@@ -293,6 +293,13 @@ static void test_boxed_runtime_print() {
   printValue(AotTag::Bool, 1);
   printValue(AotTag::Bool, 0);
   printValue(AotTag::Nil, 0);
+  // Float/Double render through the embedded dtoa with the hosted engine's
+  // shortest round-trip text: a double uses binary64, a float binary32.
+  printValue(AotTag::Double, static_cast<std::int64_t>(aotDouble(0.1 + 0.2).payload));
+  printValue(AotTag::Double, static_cast<std::int64_t>(aotDouble(1.0 / 3.0).payload));
+  printValue(AotTag::Double, static_cast<std::int64_t>(aotDouble(-2.5).payload));
+  printValue(AotTag::Float, static_cast<std::int64_t>(aotFloat(1.0f / 3.0f).payload));
+  printValue(AotTag::Float, static_cast<std::int64_t>(aotFloat(0.1f).payload));
   cg.xorReg(X64Reg::Rax, X64Reg::Rax);
   cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
   cg.pop(X64Reg::Rbp);
@@ -307,8 +314,10 @@ static void test_boxed_runtime_print() {
   const std::string path = "/tmp/jolt_boxed_print";
   writeFile(path, elf);
   RunResult result = runProgram(path);
-  check(result.output == "42\n-7\ntrue\nfalse\nnil\n",
-        "the boxed runtime prints int, negative int, bool and nil");
+  check(result.output == "42\n-7\ntrue\nfalse\nnil\n"
+                         "0.30000000000000004\n0.3333333333333333\n-2.5\n"
+                         "0.33333334\n0.1\n",
+        "the boxed runtime prints int, bool, nil, double and float");
   check(result.exitCode == 0, "the printing program exits 0");
 }
 
@@ -338,6 +347,118 @@ static void test_boxed_runtime_div_zero() {
         "the runtime error names the division by zero");
 }
 
+// Strings over the arena, end to end: lay out two `AotString`s in the image,
+// concatenate them with the runtime's `jolt_concat` (which bumps the mmap'd
+// arena) and print the result. Exercises the arena mapping in `_start`, the
+// allocator, the byte copy and the string print path in one static binary.
+static void test_boxed_runtime_string() {
+  CodeGen cg(Target::linuxX64());
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label mainLabel = cg.newLabel();
+
+  // Data islands: each is an 8-byte length followed by the bytes.
+  const std::string a = "hello, ";
+  const std::string b = "world!";
+  CodeGen::Label aLabel = cg.newLabel();
+  CodeGen::Label bLabel = cg.newLabel();
+
+  cg.bind(mainLabel);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.callLabel(entry.initArena);  // map the arena the concatenation allocates from
+  // rdi:rsi = a, rdx:rcx = b
+  cg.movImm(X64Reg::Rdi, static_cast<std::int64_t>(AotTag::Str));
+  cg.leaRipLabel(X64Reg::Rsi, aLabel);
+  cg.movImm(X64Reg::Rdx, static_cast<std::int64_t>(AotTag::Str));
+  cg.leaRipLabel(X64Reg::Rcx, bLabel);
+  cg.callLabel(rt.concat);          // rax:rdx = "hello, world!"
+  cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+  cg.callLabel(rt.printValue);
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t start = emitFreestandingRuntime(cg, entry, mainLabel);
+  emitAotRuntime(cg, rt, entry);
+
+  // Bind the string data islands after all code, then finalize.
+  auto emitString = [&](CodeGen::Label label, const std::string& text) {
+    cg.bind(label);
+    const std::uint64_t length = text.size();
+    cg.emitBytes(reinterpret_cast<const std::uint8_t*>(&length), sizeof length);
+    cg.emitBytes(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
+  };
+  emitString(aLabel, a);
+  emitString(bLabel, b);
+  cg.finalize();
+
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
+  const std::string path = "/tmp/jolt_boxed_string";
+  writeFile(path, elf);
+  RunResult result = runProgram(path);
+  check(result.output == "hello, world!\n",
+        "the boxed runtime concatenates and prints strings from the arena");
+  check(result.exitCode == 0, "the string program exits 0");
+}
+
+// Float `%` end to end: the x87 `fprem` path runs inside a real static ELF.
+// The remainder is compared against the expected value and the boolean is
+// printed, since float-to-text (`print` of a double) arrives with the dtoa
+// slice. A correct remainder prints "true".
+static void test_boxed_runtime_float_mod() {
+  CodeGen cg(Target::linuxX64());
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label mainLabel = cg.newLabel();
+
+  // Emits `print((a % b) == expected)` for three double pairs.
+  auto checkMod = [&](double a, double b, double expected) {
+    cg.movImm(X64Reg::Rdi, static_cast<std::int64_t>(AotTag::Double));
+    cg.movImm(X64Reg::Rsi, static_cast<std::int64_t>(aotDouble(a).payload));
+    cg.movImm(X64Reg::Rdx, static_cast<std::int64_t>(AotTag::Double));
+    cg.movImm(X64Reg::Rcx, static_cast<std::int64_t>(aotDouble(b).payload));
+    cg.movImm(X64Reg::R8, static_cast<std::int64_t>(AotArithOp::Mod));
+    cg.callLabel(rt.arithValues);  // rax:rdx = a % b
+    cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+    cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+    cg.movImm(X64Reg::Rdx, static_cast<std::int64_t>(AotTag::Double));
+    cg.movImm(X64Reg::Rcx, static_cast<std::int64_t>(aotDouble(expected).payload));
+    cg.movImm(X64Reg::R8, static_cast<std::int64_t>(AotCompareOp::Eq));
+    cg.callLabel(rt.compareValues);  // rax:rdx = bool
+    cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+    cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+    cg.callLabel(rt.printValue);
+  };
+
+  cg.bind(mainLabel);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  checkMod(7.0, 2.5, 2.0);
+  checkMod(-7.0, 3.0, -1.0);
+  checkMod(7.0, -3.0, 1.0);
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t start = emitFreestandingRuntime(cg, entry, mainLabel);
+  emitAotRuntime(cg, rt, entry);
+  cg.finalize();
+
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
+  const std::string path = "/tmp/jolt_boxed_float_mod";
+  writeFile(path, elf);
+  RunResult result = runProgram(path);
+  check(result.output == "true\ntrue\ntrue\n",
+        "the boxed runtime computes float remainders with fprem");
+  check(result.exitCode == 0, "the float mod program exits 0");
+}
+
 #endif  // FREESTANDING_EXEC_TESTS
 
 int main() {
@@ -348,6 +469,8 @@ int main() {
   test_boxed_runtime_print();
   test_boxed_runtime_error();
   test_boxed_runtime_div_zero();
+  test_boxed_runtime_string();
+  test_boxed_runtime_float_mod();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

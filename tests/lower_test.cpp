@@ -95,11 +95,6 @@ static void testDeferredOpcodesThrow() {
   check(loweringThrows(makeProto({instr(OpCode::NEWTABLE, 0, 0), instr(OpCode::HALT)}, {}, 2),
                        "NEWTABLE"),
         "NEWTABLE raises a LoweringError");
-  check(loweringThrows(
-            makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
-                      {Value(std::string("hi"))}, 1),
-            "LOADK"),
-        "LOADK of a string raises a LoweringError");
 }
 
 static void testBadJumpTargetThrows() {
@@ -398,6 +393,27 @@ static void testExecFloatArithmetic() {
               "exec: 1.5f + 1.5 == 3.0 (double)");
 }
 
+static void testExecFloatMod() {
+  auto mk = [](OpCode op, Value x, Value y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 0, 0, 1), instr(OpCode::HALT)},
+                     {x, y}, 2);
+  };
+  // `7 % 2.5` is 2.0: the truncated remainder, matching `std::fmod`.
+  checkDouble(mk(OpCode::MOD, Value(7.0), Value(2.5)), 2.0, "exec: 7.0 % 2.5 == 2.0 (double)");
+  // The sign follows the dividend.
+  checkDouble(mk(OpCode::MOD, Value(-7.0), Value(3.0)), -1.0, "exec: -7.0 % 3.0 == -1.0 (double)");
+  checkDouble(mk(OpCode::MOD, Value(7.0), Value(-3.0)), 1.0, "exec: 7.0 % -3.0 == 1.0 (double)");
+  // A divisor larger than the dividend leaves the dividend unchanged.
+  checkDouble(mk(OpCode::MOD, Value(1.0), Value(3.0)), 1.0, "exec: 1.0 % 3.0 == 1.0 (double)");
+  // float % float stays binary32.
+  checkFloat(mk(OpCode::MOD, Value::fromFloat(5.5f), Value::fromFloat(2.0f)),
+             static_cast<double>(1.5f), "exec: 5.5f % 2.0f == 1.5f (float)");
+  // An int operand widens: 7 % 2.5 is a double.
+  checkDouble(mk(OpCode::MOD, Value(static_cast<int64_t>(7)), Value(2.5)), 2.0,
+              "exec: 7 % 2.5 == 2.0 (int widens to double)");
+}
+
 static void testExecIntDivModPow() {
   auto mk = [](OpCode op, std::int64_t x, std::int64_t y) {
     return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
@@ -449,6 +465,72 @@ static void testExecFloatNegate() {
   checkDouble(neg, -1.5, "exec: -(1.5) == -1.5 (double)");
 }
 
+// Reads back the bytes of the `AotString` a Str result points at. The chunk's
+// image is mapped in this process, so the pointer is directly dereferenceable.
+static std::string strBytes(const AotValue& value) {
+  if (value.tag != static_cast<std::uint64_t>(AotTag::Str)) return "<not a string>";
+  const auto* header = reinterpret_cast<const std::uint64_t*>(
+      static_cast<std::uintptr_t>(value.payload));
+  const std::uint64_t length = *header;
+  const char* bytes = reinterpret_cast<const char*>(header + 1);
+  return std::string(bytes, static_cast<std::size_t>(length));
+}
+
+static void checkStr(const Bytecode& proto, const std::string& expected, const char* what) {
+  AotValue value = run(proto);
+  std::string actual = strBytes(value);
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Str) && actual == expected;
+  check(ok, what);
+  if (!ok) {
+    std::printf("      got tag=%llu bytes=\"%s\", expected \"%s\"\n",
+                static_cast<unsigned long long>(value.tag), actual.c_str(),
+                expected.c_str());
+  }
+}
+
+static void testExecStringLoad() {
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                     {Value(std::string("hello"))}, 1),
+           "hello", "exec: LOADK string \"hello\"");
+  // An embedded NUL survives: the length is explicit, not NUL-terminated.
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                     {Value(std::string("a\0b", 3))}, 1),
+           std::string("a\0b", 3), "exec: LOADK string with an embedded NUL");
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::HALT)},
+                     {Value(std::string(""))}, 1),
+           "", "exec: LOADK empty string");
+}
+
+static void testExecStringConcat() {
+  auto mk = [](const std::string& x, const std::string& y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(OpCode::ADD, 0, 0, 1), instr(OpCode::HALT)},
+                     {Value(x), Value(y)}, 2);
+  };
+  checkStr(mk("foo", "bar"), "foobar", "exec: \"foo\" + \"bar\" == \"foobar\"");
+  checkStr(mk("", "x"), "x", "exec: \"\" + \"x\" == \"x\"");
+  checkStr(mk("x", ""), "x", "exec: \"x\" + \"\" == \"x\"");
+}
+
+static void testExecStringCompare() {
+  auto mk = [](OpCode op, const std::string& x, const std::string& y) {
+    return makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                      instr(op, 2, 0, 1), instr(OpCode::MOVE, 0, 2), instr(OpCode::HALT)},
+                     {Value(x), Value(y)}, 3);
+  };
+  checkBool(mk(OpCode::EQ, "abc", "abc"), true, "exec: \"abc\" == \"abc\" is true");
+  checkBool(mk(OpCode::EQ, "abc", "abd"), false, "exec: \"abc\" == \"abd\" is false");
+  checkBool(mk(OpCode::EQ, "abc", "ab"), false, "exec: \"abc\" == \"ab\" is false (lengths differ)");
+  checkBool(mk(OpCode::NEQ, "abc", "abd"), true, "exec: \"abc\" != \"abd\" is true");
+  checkBool(mk(OpCode::LT, "abc", "abd"), true, "exec: \"abc\" < \"abd\" is true");
+  checkBool(mk(OpCode::LT, "ab", "abc"), true, "exec: \"ab\" < \"abc\" is true (prefix)");
+  checkBool(mk(OpCode::GT, "abd", "abc"), true, "exec: \"abd\" > \"abc\" is true");
+  checkBool(mk(OpCode::LTE, "abc", "abc"), true, "exec: \"abc\" <= \"abc\" is true");
+  checkBool(mk(OpCode::GTE, "abc", "abc"), true, "exec: \"abc\" >= \"abc\" is true");
+  // Lexicographic over unsigned bytes: 'Z' (0x5A) < 'a' (0x61).
+  checkBool(mk(OpCode::LT, "Z", "a"), true, "exec: \"Z\" < \"a\" (unsigned byte order)");
+}
+
 #endif  // LOWER_EXEC_TESTS
 
 int main() {
@@ -469,10 +551,14 @@ int main() {
   testExecManyRegisters();
   testExecFloatLoads();
   testExecFloatArithmetic();
+  testExecFloatMod();
   testExecIntDivModPow();
   testExecShifts();
   testExecFloatComparisons();
   testExecFloatNegate();
+  testExecStringLoad();
+  testExecStringConcat();
+  testExecStringCompare();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

@@ -1,0 +1,35 @@
+// `Array` and `Map` own their children by `Value`, so the compiler-generated
+// destructor recursed one C++ frame per nesting level. A structure built at run
+// time (for example `a = [a]` in a loop) can be arbitrarily deep, so tearing it
+// down overflowed the stack and crashed the process with no error. The
+// destructors now drain an explicit work list, keeping the C++ stack depth
+// independent of the nesting.
+
+// A deep array chain is built and dropped without crashing. The depth is chosen
+// past the point where the old recursive destructor overflowed a 1 MiB stack
+// (the Windows default).
+var nested = [1];
+for (i in 0..200000) {
+  nested = [nested];
+}
+assertEq(len(nested), 1);
+
+// A deep map chain, built the same way.
+var deepMap = {v: 1};
+for (i in 0..200000) {
+  deepMap = {next: deepMap};
+}
+assertEq(len(deepMap), 1);
+
+// A tail shared with a live binding is not freed with the chain: after the
+// chain is gone, `shared` still sees its own contents.
+let shared = [1, 2, 3];
+var chain = shared;
+for (i in 0..100000) {
+  chain = [chain];
+}
+chain = nil;
+assertEq(len(shared), 3);
+assertEq(shared[0], 1);
+
+print("deep container teardown ok");

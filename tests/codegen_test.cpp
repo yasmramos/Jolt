@@ -236,6 +236,32 @@ static void test_alu() {
   g3.imulReg(X64Reg::Rax, X64Reg::Rcx);
   checkBytes("imul rax, rcx", g3, "480FAFC1");
 
+  // imul rax, rcx, 10 -> 48 69 C1 0A000000 (imm32 form, always 4-byte immediate)
+  CodeGen g3b;
+  g3b.imulImm32(X64Reg::Rax, X64Reg::Rcx, 10);
+  checkBytes("imul rax, rcx, 10", g3b, "4869C10A000000");
+
+  // and rax, 0x7FF -> 48 81 E0 FF070000
+  CodeGen g3c;
+  g3c.andImm32(X64Reg::Rax, 0x7FF);
+  checkBytes("and rax, 0x7FF", g3c, "4881E0FF070000");
+
+  // shl rax, 32 -> 48 C1 E0 20 ; shr rcx, 29 -> 48 C1 E9 1D
+  CodeGen g3d;
+  g3d.shlImm8(X64Reg::Rax, 32);
+  g3d.shrImm8(X64Reg::Rcx, 29);
+  checkBytes("shl rax,32; shr rcx,29", g3d, "48C1E02048C1E91D");
+
+  // bsr rax, rcx -> 48 0F BD C1
+  CodeGen g3e;
+  g3e.bsrReg(X64Reg::Rax, X64Reg::Rcx);
+  checkBytes("bsr rax, rcx", g3e, "480FBDC1");
+
+  // div rcx -> 48 F7 F1 (unsigned divide rdx:rax by rcx)
+  CodeGen g3f;
+  g3f.divRaw(X64Reg::Rcx);
+  checkBytes("div rcx", g3f, "48F7F1");
+
   // xor rax, rax -> 48 31 C0 (REX.W is redundant but keeps the helper uniform).
   CodeGen g4;
   g4.xorReg(X64Reg::Rax, X64Reg::Rax);
@@ -250,6 +276,33 @@ static void test_alu() {
   CodeGen g6;
   g6.cmpReg(X64Reg::Rax, X64Reg::Rcx);
   checkBytes("cmp rax, rcx", g6, "4839C8");
+}
+
+static void test_mov_reg32_and_mem32() {
+  // mov eax, ecx -> 89 C8 (no REX.W: writes the low 32 bits and zeroes the top)
+  CodeGen g;
+  g.movReg32(X64Reg::Rax, X64Reg::Rcx);
+  checkBytes("mov eax, ecx", g, "89C8");
+
+  // mov r10d, r11d -> 45 89 DA (REX.RB for the extended registers)
+  CodeGen g2;
+  g2.movReg32(X64Reg::R10, X64Reg::R11);
+  checkBytes("mov r10d, r11d", g2, "4589DA");
+
+  // mov [rax+8], ecx -> 89 48 08 (32-bit store, disp8 form)
+  CodeGen g3;
+  g3.movToMem32(X64Reg::Rax, 8, X64Reg::Rcx);
+  checkBytes("mov [rax+8], ecx", g3, "894808");
+
+  // mov ecx, [rax+8] -> 8B 48 08 (32-bit load, zero-extends into rcx)
+  CodeGen g4;
+  g4.movFromMem32(X64Reg::Rcx, X64Reg::Rax, 8);
+  checkBytes("mov ecx, [rax+8]", g4, "8B4808");
+
+  // mov [r10+0x100], r11d -> 45 89 9A 00010000 (REX.RB, disp32 form)
+  CodeGen g5;
+  g5.movToMem32(X64Reg::R10, 0x100, X64Reg::R11);
+  checkBytes("mov [r10+0x100], r11d", g5, "45899A00010000");
 }
 
 static void test_control_flow() {
@@ -880,15 +933,57 @@ static void test_exec_setcc() {
 }
 #endif
 
+// Byte-exact encodings for the x87 helpers float `%` uses. Verified against
+// `objdump -Mintel` on the equivalent assembly (the FPU is legacy: no REX
+// prefix, so the memory form is `DD`/`D9` + ModRM).
+static void test_x87() {
+  // fld qword [rbp-16] -> DD 45 F0 (DD /0, the 64-bit load).
+  CodeGen g;
+  g.fldM64(X64Reg::Rbp, -16);
+  checkBytes("fld qword [rbp-16]", g, "DD45F0");
+
+  // fld qword [rsp] -> DD 04 24 (SIB because rsp is the base).
+  CodeGen g2;
+  g2.fldM64(X64Reg::Rsp, 0);
+  checkBytes("fld qword [rsp]", g2, "DD0424");
+
+  // fstp qword [rsp+8] -> DD 5C 24 08 (DD /3).
+  CodeGen g3;
+  g3.fstpM64(X64Reg::Rsp, 8);
+  checkBytes("fstp qword [rsp+8]", g3, "DD5C2408");
+
+  // fstp st(0) -> DD D8.
+  CodeGen g4;
+  g4.fstpSt0();
+  checkBytes("fstp st(0)", g4, "DDD8");
+
+  // fprem -> D9 F8.
+  CodeGen g5;
+  g5.fprem();
+  checkBytes("fprem", g5, "D9F8");
+
+  // fnstsw ax -> DF E0.
+  CodeGen g6;
+  g6.fnstswAx();
+  checkBytes("fnstsw ax", g6, "DFE0");
+
+  // test ah, 4 -> F6 C4 04.
+  CodeGen g7;
+  g7.testAhImm8(0x04);
+  checkBytes("test ah, 4", g7, "F6C404");
+}
+
 int main() {
   test_target_descriptor();
   test_mov_imm();
   test_mov_reg_and_stack();
   test_memory_operands();
   test_alu();
+  test_mov_reg32_and_mem32();
   test_control_flow();
   test_backward_jmp_bytes();
   test_sse();
+  test_x87();
   test_setcc_movzx();
 #ifdef CODEGEN_EXEC_TESTS
   test_exec_arithmetic();

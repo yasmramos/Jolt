@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <charconv>
+#include <utility>
 
 const char* Value::typeName() const {
   switch (type()) {
@@ -43,6 +44,13 @@ bool Value::truthy() const {
 }
 
 bool Value::equals(const Value& other) const {
+  std::vector<std::pair<const RefCounted*, const RefCounted*>> visited;
+  return equalsImpl(other, visited);
+}
+
+bool Value::equalsImpl(
+    const Value& other,
+    std::vector<std::pair<const RefCounted*, const RefCounted*>>& visited) const {
   if (isNumber() && other.isNumber()) {
     if (isInt() && other.isInt()) return asInt() == other.asInt();
     return number() == other.number();
@@ -65,21 +73,36 @@ bool Value::equals(const Value& other) const {
       // `assertEq` and `==` useful for error results.
       return err().message == other.err().message && err().code == other.err().code;
     case VType::Array: {
+      // Two containers already being compared are assumed equal, so a cyclic
+      // structure compares equal to an isomorphic one instead of recursing
+      // forever.
+      const RefCounted* self = data.array.get();
+      const RefCounted* that = other.data.array.get();
+      for (const auto& pair : visited) {
+        if (pair.first == self && pair.second == that) return true;
+      }
+      visited.emplace_back(self, that);
       const auto& a = arr().items;
       const auto& b = other.arr().items;
       if (a.size() != b.size()) return false;
       for (size_t i = 0; i < a.size(); ++i) {
-        if (!a[i].equals(b[i])) return false;
+        if (!a[i].equalsImpl(b[i], visited)) return false;
       }
       return true;
     }
     case VType::Map: {
+      const RefCounted* self = data.map.get();
+      const RefCounted* that = other.data.map.get();
+      for (const auto& pair : visited) {
+        if (pair.first == self && pair.second == that) return true;
+      }
+      visited.emplace_back(self, that);
       const auto& a = map();
       const auto& b = other.map();
       if (a.size() != b.size()) return false;
       for (const auto& entry : a.entries) {
         const Value* v = b.get(entry.first);
-        if (!v || !entry.second.equals(*v)) return false;
+        if (!v || !entry.second.equalsImpl(*v, visited)) return false;
       }
       return true;
     }
@@ -102,7 +125,10 @@ static std::string formatFloat(double d) {
   if (std::isnan(d)) return "nan";
   if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
   char buffer[64];
-  auto result = std::to_chars(buffer, buffer + sizeof(buffer), d, std::chars_format::general, 15);
+  // Shortest text that round-trips through binary64 (Java-style): `1.0/3.0`
+  // prints "0.3333333333333333", not a truncated "0.333333333333333" that would
+  // read back as a different value.
+  auto result = std::to_chars(buffer, buffer + sizeof(buffer), d);
   if (result.ec != std::errc()) return "nan";
   return std::string(buffer, result.ptr);
 }
@@ -274,8 +300,20 @@ void Map::rebuildIndex() {
 }
 
 int64_t Range::length() const {
-  int64_t distance = end >= start ? end - start : start - end;
-  return inclusive ? distance + 1 : distance;
+  // The bounds are int64 and their difference can overflow for a span wider
+  // than INT64_MAX (for example INT64_MIN..INT64_MAX), which is undefined
+  // behaviour and used to return a negative count. Compute the magnitude in
+  // uint64 and saturate at INT64_MAX: a range longer than that reports as
+  // INT64_MAX, which still trips the "too large to convert to an array" guard.
+  uint64_t distance = end >= start
+                          ? static_cast<uint64_t>(end) - static_cast<uint64_t>(start)
+                          : static_cast<uint64_t>(start) - static_cast<uint64_t>(end);
+  if (inclusive) {
+    if (distance == UINT64_MAX) return INT64_MAX;
+    ++distance;
+  }
+  if (distance > static_cast<uint64_t>(INT64_MAX)) return INT64_MAX;
+  return static_cast<int64_t>(distance);
 }
 
 ArrayPtr makeArray(std::vector<Value> items) {
@@ -286,6 +324,76 @@ ArrayPtr makeArray(std::vector<Value> items) {
 }
 
 MapPtr makeMap() { return makeRef<Map>(); }
+
+namespace {
+
+// Frees a chain of nested containers iteratively. `Array` and `Map` own their
+// children by `Value`, so the compiler-generated destructor would recurse one
+// C++ frame per nesting level; a structure built at run time (`a = [a]` in a
+// loop) can be arbitrarily deep and overflow the stack. Draining an explicit
+// work list instead keeps the C++ stack depth independent of the nesting.
+//
+// A container still owned from elsewhere (its count is above the single
+// reference the work list holds) is left alone, exactly as reference counting
+// would: only a container this work list is the sole owner of is emptied.
+void teardownContainers(std::vector<ArrayPtr> arrays, std::vector<MapPtr> maps) {
+  while (!arrays.empty() || !maps.empty()) {
+    if (!arrays.empty()) {
+      ArrayPtr node = std::move(arrays.back());
+      arrays.pop_back();
+      if (node->refs != 1) continue;
+      std::vector<Value> items;
+      items.swap(node->items);
+      for (Value& item : items) {
+        if (item.isArray()) arrays.push_back(item.arrayPtr());
+        else if (item.isMap()) maps.push_back(item.mapPtr());
+      }
+    } else {
+      MapPtr node = std::move(maps.back());
+      maps.pop_back();
+      if (node->refs != 1) continue;
+      std::vector<std::pair<std::string, Value>> entries;
+      entries.swap(node->entries);
+      for (auto& entry : entries) {
+        if (entry.second.isArray()) arrays.push_back(entry.second.arrayPtr());
+        else if (entry.second.isMap()) maps.push_back(entry.second.mapPtr());
+      }
+    }
+  }
+}
+
+}  // namespace
+
+Array::~Array() {
+  std::vector<ArrayPtr> arrays;
+  std::vector<MapPtr> maps;
+  {
+    // Move the children out and drop this array's own references before
+    // draining, so a child only this array owned reaches the work list holding
+    // its last reference.
+    std::vector<Value> items;
+    items.swap(this->items);
+    for (Value& item : items) {
+      if (item.isArray()) arrays.push_back(item.arrayPtr());
+      else if (item.isMap()) maps.push_back(item.mapPtr());
+    }
+  }
+  teardownContainers(std::move(arrays), std::move(maps));
+}
+
+Map::~Map() {
+  std::vector<ArrayPtr> arrays;
+  std::vector<MapPtr> maps;
+  {
+    std::vector<std::pair<std::string, Value>> entries;
+    entries.swap(this->entries);
+    for (auto& entry : entries) {
+      if (entry.second.isArray()) arrays.push_back(entry.second.arrayPtr());
+      else if (entry.second.isMap()) maps.push_back(entry.second.mapPtr());
+    }
+  }
+  teardownContainers(std::move(arrays), std::move(maps));
+}
 
 Value makeError(std::string message, int64_t code) {
   return Value(makeRef<ErrorObj>(std::move(message), code));

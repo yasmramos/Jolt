@@ -1,0 +1,3 @@
+// expect-exit: 65
+// A `double` literal that overflows to infinity is out of range.
+print(1e400);

@@ -105,6 +105,11 @@ The convention is `camelCase` for variables, functions and methods, and the stan
 - A fractional literal with no suffix is a `double` (binary64); a trailing
   `f`/`F` makes it a `float` (binary32), like Java. The suffix also turns an
   integer-looking literal into a float: `1f` is a `float`.
+- A floating-point literal is a compile error only when it is outside the range
+  of its type: `1e400` (overflows to infinity) and `1e-400` (underflows to
+  zero) are rejected, as is `1e40f`, which is a valid `double` but overflows
+  binary32. A representable subnormal is a valid literal, so `4.9e-324` (the
+  smallest `double`) and `1e-45f` (the smallest `float`) are accepted.
 
 ### 2.4 Strings
 
@@ -203,6 +208,20 @@ if (0) {
 - Ranges compare start, end and inclusiveness.
 - Functions are compared by identity (the very same function).
 - Values of different types (except the numeric types) are not equal: `0 == false` is `false`.
+
+Structural equality terminates even when the values are cyclic. A container
+compared against itself is equal, and two self-referential containers are equal
+when their contents match once the cycle closes, so a value that contains
+itself can be compared safely:
+
+```jolt
+let a = [1];
+a.push(a);
+let b = [1];
+b.push(b);
+assertEq(a == b, true);
+assertEq(a == a, true);
+```
 
 ### 3.3 Mutability and references
 
@@ -1612,7 +1631,7 @@ Details:
 - `lines` does not add an empty trailing line if the string ends with `\n`.
 - `indexOf` searches bytes but returns the index in code points.
 - `substr` counts code points; a negative `length` produces an empty string.
-- `padStart` and `padEnd` pad by code points and trim the fill to the exact width.
+- `padStart` and `padEnd` pad by code points and trim the fill to the exact width. The result has the same 64 MB limit as `repeat`.
 - `repeat` has a 64 MB limit on the result.
 
 ```jolt
@@ -1734,7 +1753,7 @@ assertEq((3..=0).toArray(), [3, 2, 1, 0]);
 
 The `range(end)` function produces `0..end`, and `range(start, end)` produces `start..end` (always exclusive).
 
-Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `toArray()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements.
+Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `toArray()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements. A range wider than `INT64_MAX` elements reports a `.length` of `9223372036854775807` (the count saturates rather than overflowing).
 
 ```jolt
 assertEq(2 in 1..5, true);
@@ -1768,7 +1787,9 @@ assertEq(len(5..0), 5);
 | `double(value)` | Converts to `double` (binary64). |
 | `bool(value)` | Applies Jolt's truthiness. |
 
-`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error.
+`int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error. `int(float)` and `int(double)` truncate toward zero and are an error when the value is outside the `int` range (a non-finite value is an error too).
+
+A floating-point value prints with the shortest decimal text that round-trips through its type: parsing the printed form back yields exactly the same value. A `double` uses binary64 precision (`str(1.0 / 3.0)` is `"0.3333333333333333"`) and a `float` uses binary32 (`str(0.1f)` is `"0.1"`). Values that fit in fewer digits keep the shortest form (`str(1.5)` is `"1.5"`).
 
 `str` of an array or map uses the representation of its elements, with inner strings in quotes:
 
@@ -2140,7 +2161,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Dynamic typing. The `jolt` executable compiles source to bytecode and runs it on the register-based VM; the AST is never executed. The compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 - No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
-- No `try`/`catch` or catchable exceptions. Error handling uses `nil` (not found), `pcall(fn, ...)` for recoverable runtime errors (see §13.1) and `panic()` for unrecoverable ones. There are no plans to add catchable exceptions; `pcall` and errors as values are the model.
+- No `try`/`catch` *statement* and no catchable exceptions. Error handling is value-based: `nil` (not found), `pcall(fn, ...)` to turn a raised runtime error into a `{ok, value, error}` map (see §13.1), and the error-value operators `try expr` (propagate, Rust's `?`) and `expr catch default` (recover locally, Zig's `catch`, see §13.3). `panic()` is for unrecoverable errors. A raised runtime error is not a value and is not caught by `catch`; use `pcall` for that.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
 - No `++`, `--` or default parameters. A trailing `rest...` parameter makes a function variadic (see §7.1). `switch` on literals and ranges is supported (see §6.10), and so is the post-test loop `do { ... } while (cond);` (see §6.4).
 - Optional types and nullability are implemented for declarations and expressions (PHASE 6.5). Type annotations (`let x: int = 5`), local inference, the nullable `T?` annotation, and the null-safe expressions `?.`, `??` and `!!` are checked at compile time. `struct` is implemented (see §4.7) and so is `native fn` (see §7.6), the typed declaration of a host-provided function.
@@ -2153,7 +2174,8 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - Slicing syntax `s[start:end:step]` works for strings and arrays, with an optional step (`s[::-1]` reverses); the methods `substr`/`slice` remain available.
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
-- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed.
+- Source nesting is bounded: deeply nested expressions and statements (nested parentheses, arrays, blocks, string interpolation, or a very long operator chain) are rejected at compile time with `expression nesting is too deep` instead of overflowing the stack. The limit is far above any nesting a real program reaches.
+- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed. Tearing down a deeply nested container (for example `a = [a]` in a loop) is iterative, so a deep structure is freed without overflowing the stack.
 - Sorting with custom comparators relies on the comparator defining a strict order.
 
 ---

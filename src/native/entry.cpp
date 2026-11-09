@@ -4,7 +4,12 @@ namespace {
 
 // Linux x86-64 syscall numbers used by the prelude.
 constexpr long kSysWrite = 1;
+constexpr long kSysMmap = 9;
 constexpr long kSysExitGroup = 231;
+
+// mmap flags: a private, anonymous, read/write mapping (no file).
+constexpr long kProtReadWrite = 3;
+constexpr long kMapPrivateAnonymous = 0x22;
 
 }  // namespace
 
@@ -43,9 +48,33 @@ std::uint64_t emitFreestandingRuntime(CodeGen& code, const RuntimeHandles& handl
   code.syscallInsn();
   code.ud2();  // unreachable: exit_group never returns
 
+  // --- void jolt_init_arena(void) ---
+  // mmap(NULL, kAotArenaSize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS,
+  //      -1, 0) and seed the allocator state. The kernel returns the region
+  // base in rax (or a negative error, which the allocator later turns into a
+  // null allocation). The cursor starts `kAotArenaFirstOffset` in, so no live
+  // pointer is ever zero. The chunk entry calls this before running the
+  // program, so a program lowered in isolation (a test that calls the chunk
+  // directly) still has an arena.
+  code.bind(handles.initArena);
+  code.xorReg(X64Reg::Rdi, X64Reg::Rdi);            // addr = NULL
+  code.movImm(X64Reg::Rsi, kAotArenaSize);          // length
+  code.movImm(X64Reg::Rdx, kProtReadWrite);         // prot
+  code.movImm(X64Reg::R10, kMapPrivateAnonymous);   // flags (syscall arg 4)
+  code.movImm(X64Reg::R8, -1);                      // fd = -1
+  code.xorReg(X64Reg::R9, X64Reg::R9);              // offset = 0
+  code.movImm(X64Reg::Rax, kSysMmap);
+  code.syscallInsn();
+  code.movReg(kAotArenaCursor, X64Reg::Rax);
+  code.addImm32(kAotArenaCursor, static_cast<std::int32_t>(kAotArenaFirstOffset));
+  code.movReg(kAotArenaEnd, X64Reg::Rax);
+  code.addImm32(kAotArenaEnd, static_cast<std::int32_t>(kAotArenaSize));
+  code.retInsn();
+
   // --- _start: the ELF entry point ---
   // The kernel leaves argc at [rsp] and argv[] starting at [rsp+8]. Pass them
-  // to the program entry as (argc, argv) in rdi/rsi, then exit with its result.
+  // to the program entry as (argc, argv) and exit with its result. The chunk
+  // entry maps the arena itself, so `_start` does not.
   std::uint64_t startOffset = code.offset();
   code.movFromMem(X64Reg::Rdi, X64Reg::Rsp, 0);   // argc
   code.movReg(X64Reg::Rsi, X64Reg::Rsp);

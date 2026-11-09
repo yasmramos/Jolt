@@ -362,6 +362,13 @@ struct Value {
   bool equals(const Value& other) const;
 
  private:
+  // Coinductive structural equality: `visited` holds the pairs of containers
+  // already being compared. Two containers whose comparison is already on the
+  // stack are assumed equal, which terminates on cyclic (self-referential)
+  // arrays and maps and yields the expected result on them.
+  bool equalsImpl(const Value& other,
+                  std::vector<std::pair<const RefCounted*, const RefCounted*>>& visited) const;
+
   static StringPtr makeString(std::string s) {
     return makeRef<StringObj>(std::move(s));
   }
@@ -509,6 +516,10 @@ struct Array : RefCounted, GcNode {
 
   Array() : GcNode(arrayGcOps) {}
   explicit Array(std::vector<Value> init) : GcNode(arrayGcOps), items(std::move(init)) {}
+  // Frees a chain of nested containers iteratively, so a structure built at run
+  // time (for example `a = [a]` in a loop) does not overflow the stack while
+  // being torn down. See `teardownContainers` in value.cpp.
+  ~Array();
 };
 
 // Insertion-ordered string-keyed map.
@@ -526,6 +537,9 @@ struct Map : RefCounted, GcNode {
   void clear();
   void rebuildIndex();
   size_t size() const { return entries.size(); }
+
+  // Iterative teardown, same rationale as `Array::~Array`.
+  ~Map();
 };
 
 struct Function : RefCounted, GcNode {

@@ -17,14 +17,18 @@ for language in languages {
 
 ## Features
 
-- Dynamic types: `nil`, `bool`, `int` (64-bit), `float` (binary32), `double` (binary64), `string`, `array`, `map`, `function` and `range`.
+- Dynamic types: `nil`, `bool`, `int` (64-bit), `float` (binary32), `double` (binary64), `string`, `error`, `array`, `map`, `function` and `range`.
 - Variables with `var` (mutable), `let` (immutable, runtime) and `const` (immutable, folded at compile time), block scope and real closures.
-- First-class functions, recursion and `=>` lambdas (`x => x * 2`).
+- First-class functions, recursion, `=>` lambdas (`x => x * 2`) and variadic `rest...` parameters.
+- Optional types and nullability: annotations (`let x: int = 5`), local inference, nullable `T?`, unions (`T | E`) and the null-safe expressions `?.`, `??` and `!!`.
+- `struct` declarations (data only, no methods) checked against their literal at compile time.
 - String interpolation with `"${expression}"` and UTF-8 support.
-- Ordered arrays and maps that preserve insertion order.
+- Ordered arrays and maps that preserve insertion order, with `for k, v in map` key/value iteration.
 - Ascending and descending ranges: `1..5`, `0..=10`, `5..0`.
 - Arithmetic, logical, bitwise, comparison, ternary and compound assignment operators.
-- Control flow: `if`/`else`, `while`, classic `for` and `for ... in`.
+- Control flow: `if`/`else`, `while`, classic `for`, `for ... in`, `switch`, `break`/`continue` and `defer`.
+- Error handling as values: `error(message, code?)`, `isError`, `pcall`, `try`/`catch` and `@MustUse`.
+- Modules with Java-style `import`, and C interop via `extern "C"` / `native fn`.
 - Built-in standard library: strings, arrays, maps, math, files, console and utilities.
 - Interactive REPL with session state, commands and expression evaluation.
 - Diagnostics with file, line, column, code snippet and stack trace.
@@ -257,11 +261,12 @@ The positive tests use `assert` and `assertEq`; a script exits with a non-zero c
 Current limitations:
 
 - Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. There is no JIT.
-- There are no classes, structs, interfaces or inheritance.
+- There are no classes, interfaces or inheritance; maps and closures replace them. A `struct` (data only, no methods) is a named map shape checked at compile time, not a class.
 - There is no `try`/`catch` *statement* or catchable exceptions. Errors are values: `error(message, code?)` builds a first-class error value and `isError(value)` detects it. `pcall(fn, ...)` turns a raised runtime error into a `{ok, value, error}` map instead of aborting. Two operators work on error values: `try expr` propagates one to the caller (Rust's `?`) and `expr catch default` recovers locally (Zig's `catch`). `panic()` is for unrecoverable errors.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require`; modules are loaded eagerly and a cyclic import is a compile error.
 - There is no `++`/`--` or default parameters. `switch` on literals and integer ranges is supported, with no fallthrough, and so is the post-test loop `do { ... } while (cond);`.
 - `defer { ... }` runs a block when its scope exits, in LIFO order, on fall-through, `return` and `break`/`continue` alike; it compiles to no new opcode.
+- Optional types and nullability are compile-time only and are erased before the bytecode; a union (`T | E`) has no C representation, so it is rejected in `extern "C"`/`native fn` signatures and struct fields.
 - Map keys are always strings. Map literals accept identifier, string, scalar (`int`, `true`, `false`, `nil`) and computed `[expr]` keys; non-string keys are canonicalized to their string form.
 - The body of `if`, `while`, `for` and `for-in` may be a block or a single statement without braces; a brace-less body is wrapped in a block, so its bytecode and scoping match the brace form. `switch` arms always require braces.
 - Slicing syntax works for strings and arrays (`s[1:3]`, `a[2:]`, `a[:-1]`), with negative bounds counted from the end and an optional step (`a[::2]`, `a[::-1]` reverses); `substr`/`slice` remain available.
@@ -271,8 +276,8 @@ Current limitations:
 
 Ideas for future versions:
 
-- Union types (`T | E`), `@MustUse` warnings and richer error handling sugar (PHASE 6.7, slices 4-5).
-- User-defined structs and methods.
+- A bytecode-to-native (AOT) backend that emits self-contained static binaries with no runtime to install (PHASE 7, in progress).
+- User-defined methods on structs.
 - Better Unicode support (upper/lower case and graphemes).
 - More tooling: formatter and debugger.
 

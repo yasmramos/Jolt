@@ -77,6 +77,30 @@ class Parser {
   // at depth 0 (a program's top level), so an import nested in a block or a
   // function body is rejected at parse time.
   int nestingDepth_ = 0;
+  // Current recursion depth of the expression/statement/type walk. The
+  // recursive-descent parser consumes one C++ frame per nested construct, so a
+  // deeply nested source (e.g. thousands of `(` or `[`) would otherwise
+  // overflow the stack and crash instead of reporting an error. Every
+  // recursive entry point raises a `CompileError` once this exceeds
+  // `kMaxParseDepth` (see DepthGuard). `mutable` so the guard also works from
+  // the `const` constant-folding walk.
+  mutable int depth_ = 0;
+
+  // RAII guard for the recursive walk. Constructing it enters one nesting level
+  // and throws `CompileError` past `kMaxParseDepth`; destroying it leaves the
+  // level. Every recursive entry point (expression, statement and type parsing)
+  // holds one for the duration of its call, so the depth tracks the real C++
+  // stack usage and no input can overflow it.
+  class DepthGuard {
+   public:
+    explicit DepthGuard(const Parser& parser);
+    ~DepthGuard();
+    DepthGuard(const DepthGuard&) = delete;
+    DepthGuard& operator=(const DepthGuard&) = delete;
+
+   private:
+    const Parser& parser_;
+  };
 
   bool foldConstant(const Expr& expr, Value& out, std::string& reason) const;
 

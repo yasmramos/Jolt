@@ -1,0 +1,29 @@
+// `int(double)` checked the upper bound against the literal
+// `9223372036854775807.0`, which rounds to 2^63. A double equal to 2^63 therefore
+// passed the check and the cast produced INT64_MIN (undefined behaviour)
+// instead of reporting the overflow. The bound is now 2^63 exclusive.
+
+// Values that fit convert exactly.
+assertEq(int(3.9), 3);
+assertEq(int(-3.9), -3);
+assertEq(int(9.2e18), 9200000000000000000);
+assertEq(int(-9.2e18), -9200000000000000000);
+assertEq(int(-9223372036854775808.0), -9223372036854775807 - 1);
+
+// 2^63 is the first double that does not fit: it must fail, not wrap around.
+let tooBig = pcall(() => int(9223372036854775808.0));
+assertEq(tooBig.ok, false);
+
+let tooBigString = pcall(() => int(double("9223372036854775808")));
+assertEq(tooBigString.ok, false);
+
+// The largest double below 2^63 also rounds up to 2^63, so it is out of range
+// too.
+assertEq(pcall(() => int(9223372036854775807.0)).ok, false);
+
+// A huge magnitude and the non-finite forms keep failing cleanly.
+assertEq(pcall(() => int(1e300)).ok, false);
+assertEq(pcall(() => int(double("inf"))).ok, false);
+assertEq(pcall(() => int(double("nan"))).ok, false);
+
+print("int conversion ok");

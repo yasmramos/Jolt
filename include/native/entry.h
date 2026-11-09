@@ -18,13 +18,35 @@
 // Labels the caller creates up front, so a program emitted *before* the
 // prelude can already reference them; `emitFreestandingRuntime` binds them.
 struct RuntimeHandles {
-  CodeGen::Label write;  // long jolt_write(long fd, const char* buf, long len)
-  CodeGen::Label exit;   // void jolt_exit(long code)   (never returns)
+  CodeGen::Label write;      // long jolt_write(long fd, const char* buf, long len)
+  CodeGen::Label exit;       // void jolt_exit(long code)   (never returns)
+  CodeGen::Label initArena;  // void jolt_init_arena(void)  (maps the bump region)
 };
 
 inline RuntimeHandles newRuntimeHandles(CodeGen& code) {
-  return RuntimeHandles{code.newLabel(), code.newLabel()};
+  return RuntimeHandles{code.newLabel(), code.newLabel(), code.newLabel()};
 }
+
+// The generated binary's bump arena (PHASE 7c.1c). `_start` maps a region and
+// keeps the allocator state in two registers the runtime owns:
+//
+//   kAotArenaCursor -- the next free address (grows upward)
+//   kAotArenaEnd    -- one past the last usable byte
+//
+// They are callee-saved registers no helper touches, so a value survives from
+// `_start` down through `main` and the chunk to the allocator without a global
+// memory word (the generated image has no writable data segment). A helper
+// that allocates updates the cursor in place: `r13`/`r14` are the allocator's
+// state, not a preserved register, and only `jolt_alloc` and its callers read
+// them. The runtime helpers use none of r12-r15, so the arena and the register
+// file on the stack never collide.
+constexpr X64Reg kAotArenaCursor = X64Reg::R13;
+constexpr X64Reg kAotArenaEnd = X64Reg::R14;
+
+// Region `_start` maps for the arena, and the offset of the first allocation
+// (so a live pointer is never null, which is the allocator's failure value).
+constexpr std::int64_t kAotArenaSize = 1 << 20;  // 1 MiB
+constexpr std::int64_t kAotArenaFirstOffset = 16;
 
 // Appends `jolt_write`, `jolt_exit` and `_start` to `code`, binding the
 // handles. `programEntry` must be bound at the program's entry; `_start` calls
