@@ -12,6 +12,12 @@ endif()
 
 if(MSVC)
   set(JOLT_WARNINGS /W4)
+  # Match the 8 MiB main-thread stack Linux and macOS give by default. The
+  # recursive-descent parser and the compiler's AST walk each hold a DepthGuard
+  # (see src/parser.cpp and src/compiler.cpp) sized for that budget; Windows'
+  # 1 MiB default would let a deeply nested source overflow the stack before
+  # the guard fires, turning a clean compile error into a crash.
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:8388608")
 else()
   set(JOLT_WARNINGS -Wall -Wextra)
 endif()

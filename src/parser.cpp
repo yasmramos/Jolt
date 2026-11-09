@@ -210,11 +210,14 @@ Parser::Parser(std::vector<Token> tokens, std::string where)
 
 namespace {
 // Maximum nesting depth of the recursive-descent parser. It bounds the C++
-// stack a single parse can consume: the default thread stack (8 MiB on Linux,
-// 1 MiB on Windows) is comfortably larger than the ~1 KiB per level the parser
-// uses, so this limit keeps a hostile input from crashing the process with a
-// stack overflow while staying far above any nesting a real program reaches.
-constexpr int kMaxParseDepth = 512;
+// stack a single parse can consume so that a hostile input cannot crash the
+// process with a stack overflow. The deepest construct (a nested string
+// interpolation, which spawns a sub-parser per level) costs roughly 2 KB of
+// stack per level with GCC; the smallest default thread stack we target is
+// Windows' 1 MiB, and MSVC's frames are larger than GCC's, so the limit is
+// kept well below what a 1 MiB stack could hold at the GCC rate. It stays far
+// above any nesting a real program reaches.
+constexpr int kMaxParseDepth = 128;
 }  // namespace
 
 Parser::DepthGuard::DepthGuard(const Parser& parser) : parser_(parser) {
