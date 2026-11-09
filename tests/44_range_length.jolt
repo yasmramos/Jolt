@@ -1,0 +1,31 @@
+// `Range::length` computed `end - start` in `int64`, which overflows for a span
+// wider than `INT64_MAX` (for example `-9223372036854775807..9223372036854775807`).
+// The signed overflow is undefined behaviour and used to return a negative
+// count, which also defeated the "too large to convert to an array" guard and
+// let `toArray()` try to allocate the whole range. The length now saturates at
+// `INT64_MAX` instead.
+
+// Ordinary ranges are unchanged.
+assertEq((0..5).length, 5);
+assertEq((0..=5).length, 6);
+assertEq((5..0).length, 5);
+assertEq((5..=0).length, 6);
+assertEq((0..0).length, 0);
+assertEq((0..=0).length, 1);
+assertEq((3..=3).length, 1);
+assertEq(len(0..5), 5);
+
+// A span wider than INT64_MAX saturates at INT64_MAX rather than overflowing to
+// a negative number.
+let huge = -9223372036854775807..9223372036854775807;
+assertEq(huge.length, 9223372036854775807);
+assertEq((-9223372036854775807..=9223372036854775807).length, 9223372036854775807);
+assertEq((9223372036854775807..-9223372036854775807).length, 9223372036854775807);
+assertEq(len(huge), 9223372036854775807);
+
+// The saturated length still trips the array conversion guard: `toArray` fails
+// cleanly instead of trying to allocate the range.
+let failed = pcall(() => huge.toArray());
+assertEq(failed.ok, false);
+
+print("range length ok");

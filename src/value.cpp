@@ -300,8 +300,20 @@ void Map::rebuildIndex() {
 }
 
 int64_t Range::length() const {
-  int64_t distance = end >= start ? end - start : start - end;
-  return inclusive ? distance + 1 : distance;
+  // The bounds are int64 and their difference can overflow for a span wider
+  // than INT64_MAX (for example INT64_MIN..INT64_MAX), which is undefined
+  // behaviour and used to return a negative count. Compute the magnitude in
+  // uint64 and saturate at INT64_MAX: a range longer than that reports as
+  // INT64_MAX, which still trips the "too large to convert to an array" guard.
+  uint64_t distance = end >= start
+                          ? static_cast<uint64_t>(end) - static_cast<uint64_t>(start)
+                          : static_cast<uint64_t>(start) - static_cast<uint64_t>(end);
+  if (inclusive) {
+    if (distance == UINT64_MAX) return INT64_MAX;
+    ++distance;
+  }
+  if (distance > static_cast<uint64_t>(INT64_MAX)) return INT64_MAX;
+  return static_cast<int64_t>(distance);
 }
 
 ArrayPtr makeArray(std::vector<Value> items) {
