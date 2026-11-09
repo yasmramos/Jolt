@@ -102,6 +102,56 @@ void testFloatFormattingRoundTrips() {
   assert(v.toString() == "0.1");
 }
 
+// Structural equality must terminate on cyclic arrays and maps. Before the fix
+// `Value::equals` recursed forever on a self-referential container and the
+// process died with a stack overflow.
+void testCyclicEqualityTerminates() {
+  // Two self-referential arrays with the same contents.
+  Value a = makeArray({Value(int64_t(1))});
+  a.arr().items.push_back(a);
+  Value b = makeArray({Value(int64_t(1))});
+  b.arr().items.push_back(b);
+  assert(a.equals(b));
+  assert(b.equals(a));
+  assert(a.equals(a));
+
+  // Same shape, different content.
+  Value c = makeArray({Value(int64_t(2))});
+  c.arr().items.push_back(c);
+  assert(!a.equals(c));
+
+  // Self-referential maps.
+  Value m1 = makeMap();
+  m1.map().set("v", Value(int64_t(1)));
+  m1.map().set("self", m1);
+  Value m2 = makeMap();
+  m2.map().set("v", Value(int64_t(1)));
+  m2.map().set("self", m2);
+  assert(m1.equals(m2));
+
+  Value m3 = makeMap();
+  m3.map().set("v", Value(int64_t(2)));
+  m3.map().set("self", m3);
+  assert(!m1.equals(m3));
+
+  // Mutual cycles.
+  Value p = makeMap();
+  Value q = makeMap();
+  p.map().set("next", q);
+  q.map().set("next", p);
+  Value r = makeMap();
+  Value s = makeMap();
+  r.map().set("next", s);
+  s.map().set("next", r);
+  assert(p.equals(r));
+
+  Value t = makeMap();
+  Value u = makeMap();
+  t.map().set("next", u);
+  u.map().set("next", Value(int64_t(5)));
+  assert(!p.equals(t));
+}
+
 int main() {
   testCStringKindAndBytes();
   testVoidPointerReportsPtr();
@@ -110,6 +160,7 @@ int main() {
   testPointersAreNotTracked();
   testDoubleFormattingRoundTrips();
   testFloatFormattingRoundTrips();
+  testCyclicEqualityTerminates();
   std::puts("value tests passed");
   return 0;
 }

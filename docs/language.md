@@ -209,6 +209,20 @@ if (0) {
 - Functions are compared by identity (the very same function).
 - Values of different types (except the numeric types) are not equal: `0 == false` is `false`.
 
+Structural equality terminates even when the values are cyclic. A container
+compared against itself is equal, and two self-referential containers are equal
+when their contents match once the cycle closes, so a value that contains
+itself can be compared safely:
+
+```jolt
+let a = [1];
+a.push(a);
+let b = [1];
+b.push(b);
+assertEq(a == b, true);
+assertEq(a == a, true);
+```
+
 ### 3.3 Mutability and references
 
 Assigning an array or a map to another variable **does not copy it**: both variables point to the same value.
