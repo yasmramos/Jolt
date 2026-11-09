@@ -18,13 +18,14 @@ namespace {
 }
 
 // Maximum nesting depth of the compiler's recursive AST walk. It bounds the C++
-// stack a single compilation can consume: the default thread stack (8 MiB on
-// Linux, 1 MiB on Windows) is far larger than the per-level cost, so this limit
-// turns a stack overflow into a clean `CompileError` while staying above any
-// nesting a real program reaches. It is larger than the parser's own limit
-// because a left-associative chain (`1 + 1 + ...`) is parsed iteratively and
-// reaches the compiler as a deep tree that the parser never counted.
-constexpr int kMaxCompileDepth = 512;
+// stack a single compilation can consume: the smallest default thread stack we
+// target is Windows' 1 MiB, and MSVC's frames are larger than GCC's, so the
+// limit is kept well below what a 1 MiB stack could hold at the GCC rate. It is
+// larger than the parser's own limit because a left-associative chain
+// (`1 + 1 + ...`) is parsed iteratively and reaches the compiler as a deep tree
+// that the parser never counted. It stays far above any nesting a real program
+// reaches.
+constexpr int kMaxCompileDepth = 256;
 
 }  // namespace
 
