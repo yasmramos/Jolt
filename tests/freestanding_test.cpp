@@ -81,6 +81,7 @@ static void test_arena() {
 #if defined(__linux__) && defined(__x86_64__)
 #define FREESTANDING_EXEC_TESTS 1
 #include <cstdlib>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -402,6 +403,66 @@ static void test_boxed_runtime_div_zero() {
         "the runtime error names the division by zero");
 }
 
+// Calls (PHASE 7c.2c.1) through the real process entry: a hand-built chunk with
+// a child proto, a CLOSURE, a CALL and a RETURN must build, run under `_start`
+// and return the callee's value in R0. The exact value is checked by printing
+// it, so this also exercises the runtime dispatch path end to end.
+static void test_boxed_runtime_call() {
+  // Root: R0 = closure(add); R1 = 20; R2 = 22; R0 = R0(R1, R2); print R0; HALT.
+  Bytecode root = makeProto({instr(OpCode::CLOSURE, 0, 0), instr(OpCode::LOADK, 1, 0),
+                             instr(OpCode::LOADK, 2, 1), instr(OpCode::CALL, 0, 2),
+                             instr(OpCode::HALT)},
+                            {Value(static_cast<int64_t>(20)), Value(static_cast<int64_t>(22))}, 3);
+  root.name = "<call-root>";
+  auto child = std::make_shared<Bytecode>();
+  child->name = "add";
+  child->numParams = 2;
+  child->numRegisters = 2;
+  child->numLocals = 2;
+  child->code = {instr(OpCode::DECLLOCAL, 0, 0), instr(OpCode::DECLLOCAL, 1, 1),
+                 instr(OpCode::GETLOCAL, 0, 0), instr(OpCode::GETLOCAL, 1, 1),
+                 instr(OpCode::ADD, 0, 0, 1), instr(OpCode::RETURN, 0)};
+  root.children.push_back(child);
+
+  // Run the chunk directly and read the AotValue it leaves in R0. Printing the
+  // result needs the `print` builtin, which lands with the library (7c.2c.2), so
+  // this test reads R0 through the program entry like `lower_test` does.
+  LoweredChunk chunk = lowerToX64(Target::linuxX64(), root, CodeGen{});
+  long pageSize = sysconf(_SC_PAGESIZE);
+  std::size_t span = static_cast<std::size_t>(pageSize);
+  while (span < chunk.code.size()) span += static_cast<std::size_t>(pageSize);
+  void* mem = mmap(nullptr, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem == MAP_FAILED) {
+    check(false, "mmap for the call test");
+    return;
+  }
+  std::memcpy(mem, chunk.code.data(), chunk.code.size());
+  mprotect(mem, span, PROT_READ | PROT_EXEC);
+  auto fn = reinterpret_cast<AotValue (*)()>(
+      static_cast<std::uint8_t*>(mem) + chunk.programEntry);
+  AotValue value = fn();
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 42,
+        "a lowered CALL returns the callee's result (20 + 22 == 42)");
+
+  // The same chunk through `_start` must exit 0 (R0 is discarded by `main`).
+  RunResult result = buildAndRun("/tmp/jolt_boxed_call", root);
+  check(result.exitCode == 0, "a chunk with a call exits 0 through _start");
+}
+
+// Calling a non-function value is a fatal runtime error: build a chunk that
+// calls an integer and check the error message and exit code 70.
+static void test_boxed_runtime_call_non_function() {
+  // R0 = 5; R1 = 7; R0 = R0(R1) -> R0 is not a function.
+  Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                              instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)},
+                             {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))}, 2);
+  RunResult result = buildAndRun("/tmp/jolt_boxed_call_nonfunc", proto);
+  check(result.exitCode == 70, "calling a non-function exits 70");
+  check(result.output.find("non-function") != std::string::npos,
+        "the runtime error names the non-function call");
+}
+
 // Locals (PHASE 7c.2b) through the real process entry: a chunk with a local
 // region must build, allocate its larger frame and run cleanly under `_start`.
 // The value itself is covered by direct execution in `lower_test.cpp`; here the
@@ -542,6 +603,8 @@ int main() {
   test_boxed_runtime_error();
   test_boxed_runtime_div_zero();
   test_boxed_runtime_locals();
+  test_boxed_runtime_call();
+  test_boxed_runtime_call_non_function();
   test_boxed_runtime_string();
   test_boxed_runtime_float_mod();
 #else

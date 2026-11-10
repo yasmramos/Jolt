@@ -61,6 +61,19 @@ struct AotRuntimeHandles {
   CodeGen::Label initGlobals;    // void jolt_init_globals(long count)
   CodeGen::Label globalSet;      // void jolt_global_set(long slot, AotValue v)
   CodeGen::Label globalGet;      // AotValue jolt_global_get(long slot)
+  // Closures and calls (PHASE 7c.2c.1). `closure` allocates an `AotClosure` in
+  // the arena for a proto's code address (rdi) and arity (rsi) and returns it as
+  // a `Func` value in rax:rdx. `call` dispatches a callee (rdi:rsi) with `argc`
+  // arguments (rdx) whose window starts at `args` (rcx): it checks the callee is
+  // a function, then calls its code with the lowering's own function convention
+  // (`AotValue entry(AotValue* args, long argc, AotClosure* self)`), returning
+  // the result in rax:rdx. A non-function callee is a fatal error.
+  CodeGen::Label closure;        // AotValue jolt_closure(void* code, long arity)
+  CodeGen::Label call;           // AotValue jolt_call(AotValue callee, long argc, AotValue* args)
+  // Fatal "wrong number of arguments" report. A function's prologue calls it
+  // when the argument count does not match its declared arity, the runtime
+  // counterpart of the hosted engine's arity check in `pushJoltFrame`.
+  CodeGen::Label arityError;     // void jolt_arity_error(void)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
@@ -68,7 +81,8 @@ inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
-      code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(),
   };
 }
 

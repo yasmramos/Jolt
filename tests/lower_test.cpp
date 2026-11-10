@@ -94,12 +94,28 @@ static void testImageIsSelfContained() {
 // --- Error tests: the deferred opcodes must be rejected, not miscompiled ---
 
 static void testDeferredOpcodesThrow() {
-  check(loweringThrows(makeProto({instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)}, {}, 2),
-                       "CALL/RETURN"),
-        "CALL raises a LoweringError");
+  // 7c.2c.1 lowers CALL/RETURN, so they are no longer deferred. Upvalues and
+  // collections still are.
+  check(loweringThrows(makeProto({instr(OpCode::GETUPVAL, 0, 0), instr(OpCode::HALT)}, {}, 1),
+                       "GETUPVAL/SETUPVAL"),
+        "GETUPVAL raises a LoweringError");
   check(loweringThrows(makeProto({instr(OpCode::NEWTABLE, 0, 0), instr(OpCode::HALT)}, {}, 2),
                        "NEWTABLE"),
         "NEWTABLE raises a LoweringError");
+}
+
+static void testCapturingClosureThrows() {
+  // A CLOSURE of a child proto that captures an upvalue needs capturable cells
+  // (7c.2c.2) and must be rejected, not miscompiled.
+  Bytecode root = makeProto({instr(OpCode::CLOSURE, 0, 0), instr(OpCode::HALT)}, {}, 1);
+  auto child = std::make_shared<Bytecode>();
+  child->name = "<child>";
+  child->numRegisters = 1;
+  child->code = {instr(OpCode::HALT)};
+  child->upvalues.push_back(UpvalDesc{true, 0});
+  root.children.push_back(child);
+  check(loweringThrows(root, "CLOSURE with captured upvalues"),
+        "a capturing CLOSURE raises a LoweringError");
 }
 
 static void testBadJumpTargetThrows() {
@@ -174,6 +190,28 @@ static void checkBool(const Bytecode& proto, bool expected, const char* what) {
   bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Bool) &&
             (value.payload != 0) == expected;
   check(ok, what);
+}
+
+// Compiles a source string with the real compiler, lowers it and runs the
+// chunk. The compiled tests below drive the whole front end this way, so they
+// lock the compiler/lowerer contract rather than a hand-built proto.
+static AotValue compileAndRun(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<lower-test>");
+  Bytecode proto = compileProgram(parser.parseProgram());
+  return run(proto);
+}
+
+static void checkIntValue(AotValue value, std::int64_t expected, const char* what) {
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == expected;
+  check(ok, what);
+  if (!ok) {
+    std::printf("      got tag=%llu payload=%lld, expected Int %lld\n",
+                static_cast<unsigned long long>(value.tag),
+                static_cast<long long>(static_cast<std::int64_t>(value.payload)),
+                static_cast<long long>(expected));
+  }
 }
 
 static void testExecLoads() {
@@ -553,24 +591,26 @@ static void testExecStringCompare() {
 // unassigned global is rejected at lowering time.
 static void testExecGlobals() {
   // let x = 5; (R0) then return x (R1): R0 <- 5, SETGLOBAL x, GETGLOBAL x, HALT.
-  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 0),
-                      instr(OpCode::GETGLOBAL, 1, 0), instr(OpCode::MOVE, 0, 1),
+  // The global's name is the string constant at index 1.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::MOVE, 0, 1),
                       instr(OpCode::HALT)},
                      {Value(static_cast<int64_t>(5)), Value(std::string("x"))}, 2),
            5, "exec: a global assigned 5 reads back 5");
 
-  // Reassignment: x = 5; x = 7; return x -> 7.
-  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 0),
-                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETGLOBAL, 1, 0),
-                      instr(OpCode::GETGLOBAL, 2, 0), instr(OpCode::MOVE, 0, 2),
+  // Reassignment: x = 5; x = 7; return x -> 7. Name at index 2.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 2),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETGLOBAL, 1, 2),
+                      instr(OpCode::GETGLOBAL, 2, 2), instr(OpCode::MOVE, 0, 2),
                       instr(OpCode::HALT)},
                      {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7)),
                       Value(std::string("x"))}, 3),
            7, "exec: reassigning a global keeps the last value");
 
   // Two distinct globals do not share a slot: a = 3; b = 4; return a -> 3.
+  // Names "a" and "b" are at indices 1 and 3.
   checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
-                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETGLOBAL, 1, 2),
+                      instr(OpCode::LOADK, 1, 2), instr(OpCode::SETGLOBAL, 1, 3),
                       instr(OpCode::GETGLOBAL, 2, 1), instr(OpCode::MOVE, 0, 2),
                       instr(OpCode::HALT)},
                      {Value(static_cast<int64_t>(3)), Value(std::string("a")),
@@ -639,14 +679,7 @@ static void testExecLocals() {
 // particular that a `let` and its later reads share one string constant, so the
 // lowerer's name-to-slot map finds them.
 static void testExecCompiledGlobals() {
-  auto runSource = [](const std::string& source) {
-    auto tokens = lex(source);
-    Parser parser(std::move(tokens), "<lower-test>");
-    Bytecode proto = compileProgram(parser.parseProgram());
-    return run(proto);
-  };
-
-  AotValue value = runSource("let x = 5; let y = x + 2;");
+  AotValue value = compileAndRun("let x = 5; let y = x + 2;");
   check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
             static_cast<std::int64_t>(value.payload) == 7,
         "compiled: let x = 5; let y = x + 2; yields 7 in R0");
@@ -656,14 +689,7 @@ static void testExecCompiledGlobals() {
 // block, and the chunk runs it. A nested block is a local scope even at the top
 // level, so this exercises the local region without a call frame.
 static void testExecCompiledLocals() {
-  auto runSource = [](const std::string& source) {
-    auto tokens = lex(source);
-    Parser parser(std::move(tokens), "<lower-test>");
-    Bytecode proto = compileProgram(parser.parseProgram());
-    return run(proto);
-  };
-
-  AotValue value = runSource("{ var x = 5; x = x + 2; }");
+  AotValue value = compileAndRun("{ var x = 5; x = x + 2; }");
   check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
             static_cast<std::int64_t>(value.payload) == 7,
         "compiled: a nested block with a local yields 7 in R0");
@@ -672,10 +698,43 @@ static void testExecCompiledLocals() {
   // The trailing `var r = s;` reads the sum back into R0, since the loop's last
   // value (its exit condition) is what would otherwise sit there.
   AotValue sum =
-      runSource("var s = 0; for (var i = 0; i < 4; i = i + 1) { s = s + i; } var r = s;");
+      compileAndRun("var s = 0; for (var i = 0; i < 4; i = i + 1) { s = s + i; } var r = s;");
   check(sum.tag == static_cast<std::uint64_t>(AotTag::Int) &&
             static_cast<std::int64_t>(sum.payload) == 6,
         "compiled: a classic for over a local induction variable sums 0..3");
+}
+
+// Compiled functions: the compiler emits CLOSURE (to bind the `fn` global),
+// CALL and RETURN; the lowerer emits each proto as its own machine function and
+// dispatches through `jolt_call`. `var r = ...;` reads the result back into R0.
+static void testExecCompiledCalls() {
+  checkIntValue(compileAndRun("fn add(a, b) { return a + b; } var r = add(2, 3);"), 5,
+                "compiled: add(2, 3) == 5 through a real call");
+
+  // Recursion: `fact` calls itself through the global name.
+  checkIntValue(compileAndRun("fn fact(n) { if (n <= 1) { return 1; }"
+                              " return n * fact(n - 1); } var r = fact(5);"),
+                120, "compiled: fact(5) == 120 (recursion)");
+
+  // Mutual recursion: two globals calling each other.
+  checkIntValue(compileAndRun("fn isEven(n) { if (n == 0) { return 1; }"
+                              " return isOdd(n - 1); }"
+                              " fn isOdd(n) { if (n == 0) { return 0; }"
+                              " return isEven(n - 1); } var r = isEven(10);"),
+                1, "compiled: isEven(10) == 1 (mutual recursion)");
+
+  // A function called twice with different arguments (each call gets a fresh
+  // frame, so no state leaks between them).
+  checkIntValue(compileAndRun("fn double(x) { return x + x; }"
+                              " var a = double(3); var r = double(7);"),
+                14, "compiled: double(7) == 14 after an earlier double(3)");
+}
+
+// A capture-free lambda: `() => 42` is a child proto with no upvalues, so
+// CLOSURE lowers it and CALL dispatches it.
+static void testExecCompiledClosure() {
+  checkIntValue(compileAndRun("var f = () => 42; var r = f();"), 42,
+                "compiled: a capture-free lambda returns 42");
 }
 
 #endif  // LOWER_EXEC_TESTS
@@ -683,6 +742,7 @@ static void testExecCompiledLocals() {
 int main() {
   testImageIsSelfContained();
   testDeferredOpcodesThrow();
+  testCapturingClosureThrows();
   testBadJumpTargetThrows();
   testUnassignedGlobalThrows();
   testInvalidUnopSelectorThrows();
@@ -711,6 +771,8 @@ int main() {
   testExecLocals();
   testExecCompiledGlobals();
   testExecCompiledLocals();
+  testExecCompiledCalls();
+  testExecCompiledClosure();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

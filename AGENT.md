@@ -758,6 +758,32 @@ Slices, each independently shippable:
       runs them directly and drives the real compiler into the lowerer (a nested
       block, a `for` loop), and `freestanding_test.cpp` runs a locals chunk
       through the real `_start`. Calls and closures stay for 7c.2c.
+    - **7c.2c.1** (done) — calls to bytecode functions. Every proto in the tree
+      is emitted as its own machine function with the lowering's own convention
+      `AotValue entry(AotValue* args, long argc, AotClosure* self)`, which the
+      `CALL` opcode dispatches through `jolt_call`. `CALL` passes the callee
+      (rdi:rsi), the argument count (rdx) and the address of its argument window
+      (rcx, a `lea` of `R[a+1]`); `jolt_call` checks the callee is a `Func` and
+      indirect-calls its code with (args, argc, self). The callee copies its
+      arguments into its own register file -- consecutive registers sit 16 bytes
+      *below* each other, so `args[i]` is at `args - 16*i` -- and checks `argc`
+      against its declared arity at run time (the compiler does not), reporting a
+      mismatch through `jolt_arity_error`. A non-function callee is
+      `jolt: cannot call a non-function value` (exit 70). `CLOSURE` allocates an
+      `AotClosure` (`code`, `arity`, `upvalueCount = 0`) with `jolt_closure`;
+      `RETURN` publishes `R[a]` and drops the frame. Globals are keyed by *name*,
+      not constant index, because each proto has its own constant pool: a
+      recursion (`fact` reading `fact`) resolves to one slot across protos. The
+      root frame saves rbx/r12-r15 and maps the arena; a function frame saves only
+      rbp, because the arena cursor/end (r13/r14) and the global base (r15) are
+      the program's state, not the call's -- an allocation inside a function must
+      advance the shared cursor. Capture-free lambdas lower; a `CLOSURE` whose
+      child captures upvalues is still a `LoweringError` (7c.2c.2), as are
+      `GETUPVAL`/`SETUPVAL`. Covered by `tests/lower_test.cpp` (add, `fact`
+      recursion, mutual recursion, a capture-free lambda, the capturing-closure
+      error) and `tests/freestanding_test.cpp` (a call through the real `_start`
+      and the non-function error). Closures with upvalues and dynamic dispatch
+      stay for 7c.2c.2.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -789,8 +815,11 @@ Slices, each independently shippable:
   comparison and truthiness helpers plus the int/bool/nil printer are emitted
   as machine code into the program's own buffer. 7c.1b adds floats and doubles
   (`Double` tag, `jolt_arith`/`jolt_shift`/`jolt_pow`), with the int/float/double
-  promotion of the hosted engine. Still missing: calls and closures (7c.2c),
-  collections (7c.3) and `jolt build` (7d).
+  promotion of the hosted engine. 7c.2c.1 lowers calls: each proto becomes a
+  machine function, `CALL` dispatches it through `jolt_call` and `CLOSURE`
+  allocates an `AotClosure` with `jolt_closure` (capture-free closures only).
+  Still missing: closures with upvalues (7c.2c.2), collections (7c.3) and
+  `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -827,7 +856,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-b done; 7c.2c, 7c.3, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-c.1 done; 7c.2c.2, 7c.3, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

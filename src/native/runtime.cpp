@@ -32,6 +32,7 @@ constexpr std::int64_t kTagInt = static_cast<std::int64_t>(AotTag::Int);
 constexpr std::int64_t kTagFloat = static_cast<std::int64_t>(AotTag::Float);
 constexpr std::int64_t kTagDouble = static_cast<std::int64_t>(AotTag::Double);
 constexpr std::int64_t kTagStr = static_cast<std::int64_t>(AotTag::Str);
+constexpr std::int64_t kTagFunc = static_cast<std::int64_t>(AotTag::Func);
 
 // Byte offset of a string's first byte from its `AotString` header (see
 // `native/value.h`): the length is an 8-byte word, the bytes follow.
@@ -1170,6 +1171,84 @@ void emitGlobalGet(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
+// `AotValue jolt_closure(void* code, long arity)`: allocate an `AotClosure`
+// (code, arity, upvalueCount = 0) in the arena and return it as a `Func` value
+// (rax:rdx). The captured cells of 7c.2c.2 will extend the allocation; for now
+// the closure is the three-word header alone.
+void emitClosure(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                 CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label oom = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.movReg(Rbx, Rdi);   // code address
+  cg.movReg(R12, Rsi);   // arity
+
+  cg.movImm(Rdi, 24);    // sizeof(AotClosure) with no cells
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+
+  cg.movToMem(Rax, 0, Rbx);             // code
+  cg.movToMem(Rax, 8, R12);             // arity
+  cg.movImmToMem(Rax, 16, 0);           // upvalueCount = 0
+  cg.movReg(Rdx, Rax);                  // payload
+  cg.movImm(Rax, kTagFunc);             // tag
+  cg.pop(R12);
+  cg.pop(Rbx);
+  cg.movReg(Rsp, Rbp);
+  cg.pop(Rbp);
+  cg.retInsn();
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
+}
+
+// `AotValue jolt_call(AotValue callee, long argc, AotValue* args)`: the callee
+// arrives in rdi:rsi, the argument count in rdx and the argument window in rcx.
+// If the callee is a function, call its code with the lowering's function
+// convention -- rdi = args, rsi = argc, rdx = the `AotClosure*` -- and return
+// the result (rax:rdx) untouched. A non-function callee is a fatal error, the
+// runtime counterpart of the hosted engine's "cannot call a value of type".
+void emitCall(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
+              const DataBlob& msgNonFunc) {
+  CodeGen::Label bad = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFunc));
+  cg.jcc(Jcc::Ne, bad);
+  // Load the code address before clobbering rsi, then reorder the arguments for
+  // the function convention (args, argc, self) through r11 as scratch:
+  //   in:  rdi = tag, rsi = closure, rdx = argc, rcx = args
+  //   out: rdi = args, rsi = argc, rdx = closure, r10 = code
+  cg.movFromMem(R10, Rsi, 0);   // code = closure->code
+  cg.movReg(R11, Rsi);          // r11 = closure
+  cg.movReg(Rsi, Rdx);          // rsi = argc
+  cg.movReg(Rdx, R11);          // rdx = closure
+  cg.movReg(Rdi, Rcx);          // rdi = args
+  cg.callReg(R10);
+  cg.movReg(Rsp, Rbp);
+  cg.pop(Rbp);
+  cg.retInsn();
+
+  cg.bind(bad);
+  emitFailCall(cg, fail, msgNonFunc);
+}
+
+// `void jolt_arity_error(void)`: report the wrong-number-of-arguments error and
+// exit. A function's prologue calls it when `argc` does not match its arity. It
+// pushes rbp only to keep the stack 16-byte aligned at the `fail` call, exactly
+// like every other helper; it never returns, so it has no epilogue.
+void emitArityError(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
+                    const DataBlob& message) {
+  cg.bind(label);
+  prologue(cg);
+  emitFailCall(cg, fail, message);
+}
+
 }  // namespace
 
 void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
@@ -1193,6 +1272,8 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob msgCompare = addText("jolt: cannot compare these values\n");
   DataBlob msgPrint = addText("jolt: cannot print this value\n");
   DataBlob msgOom = addText("jolt: out of memory\n");
+  DataBlob msgCallNonFunc = addText("jolt: cannot call a non-function value\n");
+  DataBlob msgArity = addText("jolt: wrong number of arguments\n");
   DataBlob textTrue = addText("true");
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
@@ -1212,6 +1293,9 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitInitGlobals(cg, handles.initGlobals, handles.alloc, fail, msgOom);
   emitGlobalSet(cg, handles.globalSet);
   emitGlobalGet(cg, handles.globalGet);
+  emitClosure(cg, handles.closure, handles.alloc, fail, msgOom);
+  emitCall(cg, handles.call, fail, msgCallNonFunc);
+  emitArityError(cg, handles.arityError, fail, msgArity);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
                  dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
                  textNewline);

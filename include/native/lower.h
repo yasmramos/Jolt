@@ -25,9 +25,16 @@
 // no relocations).
 //
 // Every other opcode throws a `LoweringError`:
-//   - CALL, RETURN, CLOSURE, GETUPVAL, SETUPVAL: need frames (7c.2c).
+//   - GETUPVAL, SETUPVAL, CLOSURE of a proto with upvalues: need capturable
+//     cells (7c.2c.2).
 //   - NEWTABLE, GETTABLE, SETTABLE, IN, ITER: need collections (7c.3).
 // A GETGLOBAL of a name the chunk never assigns is also a `LoweringError`.
+//
+// From 7c.2c.1 every proto is lowered to its own machine function with the
+// lowering's own convention `AotValue entry(AotValue* args, long argc,
+// AotClosure* self)`. `CALL` builds the argument window in the caller's
+// register file and dispatches through `jolt_call`; `RETURN` publishes R[a];
+// `CLOSURE` allocates an `AotClosure` for a capture-free child proto.
 struct LoweringError : std::exception {
   explicit LoweringError(std::string message) : message(std::move(message)) {}
   std::string message;

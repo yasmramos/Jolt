@@ -112,6 +112,10 @@ class CodeGen {
   // address constant data emitted inline (error messages): unlike `leaRip`
   // the distance is not known when the instruction is emitted.
   void leaRipLabel(X64Reg dst, Label label);
+  // `lea dst, [base + disp]`: a full 64-bit address computed without touching
+  // the flags or loading memory. Used to pass `&R[a]` (a register-file slot) to
+  // a helper, e.g. the pointer to a call's argument window.
+  void leaMem(X64Reg dst, X64Reg base, std::int64_t disp);
 
   // Arithmetic/logical on registers (64-bit unless noted).
   void addReg(X64Reg dst, X64Reg src);
@@ -214,6 +218,10 @@ class CodeGen {
   // because the target's offset is not known when the call is emitted; the
   // displacement is patched by `finalize()`, exactly like a jump.
   void callLabel(Label label);
+  // `call r/m64` (FF /2): an indirect call through a register. The lowering
+  // uses it to dispatch a bytecode `CALL`, whose callee (and therefore its
+  // code address) is only known at run time.
+  void callReg(X64Reg target);
 
   // Stack.
   void push(X64Reg reg);
