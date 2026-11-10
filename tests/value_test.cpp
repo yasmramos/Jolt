@@ -162,6 +162,24 @@ void testDeepContainerTeardownDoesNotRecurse() {
   chain = Value();  // drop the whole chain
 }
 
+void testDeepClosureChainTeardownDoesNotRecurse() {
+  // A closure that captures the previous closure forms a chain through an
+  // upvalue cell: Function -> Cell -> Function. It is a different edge from a
+  // nested container, so it exercises the deferred destruction just the same.
+  CellPtr cell = makeRef<Cell>();
+  cell->track();
+  FuncPtr tail = makeRef<Function>();
+  cell->value = Value(tail);
+  for (int i = 0; i < 300000; ++i) {
+    FuncPtr next = makeRef<Function>();
+    next->upvalues.push_back(cell);
+    cell = makeRef<Cell>();
+    cell->track();
+    cell->value = Value(next);
+  }
+  cell = CellPtr();  // drop the whole chain
+}
+
 void testSharedTailSurvivesChainTeardown() {
   // The tail of a long chain is also bound elsewhere, so dropping the chain
   // must release only the levels the chain owned and leave the shared value
@@ -196,6 +214,7 @@ int main() {
   testFloatFormattingRoundTrips();
   testCyclicEqualityTerminates();
   testDeepContainerTeardownDoesNotRecurse();
+  testDeepClosureChainTeardownDoesNotRecurse();
   testSharedTailSurvivesChainTeardown();
   testRepeatedChildInOneContainerIsFreedOnce();
   std::puts("value tests passed");
