@@ -94,28 +94,11 @@ static void testImageIsSelfContained() {
 // --- Error tests: the deferred opcodes must be rejected, not miscompiled ---
 
 static void testDeferredOpcodesThrow() {
-  // 7c.2c.1 lowers CALL/RETURN, so they are no longer deferred. Upvalues and
-  // collections still are.
-  check(loweringThrows(makeProto({instr(OpCode::GETUPVAL, 0, 0), instr(OpCode::HALT)}, {}, 1),
-                       "GETUPVAL/SETUPVAL"),
-        "GETUPVAL raises a LoweringError");
+  // 7c.2c lowers CALL/RETURN/CLOSURE and upvalues, so only collections are
+  // still deferred (7c.3).
   check(loweringThrows(makeProto({instr(OpCode::NEWTABLE, 0, 0), instr(OpCode::HALT)}, {}, 2),
                        "NEWTABLE"),
         "NEWTABLE raises a LoweringError");
-}
-
-static void testCapturingClosureThrows() {
-  // A CLOSURE of a child proto that captures an upvalue needs capturable cells
-  // (7c.2c.2) and must be rejected, not miscompiled.
-  Bytecode root = makeProto({instr(OpCode::CLOSURE, 0, 0), instr(OpCode::HALT)}, {}, 1);
-  auto child = std::make_shared<Bytecode>();
-  child->name = "<child>";
-  child->numRegisters = 1;
-  child->code = {instr(OpCode::HALT)};
-  child->upvalues.push_back(UpvalDesc{true, 0});
-  root.children.push_back(child);
-  check(loweringThrows(root, "CLOSURE with captured upvalues"),
-        "a capturing CLOSURE raises a LoweringError");
 }
 
 static void testBadJumpTargetThrows() {
@@ -737,12 +720,69 @@ static void testExecCompiledClosure() {
                 "compiled: a capture-free lambda returns 42");
 }
 
+// Captured locals (PHASE 7c.2c.2): a lambda that reads a local of its defining
+// function captures the *cell*, so it still sees the variable after the
+// defining frame is gone. The captured slot lives in a shared cell, not a
+// copy.
+static void testExecCompiledCapture() {
+  // A closure that reads a captured local after the defining function returned.
+  checkIntValue(compileAndRun("fn make() { let x = 7; return () => x; }"
+                              " var f = make(); var r = f();"),
+                7, "compiled: a closure reads a captured local (7)");
+
+  // Shared mutation: the closure writes the captured local and the caller
+  // observes the new value (one cell, not two copies).
+  checkIntValue(compileAndRun("fn make() { var x = 0;"
+                              " return () => { x = x + 1; return x; }; }"
+                              " var c = make(); var a = c(); var r = c();"),
+                2, "compiled: a counter closure increments a shared captured cell");
+
+  // Two closures over the same variable share one cell: the second sees the
+  // first's write.
+  checkIntValue(compileAndRun("fn make() { var x = 0;"
+                              " var inc = () => { x = x + 1; };"
+                              " var get = () => x;"
+                              " inc(); inc(); return get(); }"
+                              " var r = make();"),
+                2, "compiled: two closures share one captured cell");
+
+  // Nested capture: the inner lambda captures through the outer function, so
+  // the middle frame re-exports its own upvalue.
+  checkIntValue(compileAndRun("fn outer() { let x = 41;"
+                              " fn mid() { return () => x + 1; }"
+                              " return mid(); }"
+                              " var f = outer(); var r = f();"),
+                42, "compiled: a nested closure captures through two frames");
+
+  // A captured parameter is a cell too: `let` parameters are locals.
+  checkIntValue(compileAndRun("fn adder(n) { return (m) => n + m; }"
+                              " var add5 = adder(5); var r = add5(37);"),
+                42, "compiled: a closure captures a parameter");
+
+  // Two closures created at different points capture the same variable, so both
+  // read the value it holds when they are *called* (a shared cell), not a
+  // snapshot taken at creation time.
+  checkIntValue(compileAndRun("fn make() { var a = 1;"
+                              " var f1 = () => a; a = 2; var f2 = () => a;"
+                              " return f1() + f2(); }"
+                              " var r = make();"),
+                4, "compiled: closures created at different times share one cell");
+
+  // A local function that recurses: `g` captures its own slot (predeclared as a
+  // nil cell before the closure is built), so the cell must exist and be the
+  // one the declaration fills in.
+  checkIntValue(compileAndRun("fn outer() {"
+                              " fn g(n) { if (n <= 0) { return 0; } return n + g(n - 1); }"
+                              " return g(4); }"
+                              " var r = outer();"),
+                10, "compiled: a local recursive function captures its own cell");
+}
+
 #endif  // LOWER_EXEC_TESTS
 
 int main() {
   testImageIsSelfContained();
   testDeferredOpcodesThrow();
-  testCapturingClosureThrows();
   testBadJumpTargetThrows();
   testUnassignedGlobalThrows();
   testInvalidUnopSelectorThrows();
@@ -773,6 +813,7 @@ int main() {
   testExecCompiledLocals();
   testExecCompiledCalls();
   testExecCompiledClosure();
+  testExecCompiledCapture();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif
