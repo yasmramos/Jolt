@@ -99,6 +99,14 @@ class VM : public Runtime {
   std::vector<CellPtr> scratchCells_;
   std::unordered_map<std::string, Value> globals_;
 
+  // Returns the dotted path to `name` when it exists as a member of a visible
+  // global table, or "" when it does not. A forgotten namespace root is a
+  // common mistake (`import std.math;` binds `std.math`, not `math`), so a
+  // failed global read reports `std.math` instead of a bare "undefined
+  // variable". Only globals that are maps are searched, hidden globals
+  // (`$module$...`) are skipped, and a table that contains itself terminates.
+  std::string namespaceHint(const std::string& name) const;
+
   Value& getReg(int index);
   void setReg(int index, Value value);
   CellPtr& localAt(int index);
