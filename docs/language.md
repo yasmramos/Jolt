@@ -1921,6 +1921,18 @@ call chain (for example an accidental infinite recursion) builds thousands of
 frames, so the trace prints the outermost ten and the innermost ten and elides
 the middle with a `... N more ...` line; a short trace is printed in full.
 
+A read of an undefined name suggests the full path when the name exists as a
+member of a visible global table. `import std.math;` binds the namespace
+`std.math`, not a bare `math` (see §18), so the common mistake of dropping the
+root is caught with the fix spelled out:
+
+```text
+script.jolt:2:7: runtime error: undefined variable 'math' (did you mean 'std.math'?)
+  |
+2 | print(math.sqrt(4));
+  |       ^
+```
+
 A third kind of diagnostic is non-fatal: a **warning**. A warning is reported
 with the same snippet form but does not stop the program, which still compiles
 and runs and keeps its exit code. The only warning today is the discarded result
