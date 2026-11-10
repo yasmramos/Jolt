@@ -42,6 +42,61 @@ constexpr std::int64_t localSlotOffset(int numRegisters, int index) {
   return -16LL * (numRegisters + index + 1);
 }
 
+// The frame of the root chunk: six callee-saved registers are pushed (rbp is
+// the file base; rbx and r12-r15 hold the arena/allocator state and the global
+// table, and the System V ABI requires them preserved at the process
+// boundary), then a block of `16 * (fileRegisters + fileLocals)` bytes below
+// rbp holds the register file and the local slots.
+//
+// The chunk is entered through a `call` (from `main`), so rsp is 8 mod 16; the
+// six pushes leave it 8 mod 16 and the multiple-of-16 frame keeps it there, so
+// one extra 8-byte slot below the file brings it back to 0 mod 16, which every
+// `call` the body makes requires. The epilogue drops it with `mov rsp, rbp`.
+constexpr std::int64_t frameBytes(int fileRegisters, int fileLocals) {
+  return 16LL * (fileRegisters + fileLocals);
+}
+
+void emitRootPrologue(CodeGen& cg, int fileRegisters, int fileLocals) {
+  cg.push(X64Reg::Rbp);
+  cg.push(X64Reg::Rbx);
+  cg.push(X64Reg::R12);
+  cg.push(X64Reg::R13);
+  cg.push(X64Reg::R14);
+  cg.push(X64Reg::R15);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(frameBytes(fileRegisters, fileLocals) + 8));
+}
+
+void emitRootEpilogue(CodeGen& cg) {
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::R15);
+  cg.pop(X64Reg::R14);
+  cg.pop(X64Reg::R13);
+  cg.pop(X64Reg::R12);
+  cg.pop(X64Reg::Rbx);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+}
+
+// The frame of a bytecode function (a child proto). It pushes only rbp: the
+// arena cursor (r13), the arena end (r14) and the global table base (r15) are
+// the *program's* state, not this call's, so a function must NOT save and
+// restore them -- an allocation inside a function has to advance the shared
+// cursor, and restoring it on return would lose the allocation. rbp is the
+// caller's register-file base, so it must be preserved. One push keeps rsp
+// 16-byte aligned at the body's first `call` (entry rsp % 16 == 8).
+void emitFunctionPrologue(CodeGen& cg, int fileRegisters, int fileLocals) {
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(frameBytes(fileRegisters, fileLocals)));
+}
+
+void emitFunctionEpilogue(CodeGen& cg) {
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+}
+
 // Loads register `index` into `tag`:`payload`. Two moves, the tagged load the
 // lowering table budgets.
 void loadValue(CodeGen& cg, int index, X64Reg tag, X64Reg payload) {
@@ -155,32 +210,60 @@ struct StringConstant {
 // derives the map from the code itself, in first-assignment order, so the
 // `Bytecode` structure and the `.jolc` format stay unchanged.
 //
-// A `GETGLOBAL` of a name the chunk never assigns is a lowering error naming
+// A `GETGLOBAL` of a name the program never assigns is a lowering error naming
 // the variable, the compile-time counterpart of the hosted engine's run-time
 // `undefined variable`. Builtins (`print`, ...) are globals the hosted engine
 // installs up front; the AOT backend has no builtins until calls land
 // (7c.2c), at which point they will be seeded as pre-assigned here.
+//
+// The key is the *name*, not the constant index: each proto has its own
+// constant pool, so index 3 in the root and index 3 in a function are usually
+// different names, and a recursion (`fact` reading `fact`) must resolve to one
+// slot across protos.
 struct GlobalSlots {
-  std::unordered_map<int, int> slotOfConstant;  // constant index -> slot
+  std::unordered_map<std::string, int> slotOfName;
   int count = 0;
 };
 
-GlobalSlots collectGlobals(const Bytecode& proto) {
+GlobalSlots collectGlobals(const std::vector<const Bytecode*>& protos) {
   GlobalSlots globals;
-  for (const Instruction& instr : proto.code) {
-    if (instr.op != OpCode::SETGLOBAL) continue;
-    if (globals.slotOfConstant.find(instr.b) != globals.slotOfConstant.end()) continue;
-    globals.slotOfConstant[instr.b] = globals.count++;
+  auto nameOf = [](const Bytecode& proto, int index) -> const std::string& {
+    const Value& name = proto.constants.at(static_cast<std::size_t>(index));
+    if (!name.isStr()) {
+      throw LoweringError("lowering: global name is not a string constant");
+    }
+    return name.asStr();
+  };
+  // First-assignment order across every proto, so a function and its caller
+  // (recursion) agree on the slot of a shared name.
+  for (const Bytecode* proto : protos) {
+    for (const Instruction& instr : proto->code) {
+      if (instr.op != OpCode::SETGLOBAL) continue;
+      const std::string& name = nameOf(*proto, instr.b);
+      if (globals.slotOfName.find(name) != globals.slotOfName.end()) continue;
+      globals.slotOfName[name] = globals.count++;
+    }
   }
-  for (const Instruction& instr : proto.code) {
-    if (instr.op != OpCode::GETGLOBAL) continue;
-    if (globals.slotOfConstant.find(instr.b) != globals.slotOfConstant.end()) continue;
-    const Value& name = proto.constants.at(static_cast<std::size_t>(instr.b));
-    throw LoweringError("lowering: global '" +
-                        (name.isStr() ? name.asStr() : std::string("<non-string>")) +
-                        "' is read but never assigned");
+  for (const Bytecode* proto : protos) {
+    for (const Instruction& instr : proto->code) {
+      if (instr.op != OpCode::GETGLOBAL) continue;
+      const std::string& name = nameOf(*proto, instr.b);
+      if (globals.slotOfName.find(name) != globals.slotOfName.end()) continue;
+      throw LoweringError("lowering: global '" + name + "' is read but never assigned");
+    }
   }
   return globals;
+}
+
+// Every proto in the tree, root first, then its descendants (pre-order). Each
+// one is emitted as its own machine-code function; a `CLOSURE` needs its child
+// entry label, so the labels are created for the whole tree before any body is
+// emitted.
+void collectProtos(const Bytecode& proto, std::vector<const Bytecode*>& out) {
+  out.push_back(&proto);
+  for (const std::shared_ptr<Bytecode>& child : proto.children) {
+    if (child) collectProtos(*child, out);
+  }
 }
 
 // Emits the string-constant data islands at the end of the code buffer. Called
@@ -201,6 +284,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
                       const std::vector<CodeGen::Label>& labels,
                       const AotRuntimeHandles& rt, const GlobalSlots& globals,
                       int fileRegisters,
+                      const std::unordered_map<const Bytecode*, CodeGen::Label>& protoEntry,
                       std::vector<StringConstant>& stringConstants) {
   switch (instr.op) {
     case OpCode::LOADK: {
@@ -341,31 +425,24 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       // The chunk's result is R0, returned as an `AotValue` in rax:rdx (the
       // System V ABI's two-register return), so the test harness can read both
       // the tag and the payload. The process entry discards it and exits 0.
-      // Restore the callee-saved registers the chunk prologue pushed, in
-      // reverse order.
       loadValue(cg, 0, X64Reg::Rax, X64Reg::Rdx);
-      cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
-      cg.pop(X64Reg::R15);
-      cg.pop(X64Reg::R14);
-      cg.pop(X64Reg::R13);
-      cg.pop(X64Reg::R12);
-      cg.pop(X64Reg::Rbx);
-      cg.pop(X64Reg::Rbp);
-      cg.retInsn();
+      emitRootEpilogue(cg);
       break;
 
-    // The rest need runtime support and land in later slices of PHASE 7c.
-    // Locals, calls and closures need frames (7c.2b/7c.2c); collections and
-    // iteration need the arena (7c.3).
+    // Globals (7c.2a), locals (7c.2b) and calls/closures (7c.2c.1) are lowered.
+    // Upvalues need capturable cells (7c.2c.2); collections and iteration need
+    // the arena (7c.3).
     case OpCode::GETGLOBAL: {
-      const int slot = globals.slotOfConstant.at(instr.b);
+      const std::string& name = proto.constants.at(static_cast<std::size_t>(instr.b)).asStr();
+      const int slot = globals.slotOfName.at(name);
       cg.movImm(X64Reg::Rdi, slot);
       cg.callLabel(rt.globalGet);
       storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
       break;
     }
     case OpCode::SETGLOBAL: {
-      const int slot = globals.slotOfConstant.at(instr.b);
+      const std::string& name = proto.constants.at(static_cast<std::size_t>(instr.b)).asStr();
+      const int slot = globals.slotOfName.at(name);
       cg.movImm(X64Reg::Rdi, slot);
       loadValue(cg, instr.a, X64Reg::Rsi, X64Reg::Rdx);
       cg.callLabel(rt.globalSet);
@@ -392,13 +469,46 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
       break;
     }
-    case OpCode::CALL:
+    case OpCode::CALL: {
+      // R[a] = callee, R[a+1 .. a+b] = arguments, contiguous in this frame.
+      // Pass the callee (rdi:rsi), the count (rdx) and the argument window's
+      // address (rcx) to `jolt_call`, which checks the callee is a function and
+      // dispatches it. The result comes back in rax:rdx, straight into R[a].
+      loadValue(cg, instr.a, X64Reg::Rdi, X64Reg::Rsi);
+      cg.movImm(X64Reg::Rdx, instr.b);
+      cg.leaMem(X64Reg::Rcx, kFileBase, slotOffset(instr.a + 1));
+      cg.callLabel(rt.call);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
     case OpCode::RETURN:
-      unsupported("CALL/RETURN", "PHASE 7c.2c");
-    case OpCode::CLOSURE:
+      // Publish R[a] as the function's result (rax:rdx) and leave the frame.
+      // The root chunk does not use RETURN (it ends in HALT), so this is always
+      // a bytecode function's frame.
+      loadValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      emitFunctionEpilogue(cg);
+      break;
+    case OpCode::CLOSURE: {
+      if (instr.b < 0 || static_cast<std::size_t>(instr.b) >= proto.children.size()) {
+        throw LoweringError("lowering: CLOSURE child index " + std::to_string(instr.b) +
+                            " is out of range");
+      }
+      const Bytecode* child = proto.children[static_cast<std::size_t>(instr.b)].get();
+      // A proto with upvalues captures its defining frame's locals, which needs
+      // capturable cells (7c.2c.2); only a capture-free closure is lowered here.
+      if (!child->upvalues.empty()) {
+        unsupported("CLOSURE with captured upvalues", "PHASE 7c.2c.2");
+      }
+      // jolt_closure(code, arity) -> Func in rax:rdx, stored in R[a].
+      cg.leaRipLabel(X64Reg::Rdi, protoEntry.at(child));
+      cg.movImm(X64Reg::Rsi, child->numParams);
+      cg.callLabel(rt.closure);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
     case OpCode::GETUPVAL:
     case OpCode::SETUPVAL:
-      unsupported("CLOSURE/GETUPVAL/SETUPVAL", "PHASE 7c.2");
+      unsupported("GETUPVAL/SETUPVAL", "PHASE 7c.2c.2");
     case OpCode::NEWTABLE:
     case OpCode::GETTABLE:
     case OpCode::SETTABLE:
@@ -426,52 +536,91 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   CodeGen::Label chunkEntry = cg.newLabel();
   CodeGen::Label mainEntry = cg.newLabel();
   std::vector<StringConstant> stringConstants;
-  const GlobalSlots globals = collectGlobals(proto);
 
-  // One label per instruction index, so a jump (an absolute index into `code`)
-  // can target any instruction, forward or backward.
-  std::vector<CodeGen::Label> labels;
-  labels.reserve(proto.code.size());
-  for (std::size_t i = 0; i < proto.code.size(); ++i) {
-    labels.push_back(cg.newLabel());
+  // Every proto in the tree, root first. Each becomes its own machine function;
+  // `protoEntry` maps a proto to its entry label so a `CLOSURE` can address a
+  // child's code before that child's body is emitted.
+  std::vector<const Bytecode*> protos;
+  collectProtos(proto, protos);
+  std::unordered_map<const Bytecode*, CodeGen::Label> protoEntry;
+  for (const Bytecode* p : protos) {
+    protoEntry[p] = (p == &proto) ? chunkEntry : cg.newLabel();
   }
 
+  const GlobalSlots globals = collectGlobals(protos);
+
   const std::uint64_t chunkOffset = cg.offset();
+
+  // The root chunk: build the register file, map the arena and the global
+  // table, then run the body. It is the only frame that saves rbx/r12-r15
+  // (they carry the program's arena/global state down to every call) and the
+  // only one that maps the arena.
   cg.bind(chunkEntry);
-  // Save the callee-saved registers the arena and the allocator use (rbx and
-  // r12-r15; see `native/entry.h`) before claiming them, and restore them on
-  // the way out, so the chunk honours the System V ABI. They are pushed
-  // *above* the register file's base, which `rbp` becomes only after the
-  // pushes, so the file (which grows down from `rbp`) never overlaps them.
-  cg.push(X64Reg::Rbp);
-  cg.push(X64Reg::Rbx);
-  cg.push(X64Reg::R12);
-  cg.push(X64Reg::R13);
-  cg.push(X64Reg::R14);
-  cg.push(X64Reg::R15);
-  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
-  // The frame holds the register file (R0..RnumRegisters-1) and, from 7c.2b,
-  // the local cells, in one contiguous block below rbp. `fileRegisters` is the
-  // register count the frame actually reserved (at least 1), so the local
-  // region starts right below it. The size stays a multiple of 16.
-  const int fileRegisters = proto.numRegisters > 0 ? proto.numRegisters : 1;
-  const int fileLocals = proto.numLocals > 0 ? proto.numLocals : 0;
-  const std::int64_t fileBytes = 16LL * (fileRegisters + fileLocals);
-  cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(fileBytes));
-  // Map the arena before the program runs, so the allocator has its
-  // cursor/end registers seeded from the first allocation (string
-  // concatenation in 7c.1c, the global table below). rsp is 16-byte aligned
-  // here (six pushes plus a multiple-of-16 file size), which the calls require.
+  const int rootRegisters = proto.numRegisters > 0 ? proto.numRegisters : 1;
+  const int rootLocals = proto.numLocals > 0 ? proto.numLocals : 0;
+  emitRootPrologue(cg, rootRegisters, rootLocals);
   cg.callLabel(entry.initArena);
-  // Allocate and clear the global table (7c.2a). Every global reads as nil
-  // until assigned, matching the hosted engine's "unset" state.
   cg.movImm(X64Reg::Rdi, globals.count);
   cg.callLabel(rt.initGlobals);
+  {
+    std::vector<CodeGen::Label> labels;
+    labels.reserve(proto.code.size());
+    for (std::size_t i = 0; i < proto.code.size(); ++i) labels.push_back(cg.newLabel());
+    for (std::size_t i = 0; i < proto.code.size(); ++i) {
+      cg.bind(labels[i]);
+      lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, rootRegisters,
+                       protoEntry, stringConstants);
+    }
+  }
 
-  for (std::size_t i = 0; i < proto.code.size(); ++i) {
-    cg.bind(labels[i]);
-    lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, fileRegisters,
-                     stringConstants);
+  // Every child proto: a function with the lowering's own convention
+  // `AotValue entry(AotValue* args, long argc, AotClosure* self)`. It binds its
+  // arguments from the caller's window into R0..R(n-1) and, past the last
+  // statement, returns R0 (the compiler appends a `return nil`-style fallback,
+  // so a body always ends in RETURN).
+  for (const Bytecode* p : protos) {
+    if (p == &proto) continue;
+    const Bytecode& fn = *p;
+    cg.bind(protoEntry[p]);
+    const int fnRegisters = fn.numRegisters > 0 ? fn.numRegisters : 1;
+    const int fnLocals = fn.numLocals > 0 ? fn.numLocals : 0;
+    emitFunctionPrologue(cg, fnRegisters, fnLocals);
+
+    // A variadic function packs its extras into an array, which needs a
+    // collection (7c.3); reject it before emitting anything else.
+    if (fn.variadic) unsupported("variadic function", "PHASE 7c.3");
+
+    // The compiler does not check a user function's arity -- the hosted engine
+    // does at run time -- so the prologue checks `argc` (rsi) against the
+    // declared parameter count and reports the mismatch. A non-variadic
+    // function needs an exact match.
+    {
+      CodeGen::Label arityOk = cg.newLabel();
+      cg.cmpImm32(X64Reg::Rsi, fn.numParams);
+      cg.jcc(Jcc::Eq, arityOk);
+      cg.callLabel(rt.arityError);
+      cg.bind(arityOk);
+    }
+
+    // Copy the arguments into the register file. `args` points at the caller's
+    // R[a+1]; the file grows *down*, so consecutive registers sit 16 bytes
+    // *below* each other, and args[i] is at `args - 16*i`. Copying rather than
+    // aliasing keeps the callee's writes out of the caller's registers.
+    for (int i = 0; i < fn.numParams; ++i) {
+      const std::int64_t off = -16LL * i;
+      cg.movFromMem(X64Reg::Rax, X64Reg::Rdi, off);
+      cg.movFromMem(X64Reg::Rdx, X64Reg::Rdi, off + 8);
+      storeValue(cg, i, X64Reg::Rax, X64Reg::Rdx);
+    }
+
+    std::vector<CodeGen::Label> labels;
+    labels.reserve(fn.code.size());
+    for (std::size_t i = 0; i < fn.code.size(); ++i) labels.push_back(cg.newLabel());
+    for (std::size_t i = 0; i < fn.code.size(); ++i) {
+      cg.bind(labels[i]);
+      lowerInstruction(fn.code[i], fn, cg, labels, rt, globals, fnRegisters,
+                       protoEntry, stringConstants);
+    }
   }
 
   // `main`: run the chunk and return 0, so the process exit code is a clean

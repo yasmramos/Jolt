@@ -350,6 +350,17 @@ void CodeGen::leaRipLabel(X64Reg dst, Label label) {
   recordFixup(label);
 }
 
+// lea dst, [base + disp]: opcode 8D /r with a ModRM memory operand. The
+// displacement encoding (disp8/disp32/SIB, rbp/r13 forcing a displacement)
+// lives entirely in `modRmDisp`, the single memory-operand encoder.
+void CodeGen::leaMem(X64Reg dst, X64Reg base, std::int64_t disp) {
+  std::uint8_t d = enc(dst);
+  std::uint8_t b = enc(base);
+  rex(true, d, false, 0, b);
+  emitByte(0x8D);
+  modRmDisp(d, b, disp);
+}
+
 void CodeGen::aluRegOp(std::uint8_t opcode, X64Reg dst, X64Reg src) {
   std::uint8_t d = enc(dst);
   std::uint8_t s = enc(src);
@@ -752,6 +763,15 @@ void CodeGen::callRel(std::int32_t offsetBytes) {
 void CodeGen::callLabel(Label label) {
   emitByte(0xE8);
   recordFixup(label);
+}
+
+// call r/m64: opcode FF /2. The reg field carries the /2 extension; the target
+// register goes in the ModRM rm field (and REX.B when it is r8-r15).
+void CodeGen::callReg(X64Reg target) {
+  std::uint8_t t = enc(target);
+  if (t >= 8) emitByte(0x41);
+  emitByte(0xFF);
+  emitByte(static_cast<std::uint8_t>(0xD0 | (t & 0x07)));
 }
 
 void CodeGen::push(X64Reg reg) {

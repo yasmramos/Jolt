@@ -38,6 +38,7 @@ enum class AotTag : std::uint64_t {
   Float = 3,   // payload is the IEEE-754 binary64 bit pattern of a binary32 value
   Double = 4,  // payload is the IEEE-754 binary64 bit pattern
   Str = 5,     // payload is the address of an `AotString`
+  Func = 6,    // payload is the address of an `AotClosure`
 };
 
 // On-image layout of a string: an 8-byte length followed by the bytes. The
@@ -54,6 +55,29 @@ struct AotString {
 };
 
 constexpr std::size_t kAotStringHeaderSize = sizeof(std::uint64_t);
+
+// On-image layout of a closure (PHASE 7c.2c.1): the code address of the
+// function's entry, the number of arguments it expects, then the captured
+// cells. A `Func` value's payload points at `code`. This slice lowers calls
+// but not captures yet (`CLOSURE` of a proto with upvalues is still a
+// `LoweringError`), so `upvalueCount` is always 0 and `cells` is empty; the
+// field is fixed here now so `jolt_call` and the register-file frame layout do
+// not have to change when 7c.2c.2 fills it in.
+//
+// A bytecode function's machine-code entry follows the *lowering's own*
+// convention, not the C ABI: `AotValue entry(AotValue* args, long argc,
+// AotClosure* self)`. `args` points at the caller's argument window (the
+// caller's R[a+1 .. a+argc]); the callee copies the arguments into its own
+// register file, so the caller's window is never aliased. This differs from a
+// runtime helper (which takes two `AotValue`s in rdi:rsi/rdx:rcx) on purpose:
+// a function has a variable argument count, which does not fit the
+// two-register value ABI.
+struct AotClosure {
+  std::uint64_t code;          // address of the function's machine code
+  std::uint64_t arity;         // number of declared parameters
+  std::uint64_t upvalueCount;  // number of captured cells that follow
+  // The captured cells (pointers to 16-byte `AotValue` slots) follow.
+};
 
 struct AotValue {
   std::uint64_t tag;
