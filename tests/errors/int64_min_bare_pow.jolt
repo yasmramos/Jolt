@@ -1,0 +1,4 @@
+// expect-exit: 65
+// `**` binds tighter than unary minus, so this parses as `-(2^63 ** 2)`: the
+// bare 2^63 magnitude is not directly under the minus and is out of range.
+let x = -9223372036854775808 ** 2;

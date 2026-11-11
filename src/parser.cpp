@@ -178,6 +178,25 @@ bool isComparisonOp(Tok op) {
   }
 }
 
+// Operators that bind tighter than a prefix operator: `**` and the postfix
+// forms (`call`, `index`, `.member`, `?.member`, `!!`). Used to decide whether a
+// `-9223372036854775808` literal is really the direct operand of the unary minus
+// (`-2^63`), or the start of a tighter expression (`-2^63 ** 2` is
+// `-(2^63 ** 2)`), where the bare magnitude is out of range.
+bool bindsTighterThanUnary(Tok op) {
+  switch (op) {
+    case Tok::StarStar:
+    case Tok::LParen:
+    case Tok::LBracket:
+    case Tok::Dot:
+    case Tok::QuestionDot:
+    case Tok::BangBang:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool isAssignOp(Tok type) {
   switch (type) {
     case Tok::Eq:
@@ -1429,6 +1448,18 @@ ExprPtr Parser::parseUnary() {
   }
   if (check(Tok::Bang) || check(Tok::Minus) || check(Tok::Plus) || check(Tok::Tilde)) {
     const Token& op = advance();
+    // `-9223372036854775808` is the smallest `int`, but its magnitude (2^63)
+    // has no positive 64-bit representation. The lexer flags such a literal,
+    // and a unary minus is the one place it is valid: fold the sign into the
+    // literal here so no wrapping negation is emitted. `**` and the postfix
+    // operators bind tighter than unary minus, so `-2^63 ** 2` is
+    // `-(2^63 ** 2)`: there the literal is not directly under the minus and the
+    // ordinary range check must fire.
+    if (op.type == Tok::Minus && check(Tok::Int) && peek().intNeedsNegation &&
+        !bindsTighterThanUnary(peek(1).type)) {
+      const Token& number = advance();
+      return makeExpr(LiteralExpr{Value(number.intValue)}, op.line, op.col);
+    }
     auto operand = parseUnary();
     return makeExpr(UnaryExpr{op.type, std::move(operand)}, op.line, op.col);
   }
@@ -1493,6 +1524,12 @@ ExprPtr Parser::parsePrimary() {
   const Token& token = peek();
 
   if (match(Tok::Int)) {
+    if (token.intNeedsNegation) {
+      throw CompileError{
+          "integer literal is out of range; at this magnitude only "
+          "'-9223372036854775808' fits in an int",
+          token.line, token.col};
+    }
     return makeExpr(LiteralExpr{Value(token.intValue)}, token.line, token.col);
   }
   if (match(Tok::Double)) {
@@ -1552,7 +1589,11 @@ ExprPtr Parser::parsePrimary() {
           }
           key = keyToken.parts[0].text;
         } else if (check(Tok::Int)) {
-          key = std::to_string(advance().intValue);
+          const Token& keyToken = advance();
+          if (keyToken.intNeedsNegation) {
+            throw CompileError{"integer literal is out of range", keyToken.line, keyToken.col};
+          }
+          key = std::to_string(keyToken.intValue);
         } else if (check(Tok::Double)) {
           key = Value(advance().floatValue).toString();
         } else if (check(Tok::Float)) {

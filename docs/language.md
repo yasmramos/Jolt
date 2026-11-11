@@ -99,7 +99,12 @@ The convention is `camelCase` for variables, functions and methods, and the stan
 | Scientific notation | `1.5e3`, `2E-2` | `1500.0`, `0.02` |
 
 - Integers are 64-bit signed. An out-of-range literal is a compile error.
-- The `-` sign is a unary operator, not part of the literal.
+- The `-` sign is a unary operator, not part of the literal. `-9223372036854775808`
+  is therefore the one literal whose magnitude (2^63) does not fit a positive
+  `int`: the lexer reads the digits as unsigned, and the parser accepts the value
+  only directly under a unary minus. Written bare, in any base
+  (`9223372036854775808`, `0x8000000000000000`), it is the usual out-of-range
+  error.
 - A dot is only part of a float when followed by a digit: `1.` is not a valid float; write `1.0`.
 - Underscores are ignored inside digits: `1_0` is equivalent to `10`.
 - A fractional literal with no suffix is a `double` (binary64); a trailing

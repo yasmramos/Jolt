@@ -8,6 +8,7 @@
 #endif
 
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -1078,6 +1079,39 @@ void testFloatLiteralRange() {
   expectCompileError("let a = 1e-320f;\n", "float literal underflow to zero");
 }
 
+void testIntegerLiteralAtInt64Min() {
+  // `-9223372036854775808` is the smallest `int`, but its magnitude (2^63) has
+  // no positive 64-bit representation. The lexer flags such a literal and the
+  // parser accepts it only directly under a unary minus.
+  expectCompiles("let a = -9223372036854775808;\n");
+  expectCompiles("let a = -0x8000000000000000;\n");
+  expectCompiles("let a = - 9223372036854775808;\n");
+  // The bare magnitude is out of range, in any base.
+  expectCompileError("let a = 9223372036854775808;\n", "bare 2^63 decimal");
+  expectCompileError("let a = 0x8000000000000000;\n", "bare 2^63 hex");
+  expectCompileError("let a = 0b1000000000000000000000000000000000000000000000000000000000000000;\n",
+                     "bare 2^63 binary");
+  // A magnitude above 2^63 overflows the unsigned read too.
+  expectCompileError("let a = -9223372036854775809;\n", "magnitude above 2^63");
+  expectCompileError("let a = 0xFFFFFFFFFFFFFFFF;\n", "hex magnitude above 2^63");
+
+  // `**` and the postfix operators bind tighter than unary minus, so the
+  // literal is not the direct operand there and the bare magnitude is rejected
+  // with the range error (not a stray syntax error).
+  expectCompileError("let a = -9223372036854775808 ** 2;\n", "2^63 under **");
+  expectCompileError("let a = -9223372036854775808!!;\n", "2^63 under postfix !!");
+  // A parenthesized literal is an ordinary operand again.
+  expectCompiles("let a = (-9223372036854775808) ** 2;\n");
+
+  // The folded value is exactly INT64_MIN, and it is a plain `int`.
+  Bytecode bc = compileSource("let a = -9223372036854775808;\n");
+  bool found = false;
+  for (const Value& constant : bc.constants) {
+    if (constant.isInt() && constant.asInt() == INT64_MIN) found = true;
+  }
+  assert(found);
+}
+
 void testLogicalAssignmentBytecode() {
   // `x ??= v` (PHASE 6.5 operators, compound form): read the target once,
   // compare against nil with NEQ, and short-circuit with JMP_IF_TRUE. No new
@@ -1609,6 +1643,7 @@ int main() {
   testMustUse();
   testTypeMismatchErrors();
   testFloatLiteralRange();
+  testIntegerLiteralAtInt64Min();
   testNullCoalesceBytecode();
   testLogicalAssignmentBytecode();
   testLogicalAssignmentErrors();

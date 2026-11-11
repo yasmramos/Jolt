@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <unordered_map>
 
 namespace {
@@ -81,6 +82,34 @@ class Lexer {
   }
 
   bool atEnd() const { return pos_ >= src_.size(); }
+
+  // Parses the digit string of an integer literal. The magnitude is read as an
+  // unsigned 64-bit value so that `9223372036854775808` (2^63, the magnitude of
+  // INT64_MIN) is representable: it is accepted and flagged with
+  // `intNeedsNegation`, because it only makes sense directly under a unary
+  // minus. A magnitude above 2^63, or one that overflows 64 bits, is out of
+  // range. `base` is 10 or the prefix's base.
+  void parseIntegerDigits(Token& token, const std::string& digits, int base, int startLine,
+                          int startCol) {
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long magnitude = std::strtoull(digits.c_str(), &end, base);
+    if (errno == ERANGE) error("integer literal is out of range", startLine, startCol);
+    if (end == nullptr || *end != '\0') {
+      error("invalid digit for base " + std::to_string(base), startLine, startCol);
+    }
+    constexpr unsigned long long kIntMinMagnitude = 1ULL << 63;  // |INT64_MIN|
+    if (magnitude > kIntMinMagnitude) {
+      error("integer literal is out of range", startLine, startCol);
+    }
+    token.type = Tok::Int;
+    if (magnitude == kIntMinMagnitude) {
+      token.intValue = std::numeric_limits<int64_t>::min();
+      token.intNeedsNegation = true;
+    } else {
+      token.intValue = static_cast<int64_t>(magnitude);
+    }
+  }
   char peek(size_t ahead = 0) const {
     size_t index = pos_ + ahead;
     return index < src_.size() ? src_[index] : '\0';
@@ -207,19 +236,11 @@ class Lexer {
       }
       if (digits.empty()) error("expected digits after base prefix", startLine, startCol);
 
-      errno = 0;
-      char* end = nullptr;
-      long long value = std::strtoll(digits.c_str(), &end, base);
-      if (errno == ERANGE) error("integer literal is out of range", startLine, startCol);
-      if (end == nullptr || *end != '\0') {
-        error("invalid digit for base " + std::to_string(base), startLine, startCol);
-      }
       Token token;
-      token.type = Tok::Int;
       token.lexeme = src_.substr(start, pos_ - start);
-      token.intValue = value;
       token.line = startLine;
       token.col = startCol;
+      parseIntegerDigits(token, digits, base, startLine, startCol);
       return token;
     }
 
@@ -284,13 +305,7 @@ class Lexer {
         token.floatValue = value;
       }
     } else {
-      errno = 0;
-      char* end = nullptr;
-      long long value = std::strtoll(text.c_str(), &end, 10);
-      if (errno == ERANGE) error("integer literal is out of range", startLine, startCol);
-      if (end == nullptr || *end != '\0') error("malformed integer literal", startLine, startCol);
-      token.type = Tok::Int;
-      token.intValue = value;
+      parseIntegerDigits(token, text, 10, startLine, startCol);
     }
     return token;
   }

@@ -112,6 +112,11 @@ struct Token {
   int line = 1;
   int col = 1;
   int64_t intValue = 0;
+  // True when an integer literal is exactly 2^63 (`9223372036854775808`), the
+  // magnitude of `INT64_MIN`, which has no positive 64-bit representation. Such
+  // a literal is only valid directly under a unary minus (`-9223372036854775808`
+  // is the smallest `int`); anywhere else it is a compile error.
+  bool intNeedsNegation = false;
   double floatValue = 0;
   std::vector<TokenPart> parts;
 
