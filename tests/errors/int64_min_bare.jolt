@@ -1,0 +1,4 @@
+// expect-exit: 65
+// 2^63 is the magnitude of INT64_MIN; written bare, in any base, it has no
+// positive 64-bit representation.
+let x = 9223372036854775808;
