@@ -49,32 +49,35 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `compiler.cpp` | `Node*` | `Bytecode*` | ✅ |
 | `module_resolver.cpp` | dotted module path | source file path | ✅ |
 | `vm.cpp` | `Bytecode*` | execution | ✅ |
-| `main.cpp` | CLI | full pipeline | ⬜ (VM as dev engine, PHASE 4) |
-| `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
+| `main.cpp` | CLI | full pipeline | ✅ (VM as dev engine, PHASE 4) |
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
+| `builtins.cpp` / `ops.cpp` | native builtins, shared operators | runtime library | ✅ |
+| `ffi.cpp` | `extern "C"` declarations | marshalling natives | ✅ PHASE 6.6 |
+| `diagnostic.cpp` | `CompileError`, `Warning`, `RuntimeError` | stderr output | ✅ |
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
-| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
+| `platform_posix.cpp` | `Platform` ops (dev engine) | libc-backed I/O | ✅ |
+| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | ✅ PHASE 7a/7b |
 | `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1b |
+| `native/dtoa.cpp` | float/double | shortest round-trip text | ✅ PHASE 7c.1b |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
 | `native/arena.cpp` | block + size | aligned allocations | ✅ PHASE 7c.0 |
 | `native/platform_freestanding.cpp` | `Platform` ops | direct Linux syscalls | ✅ PHASE 7c.0 |
 | `native/entry.cpp` | program entry label | `_start` + runtime prelude | ✅ PHASE 7c.0 |
-| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1b |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
 
 ### Toolchain binaries and the compiler boundary
 
 `jolt` ships as a single binary until PHASE 7d. After the split:
 
-- `jolt` development engine (run, REPL, -c). Includes VM, interpreter
-(test oracle), and JIT (AsmJIT).
+- `jolt` development engine (run, REPL, -c). Includes the VM and the JIT
+(AsmJIT).
 - `joltc` host compiler (joltc file.jolt -o app). Reads sources and
 writes the ELF. Uses AsmJIT Assembler (no JIT). Links against musl static.
 - `jolt build` thin alias over `joltc`
 
 Boundary rule: src/compiler.* and src/native/* must not include
-interpreter.h or vm.h. Enforced by tests/check_compiler_boundary.cmake.
+vm.h. Enforced by tests/check_compiler_boundary.cmake.
 
 ---
 
@@ -151,25 +154,6 @@ compiler.
 
 Removing `PRINT` freed one slot (39/40). The next opcode request (if any) starts
 at rung 1 of the §3.3 ladder.
-
-### Explicit anti-goal
-
-> **Do NOT repeat Java's mistake**: high-level bytecode that later turns out
-> to be impossible to compile to native code efficiently. Jolt's bytecode
-> must be born with future native compilation in mind.
-
-### Design rules for the AOT backend
-
-1. **No VM-only features.** Every language feature must be compilable by the
-   AOT backend. Runtime `eval`/`load` of bytecode is forbidden unless the
-   produced binary embeds the compiler itself (GraalVM pitfall).
-2. **The bytecode must carry enough information for AOT.** Instructions stay
-   annotatable with provable types so the backend can emit typed fast paths.
-3. **The embeddable runtime cannot call libc.** The runtime that ships inside
-   AOT binaries may only reach the outside world through the `Platform`
-   interface. **Unless the user explicitly requests musl static** (the
-   default), in which case libc is statically linked and the binary is still
-   self-contained.
 
 ### Explicit anti-goal
 
@@ -260,7 +244,7 @@ previous one.
   constant; then `SETGLOBAL`
 - Compile-time immutability tracking (`isImmutable` on locals and globals):
   assigning to a `let` binding throws a
-  `CompileError` with the same message as the interpreter
+  `CompileError` with the same message as the retired AST oracle
 - `print(expr)` → compile the expression, emit `PRINT` (temporary; see §3.6;
   every arity becomes a `CALL` to the builtin at 6c/6e); in the current AST
   `print` is a call, so it is detected as a `CallExpr`
@@ -278,10 +262,10 @@ previous one.
 - `ADD` also concatenates strings; `DIV` and `MOD` detect division by zero
 - `POW` replicates `intPow` for `int ** int` with a non-negative exponent and
   uses `std::pow` in every other case
-- `UNOP` respects the interpreter's semantics (`0` is truthy) for negate, not
+- `UNOP` respects the retired oracle's semantics (`0` is truthy) for negate, not
   and bit-not
 - Comparisons with `EQ`/`NEQ`/`LT`/`LTE`/`GT`/`GTE` and the same ordering
-  relation as `Interpreter::lessThan`
+  relation the oracle used (`lessThan`)
 - `PRINT` uses `Value::toString()` (temporary; removed at the 6f gate, see
   §3.6)
 - Runtime errors through `RuntimeError`
@@ -324,9 +308,8 @@ previous one.
 - Call stack in the VM and registers per frame
 - `Bytecode` evolves into **per-function protos** with child protos (Lua style)
 - Closures with upvalues over `Cell` (locals are already cells)
-- Shared `Runtime` interface for the VM and the AST interpreter so that the
-  builtins (`map`, `filter`, `sort`) can invoke VM functions without
-  re-entering the AST
+- Shared `Runtime` interface so that the builtins (`map`, `filter`, `sort`) can
+  invoke VM functions without re-entering a separate engine
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
 - Retire the temporary `PRINT` opcode: from 6c/6e every `print` arity compiles
@@ -892,13 +875,14 @@ Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d done; 7c.3, 7d pending
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
-**12 bugs fixed** (see `docs/BUGS.md` for the full list).
+Bugs are tracked in the git history and the regression tests; there is no
+separate bug log file.
 
 Distribution model: musl static by default (self-contained, no runtime).
 Optional: newlib (bare-metal), freestanding (no libc).
 
-VM = dev engine only. The AST interpreter leaves the product path at the 6f
-parity gate and is deleted in PHASE 4.
+VM = dev engine only. The AST interpreter was retired at the 6f parity gate
+and is no longer in the tree.
 
 
 ---
@@ -1018,15 +1002,15 @@ end-user binary (`hello.exe`) contains none of them.**
 
 ## 10. Historical context
 
-- There is a **previous AST interpreter** (MiniLang, renamed Jolt) that is
-  kept only as a **differential test oracle** while parity with the VM is
-  being reached.
+- There was a **previous AST interpreter** (MiniLang, renamed Jolt) used as a
+  **differential test oracle** while parity with the VM was being reached. It
+  has been **retired**: the tree no longer contains `interpreter.cpp`/`.h`.
 - The product model is Lua/LuaJIT's: source → lexer → parser → AST → compiler
   → bytecode → VM. The AST is **not executed** in production.
-- The "dual" approach (AST interpreter as an alternative engine) is **NOT**
-  preserved. Once the VM covers the language (PHASE 4), the AST interpreter
-  leaves the binary and stays only in tests, and is retired afterwards.
-- The phases run in order: 5 ✅, 6, then 4 (VM as the dev engine) and 7 (AOT
+- The "dual" approach (AST interpreter as an alternative engine) was **NOT**
+  preserved. Once the VM covered the language (PHASE 4), the AST interpreter
+  left the binary and was retired.
+- The phases ran in order: 5 ✅, 6, then 4 (VM as the dev engine) and 7 (AOT
   native backend).
 
 ---

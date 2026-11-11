@@ -2,7 +2,7 @@
 
 Language version: **0.1.0**
 
-This guide describes the syntax and semantics of Jolt as implemented by the interpreter included in this repository.
+This guide describes the syntax and semantics of Jolt as implemented by the compiler and the register-based VM included in this repository.
 
 ## Table of contents
 
@@ -264,7 +264,7 @@ const MAX = 10 * 2;    // immutable binding folded at compile time
 An optional **type annotation** may follow the name: `let x: int = 5`. See
 [Type annotations](#46-type-annotations) below.
 
-`var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected (at runtime in the interpreter, at compile time in the bytecode compiler). Use `let` by default for values that never change, and `var` only when reassignment is needed.
+`var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected at compile time by the bytecode compiler. Use `let` by default for values that never change, and `var` only when reassignment is needed.
 
 `const` is also immutable, but its value must be a compile-time constant expression: literals, arithmetic (`+ - * / %`), unary minus, comparisons and boolean operators over other constants, and references to other top-level `const` names (including forward references, which the parser resolves to a fixed point). The parser folds each `const` initializer to a literal before the program runs, so uses of the name cost nothing at runtime. If an initializer cannot be folded (for example it calls a function or reads a `var`), the parser reports an error instead of silently falling back to runtime evaluation. Nested blocks fold their `const`s eagerly as well.
 
@@ -1370,7 +1370,7 @@ print(example()()); // 2
 
 ### 7.5 Recursion and depth
 
-Recursion works both in declared functions and in named lambdas. The interpreter limits the call depth to **2000**; exceeding it produces a runtime error.
+Recursion works both in declared functions and in named lambdas. The runtime limits the call depth to **2000**; exceeding it produces a runtime error.
 
 ```jolt
 fn factorial(n) {
@@ -1910,7 +1910,7 @@ are never a machine address the program can dereference.
 Jolt distinguishes two kinds of errors:
 
 - **Compile error**: detected by the lexer or the parser (for example, a missing `;` or a malformed literal).
-- **Runtime error**: detected by the interpreter (for example, an undefined variable, a division by zero or an out-of-range index).
+- **Runtime error**: detected while the program runs (for example, an undefined variable, a division by zero or an out-of-range index).
 
 Both are shown with the location and a code snippet:
 
