@@ -1,0 +1,34 @@
+// An integer `const` initializer that overflows used to wrap around silently.
+// It still wraps — that matches the runtime, where `int` overflow is defined to
+// wrap — but the parser now prints a warning to stderr naming the operator, so
+// a value that is almost always a mistake does not go unnoticed. A warning is
+// not an error: the program compiles and runs, and every folded value equals
+// what the same expression produces at run time.
+
+const WRAPPED_ADD = 9223372036854775807 + 1;
+assertEq(WRAPPED_ADD, -9223372036854775808);
+assertEq(WRAPPED_ADD, 9223372036854775807 + 1);
+
+const WRAPPED_MUL = 9223372036854775807 * 2;
+assertEq(WRAPPED_MUL, -2);
+assertEq(WRAPPED_MUL, 9223372036854775807 * 2);
+
+const WRAPPED_POW = 2 ** 64;
+assertEq(WRAPPED_POW, 0);
+assertEq(WRAPPED_POW, 2 ** 64);
+
+const WRAPPED_POW_ODD = 3 ** 40;
+assertEq(WRAPPED_POW_ODD, 3 ** 40);
+
+// A folded value that fits stays silent and exact.
+const FITS = 2 ** 62;
+assertEq(FITS, 4611686018427387904);
+const SMALL = 10 * 2 + 3;
+assertEq(SMALL, 23);
+
+// A shift drops high bits by design; it is not an arithmetic overflow and must
+// not warn.
+const HIGH_BIT = 1 << 63;
+assertEq(HIGH_BIT, -9223372036854775808);
+
+print("const overflow ok");

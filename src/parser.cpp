@@ -139,29 +139,57 @@ StmtPtr Parser::parseProgram() {
   return program;
 }
 
-// Wrapping integer arithmetic, matching the interpreter's overflow behavior.
-int64_t wrapAdd(int64_t left, int64_t right) {
-  return static_cast<int64_t>(static_cast<uint64_t>(left) + static_cast<uint64_t>(right));
+// Signed-overflow predicates for constant folding. The runtime wraps on
+// overflow (docs/language.md §2.3), but a `const` whose folded value does not
+// fit in an `int` is almost always a mistake, so the parser reports it — the
+// same policy it already applies to division by zero and an out-of-range shift
+// in a constant expression. All arithmetic is done in unsigned, so the checks
+// themselves never overflow.
+bool foldOverflowsAdd(int64_t left, int64_t right) {
+  const int64_t sum =
+      static_cast<int64_t>(static_cast<uint64_t>(left) + static_cast<uint64_t>(right));
+  return ((left >= 0) == (right >= 0)) && ((sum >= 0) != (left >= 0));
 }
-int64_t wrapSub(int64_t left, int64_t right) {
-  return static_cast<int64_t>(static_cast<uint64_t>(left) - static_cast<uint64_t>(right));
+bool foldOverflowsSub(int64_t left, int64_t right) {
+  const int64_t diff =
+      static_cast<int64_t>(static_cast<uint64_t>(left) - static_cast<uint64_t>(right));
+  return ((left >= 0) != (right >= 0)) && ((diff >= 0) != (left >= 0));
 }
-int64_t wrapMul(int64_t left, int64_t right) {
-  return static_cast<int64_t>(static_cast<uint64_t>(left) * static_cast<uint64_t>(right));
+bool foldOverflowsMul(int64_t left, int64_t right) {
+  if (left == 0 || right == 0) return false;
+  const bool negative = (left < 0) != (right < 0);
+  const uint64_t leftMagnitude =
+      left < 0 ? 0ULL - static_cast<uint64_t>(left) : static_cast<uint64_t>(left);
+  const uint64_t rightMagnitude =
+      right < 0 ? 0ULL - static_cast<uint64_t>(right) : static_cast<uint64_t>(right);
+  const uint64_t limit = negative ? (1ULL << 63) : ((1ULL << 63) - 1);
+  return leftMagnitude > limit / rightMagnitude;
 }
 
-// Binary exponentiation on integers (exponent assumed non-negative),
-// mirroring the interpreter's `intPow`.
-int64_t foldIntPow(int64_t base, int64_t exponent) {
-  uint64_t result = 1;
-  uint64_t factor = static_cast<uint64_t>(base);
-  uint64_t exp = static_cast<uint64_t>(exponent);
+// Binary exponentiation on integers (exponent assumed non-negative), mirroring
+// the runtime's `intPow` exactly but also reporting overflow (true). The value
+// still wraps like the runtime, so the folded constant is identical to what the
+// same expression produces at run time; the flag only drives a warning. The
+// loop squares `factor` only while higher exponent bits remain and stops at the
+// first overflow, so it stays O(log exponent) even for a huge exponent.
+bool foldIntPow(int64_t base, int64_t exponent, int64_t& out) {
+  bool overflow = false;
+  int64_t result = 1;
+  int64_t factor = base;
+  int64_t exp = exponent;
   while (exp > 0) {
-    if (exp & 1U) result *= factor;
-    factor *= factor;
-    exp >>= 1U;
+    if (exp & 1) {
+      if (foldOverflowsMul(result, factor)) overflow = true;
+      result = static_cast<int64_t>(static_cast<uint64_t>(result) * static_cast<uint64_t>(factor));
+    }
+    exp >>= 1;
+    if (exp > 0) {
+      if (foldOverflowsMul(factor, factor)) overflow = true;
+      factor = static_cast<int64_t>(static_cast<uint64_t>(factor) * static_cast<uint64_t>(factor));
+    }
   }
-  return static_cast<int64_t>(result);
+  out = result;
+  return overflow;
 }
 
 bool isComparisonOp(Tok op) {
@@ -172,6 +200,25 @@ bool isComparisonOp(Tok op) {
     case Tok::LtEq:
     case Tok::Gt:
     case Tok::GtEq:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Operators that bind tighter than a prefix operator: `**` and the postfix
+// forms (`call`, `index`, `.member`, `?.member`, `!!`). Used to decide whether a
+// `-9223372036854775808` literal is really the direct operand of the unary minus
+// (`-2^63`), or the start of a tighter expression (`-2^63 ** 2` is
+// `-(2^63 ** 2)`), where the bare magnitude is out of range.
+bool bindsTighterThanUnary(Tok op) {
+  switch (op) {
+    case Tok::StarStar:
+    case Tok::LParen:
+    case Tok::LBracket:
+    case Tok::Dot:
+    case Tok::QuestionDot:
+    case Tok::BangBang:
       return true;
     default:
       return false;
@@ -473,7 +520,12 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
           return true;
         case Tok::Minus:
           if (operand.isInt()) {
-            out = Value(static_cast<int64_t>(0ULL - static_cast<uint64_t>(operand.asInt())));
+            const int64_t value = operand.asInt();
+            if (value == INT64_MIN) {
+              warn("integer overflow in a constant expression; the value wraps around", expr.line,
+                   expr.col);
+            }
+            out = Value(static_cast<int64_t>(0ULL - static_cast<uint64_t>(value)));
             return true;
           }
           if (operand.isFloat()) {
@@ -567,10 +619,25 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
       if (left.isInt() && right.isInt()) {
         const int64_t a = left.asInt();
         const int64_t c = right.asInt();
+        // `foldOverflow` records a warning at the operator's position but keeps
+        // the wrapped value, so the bytecode is unchanged and the program runs.
+        auto foldOverflow = [&]() {
+          warn("integer overflow in a constant expression; the value wraps around",
+               b.opLine, b.opCol);
+        };
         switch (b.op) {
-          case Tok::Plus: out = Value(wrapAdd(a, c)); return true;
-          case Tok::Minus: out = Value(wrapSub(a, c)); return true;
-          case Tok::Star: out = Value(wrapMul(a, c)); return true;
+          case Tok::Plus:
+            if (foldOverflowsAdd(a, c)) foldOverflow();
+            out = Value(static_cast<int64_t>(static_cast<uint64_t>(a) + static_cast<uint64_t>(c)));
+            return true;
+          case Tok::Minus:
+            if (foldOverflowsSub(a, c)) foldOverflow();
+            out = Value(static_cast<int64_t>(static_cast<uint64_t>(a) - static_cast<uint64_t>(c)));
+            return true;
+          case Tok::Star:
+            if (foldOverflowsMul(a, c)) foldOverflow();
+            out = Value(static_cast<int64_t>(static_cast<uint64_t>(a) * static_cast<uint64_t>(c)));
+            return true;
           case Tok::Slash:
             if (c == 0) { reason = "division by zero in a constant expression"; return false; }
             if (a == INT64_MIN && c == -1) { out = Value(a); return true; }
@@ -579,9 +646,16 @@ bool Parser::foldConstant(const Expr& expr, Value& out, std::string& reason) con
             if (c == 0) { reason = "division by zero in a constant expression"; return false; }
             if (a == INT64_MIN && c == -1) { out = Value(static_cast<int64_t>(0)); return true; }
             out = Value(a % c); return true;
-          case Tok::StarStar:
-            if (c >= 0) { out = Value(foldIntPow(a, c)); return true; }
-            out = Value(std::pow(static_cast<double>(a), static_cast<double>(c))); return true;
+          case Tok::StarStar: {
+            if (c >= 0) {
+              int64_t powered = 0;
+              if (foldIntPow(a, c, powered)) foldOverflow();
+              out = Value(powered);
+              return true;
+            }
+            out = Value(std::pow(static_cast<double>(a), static_cast<double>(c)));
+            return true;
+          }
           case Tok::Amp: out = Value(a & c); return true;
           case Tok::Pipe: out = Value(a | c); return true;
           case Tok::Caret: out = Value(a ^ c); return true;
@@ -1429,6 +1503,18 @@ ExprPtr Parser::parseUnary() {
   }
   if (check(Tok::Bang) || check(Tok::Minus) || check(Tok::Plus) || check(Tok::Tilde)) {
     const Token& op = advance();
+    // `-9223372036854775808` is the smallest `int`, but its magnitude (2^63)
+    // has no positive 64-bit representation. The lexer flags such a literal,
+    // and a unary minus is the one place it is valid: fold the sign into the
+    // literal here so no wrapping negation is emitted. `**` and the postfix
+    // operators bind tighter than unary minus, so `-2^63 ** 2` is
+    // `-(2^63 ** 2)`: there the literal is not directly under the minus and the
+    // ordinary range check must fire.
+    if (op.type == Tok::Minus && check(Tok::Int) && peek().intNeedsNegation &&
+        !bindsTighterThanUnary(peek(1).type)) {
+      const Token& number = advance();
+      return makeExpr(LiteralExpr{Value(number.intValue)}, op.line, op.col);
+    }
     auto operand = parseUnary();
     return makeExpr(UnaryExpr{op.type, std::move(operand)}, op.line, op.col);
   }
@@ -1493,6 +1579,12 @@ ExprPtr Parser::parsePrimary() {
   const Token& token = peek();
 
   if (match(Tok::Int)) {
+    if (token.intNeedsNegation) {
+      throw CompileError{
+          "integer literal is out of range; at this magnitude only "
+          "'-9223372036854775808' fits in an int",
+          token.line, token.col};
+    }
     return makeExpr(LiteralExpr{Value(token.intValue)}, token.line, token.col);
   }
   if (match(Tok::Double)) {
@@ -1552,7 +1644,11 @@ ExprPtr Parser::parsePrimary() {
           }
           key = keyToken.parts[0].text;
         } else if (check(Tok::Int)) {
-          key = std::to_string(advance().intValue);
+          const Token& keyToken = advance();
+          if (keyToken.intNeedsNegation) {
+            throw CompileError{"integer literal is out of range", keyToken.line, keyToken.col};
+          }
+          key = std::to_string(keyToken.intValue);
         } else if (check(Tok::Double)) {
           key = Value(advance().floatValue).toString();
         } else if (check(Tok::Float)) {
