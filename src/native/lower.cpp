@@ -243,7 +243,8 @@ struct GlobalSlots {
   int count = 0;
 };
 
-GlobalSlots collectGlobals(const std::vector<const Bytecode*>& protos) {
+GlobalSlots collectGlobals(const std::vector<const Bytecode*>& protos,
+                           const std::unordered_map<std::string, CodeGen::Label>& builtins) {
   GlobalSlots globals;
   auto nameOf = [](const Bytecode& proto, int index) -> const std::string& {
     const Value& name = proto.constants.at(static_cast<std::size_t>(index));
@@ -252,6 +253,19 @@ GlobalSlots collectGlobals(const std::vector<const Bytecode*>& protos) {
     }
     return name.asStr();
   };
+  // A builtin (`print`, ...) is a global the hosted engine installs up front, so
+  // it needs a slot only when the program reads it. It is pre-assigned first so
+  // a user binding (`var print = ...`) reuses the same slot and shadows the
+  // builtin, exactly like the hosted engine's "install, then run" order.
+  for (const Bytecode* proto : protos) {
+    for (const Instruction& instr : proto->code) {
+      if (instr.op != OpCode::GETGLOBAL) continue;
+      const std::string& name = nameOf(*proto, instr.b);
+      if (builtins.find(name) == builtins.end()) continue;
+      if (globals.slotOfName.find(name) != globals.slotOfName.end()) continue;
+      globals.slotOfName[name] = globals.count++;
+    }
+  }
   // First-assignment order across every proto, so a function and its caller
   // (recursion) agree on the slot of a shared name.
   for (const Bytecode* proto : protos) {
@@ -659,7 +673,16 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
     protoEntry[p] = (p == &proto) ? chunkEntry : cg.newLabel();
   }
 
-  const GlobalSlots globals = collectGlobals(protos);
+  // The builtins the AOT runtime provides, keyed by the global name the hosted
+  // engine installs. The chunk seeds each one into its global slot as an
+  // `AotClosure`, so a `CALL` reaches it through the ordinary `jolt_call` path.
+  const std::unordered_map<std::string, CodeGen::Label> builtins = {
+      {"print", rt.printBuiltin},
+      {"write", rt.writeBuiltin},
+      {"eprint", rt.eprintBuiltin},
+  };
+
+  const GlobalSlots globals = collectGlobals(protos, builtins);
 
   const std::uint64_t chunkOffset = cg.offset();
 
@@ -674,6 +697,24 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   cg.callLabel(entry.initArena);
   cg.movImm(X64Reg::Rdi, globals.count);
   cg.callLabel(rt.initGlobals);
+
+  // Seed each builtin the program reads: build an `AotClosure` for its code and
+  // store it into the global slot. A builtin has no captured cells, so the
+  // closure is a plain code pointer with arity 0 (the runtime entry checks no
+  // arity itself; `print`/`write`/`eprint` accept any count).
+  for (const auto& [name, code] : builtins) {
+    auto slot = globals.slotOfName.find(name);
+    if (slot == globals.slotOfName.end()) continue;
+    cg.leaRipLabel(X64Reg::Rdi, code);
+    cg.movImm(X64Reg::Rsi, 0);  // arity
+    cg.movImm(X64Reg::Rdx, 0);  // upvalueCount
+    cg.callLabel(rt.closure);
+    cg.movImm(X64Reg::Rdi, slot->second);
+    cg.movReg(X64Reg::Rsi, X64Reg::Rax);
+    // `jolt_closure` returns the Func value in rax:rdx, so rdx already holds the
+    // payload that `jolt_global_set` expects.
+    cg.callLabel(rt.globalSet);
+  }
   {
     FrameInfo frame;
     frame.fileRegisters = rootRegisters;

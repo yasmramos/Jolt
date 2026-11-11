@@ -97,6 +97,29 @@ void inlineWriteStdout(CodeGen& cg, CodeGen::Label writeLabel) {
   cg.callLabel(writeLabel);
 }
 
+// Emits `jolt_write(fdReg, rdi, rsi)`: writes `rsi` bytes from `rdi` to `fdReg`.
+// `fdReg` must not be rdi, rsi or rdx (they are the syscall's other arguments).
+// Clobbers rdi, rsi, rdx and rax.
+void inlineWriteFd(CodeGen& cg, CodeGen::Label writeLabel, X64Reg fdReg) {
+  cg.movReg(Rdx, Rsi);
+  cg.movReg(Rsi, Rdi);
+  cg.movReg(Rdi, fdReg);
+  cg.callLabel(writeLabel);
+}
+
+// Emits a write of `rsi` bytes from `rdi` to a *constant* fd (1 for stdout, 2
+// for stderr). fd 1 uses the tight `inlineWriteStdout`; any other fd loads r10
+// (a scratch the helpers own) and goes through `inlineWriteFd`. Clobbers rdi,
+// rsi, rdx, r10 and rax.
+void emitWriteToFd(CodeGen& cg, CodeGen::Label writeLabel, std::int64_t fd) {
+  if (fd == 1) {
+    inlineWriteStdout(cg, writeLabel);
+  } else {
+    cg.movImm(R10, fd);
+    inlineWriteFd(cg, writeLabel, R10);
+  }
+}
+
 // Emits `call fail(message)`: loads the message address and length, then calls
 // the shared fail helper. Never returns.
 void emitFailCall(CodeGen& cg, CodeGen::Label fail, const DataBlob& message) {
@@ -173,21 +196,24 @@ void emitTruthy(CodeGen& cg, CodeGen::Label label) {
   epilogue(cg);
 }
 
-// `void jolt_print_value(AotValue v)`: prints the value followed by a newline.
+// The shared body of the printers: renders one value to file descriptor `fd`.
+// `newline` appends a trailing '\n' (the `print` builtin and the standalone
+// `jolt_print_value`), which the raw variants omit so they can join arguments.
 // int, bool, nil and str render directly; a Float/Double is formatted with the
 // embedded dtoa (`jolt_format_double`) into an arena buffer, then written.
-void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
-                    CodeGen::Label fail, CodeGen::Label writeInt,
-                    CodeGen::Label formatDouble, const DataBlob& badValue,
-                    const DataBlob& textTrue, const DataBlob& textFalse,
-                    const DataBlob& textNil, const DataBlob& textNewline) {
+void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
+                        CodeGen::Label fail, CodeGen::Label writeInt,
+                        CodeGen::Label formatDouble, const DataBlob& badValue,
+                        const DataBlob& textTrue, const DataBlob& textFalse,
+                        const DataBlob& textNil, const DataBlob& textNewline,
+                        std::int64_t fd, bool newline) {
   CodeGen::Label asInt = cg.newLabel();
   CodeGen::Label asBool = cg.newLabel();
   CodeGen::Label asNil = cg.newLabel();
   CodeGen::Label asStr = cg.newLabel();
   CodeGen::Label asNum = cg.newLabel();
   CodeGen::Label boolFalse = cg.newLabel();
-  CodeGen::Label newline = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
 
   cg.bind(label);
   prologue(cg);
@@ -210,8 +236,9 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
 
   cg.bind(asInt);
   cg.movReg(Rdi, Rsi);
+  cg.movImm(R10, fd);  // `jolt_write_int` writes to the fd in r10
   cg.callLabel(writeInt);
-  cg.jmp(newline);
+  cg.jmp(done);
 
   // A Float/Double: format into an arena buffer with the embedded dtoa, then
   // write the returned length. The `Scratch` block and the text buffer live on
@@ -227,44 +254,143 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
   cg.movReg(Rdi, Rsp);
   cg.addImm32(Rdi, static_cast<std::int32_t>(kDtoaScratchBytes));
   cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
-  inlineWriteStdout(cg, writeLabel);
-  cg.jmp(newline);
+  emitWriteToFd(cg, writeLabel, fd);
+  cg.jmp(done);
 
   cg.bind(asBool);
   cg.testReg(Rsi);
   cg.jcc(Jcc::Eq, boolFalse);
   cg.leaRipLabel(Rdi, textTrue.label);
   cg.movImm(Rsi, static_cast<std::int64_t>(textTrue.text.size()));
-  inlineWriteStdout(cg, writeLabel);
-  cg.jmp(newline);
+  emitWriteToFd(cg, writeLabel, fd);
+  cg.jmp(done);
   cg.bind(boolFalse);
   cg.leaRipLabel(Rdi, textFalse.label);
   cg.movImm(Rsi, static_cast<std::int64_t>(textFalse.text.size()));
-  inlineWriteStdout(cg, writeLabel);
-  cg.jmp(newline);
+  emitWriteToFd(cg, writeLabel, fd);
+  cg.jmp(done);
 
   cg.bind(asNil);
   cg.leaRipLabel(Rdi, textNil.label);
   cg.movImm(Rsi, static_cast<std::int64_t>(textNil.text.size()));
-  inlineWriteStdout(cg, writeLabel);
-  cg.jmp(newline);
+  emitWriteToFd(cg, writeLabel, fd);
+  cg.jmp(done);
 
   // A string is its bytes verbatim: print writes the payload's `length` bytes
   // starting right after the header. No quoting, matching `Value::toString`.
-  // `inlineWriteStdout` takes (rdi = buffer, rsi = length).
+  // The write helpers take (rdi = buffer, rsi = length).
   cg.bind(asStr);
   cg.movFromMem(Rcx, Rsi, 0);  // length
   cg.addImm32(Rsi, static_cast<std::int32_t>(kStringDataOffset));
   cg.movReg(Rdi, Rsi);         // buffer = payload + 8
   cg.movReg(Rsi, Rcx);         // length
-  inlineWriteStdout(cg, writeLabel);
+  emitWriteToFd(cg, writeLabel, fd);
 
-  cg.bind(newline);
-  cg.leaRipLabel(Rdi, textNewline.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textNewline.text.size()));
-  inlineWriteStdout(cg, writeLabel);
-
+  cg.bind(done);
+  if (newline) {
+    cg.leaRipLabel(Rdi, textNewline.label);
+    cg.movImm(Rsi, static_cast<std::int64_t>(textNewline.text.size()));
+    emitWriteToFd(cg, writeLabel, fd);
+  }
   epilogue(cg);
+}
+
+// `void jolt_print_value(AotValue v)`: prints the value followed by a newline.
+void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
+                    CodeGen::Label fail, CodeGen::Label writeInt,
+                    CodeGen::Label formatDouble, const DataBlob& badValue,
+                    const DataBlob& textTrue, const DataBlob& textFalse,
+                    const DataBlob& textNil, const DataBlob& textNewline) {
+  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, badValue,
+                     textTrue, textFalse, textNil, textNewline, /*fd=*/1,
+                     /*newline=*/true);
+}
+
+// `void jolt_print_value_raw(AotValue v)`: prints the value with no trailing
+// newline, to stdout, for the `print`/`write` builtins.
+void emitPrintValueRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
+                       CodeGen::Label fail, CodeGen::Label writeInt,
+                       CodeGen::Label formatDouble, const DataBlob& badValue,
+                       const DataBlob& textTrue, const DataBlob& textFalse,
+                       const DataBlob& textNil, const DataBlob& textNewline) {
+  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, badValue,
+                     textTrue, textFalse, textNil, textNewline, /*fd=*/1,
+                     /*newline=*/false);
+}
+
+// `void jolt_print_value_err_raw(AotValue v)`: prints the value with no trailing
+// newline, to stderr, for the `eprint` builtin.
+void emitPrintValueErrRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
+                          CodeGen::Label fail, CodeGen::Label writeInt,
+                          CodeGen::Label formatDouble, const DataBlob& badValue,
+                          const DataBlob& textTrue, const DataBlob& textFalse,
+                          const DataBlob& textNil, const DataBlob& textNewline) {
+  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, badValue,
+                     textTrue, textFalse, textNil, textNewline, /*fd=*/2,
+                     /*newline=*/false);
+}
+
+// One of the `print`/`write`/`eprint` builtins, as a machine-code function with
+// the same convention as a bytecode proto: `AotValue entry(AotValue* args, long
+// argc, AotClosure* self)`. `args` points at the caller's `R[a+1]` and the
+// caller's register file grows down, so `args[i]` sits 16 bytes *below*
+// `args[i-1]` -- the same layout the proto prologue reads. Arguments are joined
+// with a single space; `rawPrint` renders each one (no newline) and `writeLabel`
+// writes the separators. `newline` appends a trailing '\n' (print/eprint), which
+// `write` omits. The result is always nil.
+void emitPrintBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label rawPrint,
+                      CodeGen::Label writeLabel, const DataBlob& textSpace,
+                      const DataBlob& textNewline, std::int64_t fd, bool newline) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label body = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 16);          // scratch for the index (keeps rsp aligned)
+  cg.movReg(Rbx, Rdi);             // rbx = args
+  cg.movReg(R12, Rsi);             // r12 = argc
+  cg.movImmToMem(Rbp, -24, 0);     // index = 0
+
+  cg.bind(loop);
+  cg.movFromMem(Rax, Rbp, -24);    // index
+  cg.cmpReg(Rax, R12);
+  cg.jcc(Jcc::Ge, done);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, body);           // index == 0: no separator
+  cg.leaRipLabel(Rdi, textSpace.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textSpace.text.size()));
+  emitWriteToFd(cg, writeLabel, fd);
+
+  cg.bind(body);
+  cg.movFromMem(Rax, Rbp, -24);
+  cg.shlImm8(Rax, 4);              // index * 16
+  cg.movReg(Rdi, Rbx);
+  cg.subReg(Rdi, Rax);             // rdi = &args[index]
+  cg.movFromMem(Rsi, Rdi, 8);      // payload
+  cg.movFromMem(Rdi, Rdi, 0);      // tag
+  cg.callLabel(rawPrint);
+  cg.movFromMem(Rax, Rbp, -24);
+  cg.addImm32(Rax, 1);
+  cg.movToMem(Rbp, -24, Rax);      // index++
+  cg.jmp(loop);
+
+  cg.bind(done);
+  if (newline) {
+    cg.leaRipLabel(Rdi, textNewline.label);
+    cg.movImm(Rsi, static_cast<std::int64_t>(textNewline.text.size()));
+    emitWriteToFd(cg, writeLabel, fd);
+  }
+  cg.xorReg(Rax, Rax);             // nil result
+  cg.xorReg(Rdx, Rdx);
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  cg.movReg(Rsp, Rbp);
+  cg.pop(Rbp);
+  cg.retInsn();
 }
 
 // `void write_int(long value)`: prints a signed 64-bit integer in decimal
@@ -317,7 +443,7 @@ void emitWriteInt(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel) 
   cg.addImm32(Rsi, static_cast<std::int32_t>(kBuffer));
   cg.subReg(Rsi, R8);  // length = end - cursor
   cg.movReg(Rdi, R8);
-  inlineWriteStdout(cg, writeLabel);
+  inlineWriteFd(cg, writeLabel, R10);  // fd is in r10
 
   epilogue(cg);
 }
@@ -1316,6 +1442,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
   DataBlob textNewline = addText("\n");
+  DataBlob textSpace = addText(" ");
 
   CodeGen::Label fail = cg.newLabel();
   CodeGen::Label writeInt = cg.newLabel();
@@ -1338,6 +1465,18 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
                  dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
                  textNewline);
+  emitPrintValueRaw(cg, handles.printValueRaw, entry.write, fail, writeInt,
+                    dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
+                    textNewline);
+  emitPrintValueErrRaw(cg, handles.printValueErrRaw, entry.write, fail, writeInt,
+                       dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
+                       textNewline);
+  emitPrintBuiltin(cg, handles.printBuiltin, handles.printValueRaw, entry.write,
+                   textSpace, textNewline, /*fd=*/1, /*newline=*/true);
+  emitPrintBuiltin(cg, handles.writeBuiltin, handles.printValueRaw, entry.write,
+                   textSpace, textNewline, /*fd=*/1, /*newline=*/false);
+  emitPrintBuiltin(cg, handles.eprintBuiltin, handles.printValueErrRaw, entry.write,
+                   textSpace, textNewline, /*fd=*/2, /*newline=*/true);
   emitTruthy(cg, handles.truthy);
   emitArith(cg, handles.arithValues, fail, msgTypes, msgDivZero, handles.concat);
   emitPow(cg, handles.powValues, fail, msgPow);

@@ -800,6 +800,19 @@ Slices, each independently shippable:
       closures over one variable, nested capture through two frames, a captured
       parameter, creation-time independence) and `tests/freestanding_test.cpp`
       (a captured local read through the real `_start`).
+    - **7c.2d** (done) — the `print`/`write`/`eprint` builtins. The backend had
+      no builtins, so a call to `print` was a lowering error ("global 'print'
+      is read but never assigned") and a compiled binary could not print. The
+      lowering now seeds each builtin the program reads as an `AotClosure` in
+      its global slot, so a `CALL` reaches it through the ordinary `jolt_call`
+      path. A builtin is a machine-code function with the proto convention
+      `AotValue entry(AotValue* args, long argc, AotClosure* self)`; it joins
+      its arguments with single spaces, `print`/`eprint` add a trailing newline
+      (`write` does not) and `eprint` writes to stderr. The printer is factored
+      into one core parameterised by fd and newline. Covered by
+      `tests/lower_test.cpp` (a `print` call lowers and returns nil) and
+      `tests/freestanding_test.cpp` (a compiled program prints through `print`
+      and `write` under the real `_start`).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -837,7 +850,8 @@ Slices, each independently shippable:
   a captured local lives in a shared arena cell, `jolt_cell_new` allocates it,
   `GETUPVAL`/`SETUPVAL` and nested `CLOSURE`s resolve through the frame's saved
   `self`, and `jolt_closure` reserves the capture slots the lowering fills.
-  Still missing: collections (7c.3) and `jolt build` (7d).
+  7c.2d seeds the `print`/`write`/`eprint` builtins as globals, so a compiled
+  program can print. Still missing: collections (7c.3) and `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -874,7 +888,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-c.2 done; 7c.3, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d done; 7c.3, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
