@@ -17,6 +17,9 @@
 #include <string>
 #include <vector>
 
+#include "bytecode.h"
+#include "compiler.h"
+#include "lexer.h"
 #include "native/arena.h"
 #include "native/entry.h"
 #include "native/elf.h"
@@ -24,6 +27,7 @@
 #include "native/platform_freestanding.h"
 #include "native/runtime.h"
 #include "native/value.h"
+#include "parser.h"
 
 static int g_failures = 0;
 
@@ -270,6 +274,28 @@ static Bytecode makeProto(const std::vector<Instruction>& code,
   proto.numRegisters = numRegisters;
   proto.numLocals = numLocals;
   return proto;
+}
+
+// Compiles a Jolt source string to bytecode, the way the dev engine does.
+static Bytecode compileSource(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<freestanding-test>");
+  return compileProgram(parser.parseProgram());
+}
+
+// The `print` builtin, end to end: compile a real program that calls `print`,
+// lower it, build a static ELF and run it. Before 7c.2d the backend had no
+// builtins, so `print` was a lowering error and a compiled binary could not
+// print anything (PHASE 7c.2d).
+static void test_builtin_print() {
+  Bytecode proto = compileSource(
+      "print(\"hello\", 42, 3.5, true);"
+      "write(\"no\", \"newline\");"
+      "print();");
+  RunResult result = buildAndRun("/tmp/jolt_builtin_print", proto);
+  check(result.output == "hello 42 3.5 true\nno newline\n",
+        "a compiled program prints through the print/write builtins");
+  check(result.exitCode == 0, "a program using print exits 0 through _start");
 }
 
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
@@ -652,6 +678,7 @@ int main() {
   test_boxed_runtime_closure_capture();
   test_boxed_runtime_string();
   test_boxed_runtime_float_mod();
+  test_builtin_print();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

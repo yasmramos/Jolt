@@ -668,6 +668,16 @@ static void testExecCompiledGlobals() {
         "compiled: let x = 5; let y = x + 2; yields 7 in R0");
 }
 
+// `print` is a builtin the chunk seeds, not a user global: before 7c.2d a call
+// to it was a lowering error ("global 'print' is read but never assigned"). The
+// call now lowers and returns nil; the printed bytes are checked end to end in
+// `freestanding_test.cpp`.
+static void testExecCompiledPrint() {
+  AotValue value = compileAndRun("print(1);");
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Nil),
+        "compiled: print(1) lowers and returns nil");
+}
+
 // Same, for locals: the compiler emits DECLLOCAL/GETLOCAL/SETLOCAL for a nested
 // block, and the chunk runs it. A nested block is a local scope even at the top
 // level, so this exercises the local region without a call frame.
@@ -810,6 +820,7 @@ int main() {
   testExecGlobals();
   testExecLocals();
   testExecCompiledGlobals();
+  testExecCompiledPrint();
   testExecCompiledLocals();
   testExecCompiledCalls();
   testExecCompiledClosure();

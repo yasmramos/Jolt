@@ -29,6 +29,12 @@
 // second) and returned in rax:rdx.
 struct AotRuntimeHandles {
   CodeGen::Label printValue;     // void  jolt_print_value(AotValue v)
+  // The same printer without the trailing newline, for the `print`/`write`/
+  // `eprint` builtins, which join their arguments with single spaces and add
+  // one newline themselves. `printValueRaw` writes to stdout, `printValueErrRaw`
+  // to stderr (PHASE 7c.2d).
+  CodeGen::Label printValueRaw;     // void jolt_print_value_raw(AotValue v)
+  CodeGen::Label printValueErrRaw;  // void jolt_print_value_err_raw(AotValue v)
   // Numeric binary arithmetic with the int/float/double promotion of the
   // hosted engine. The selector (AotArithOp) is the third argument.
   CodeGen::Label arithValues;    // AotValue jolt_arith(AotValue a, AotValue b, long op)
@@ -82,6 +88,16 @@ struct AotRuntimeHandles {
   // when the argument count does not match its declared arity, the runtime
   // counterpart of the hosted engine's arity check in `pushJoltFrame`.
   CodeGen::Label arityError;     // void jolt_arity_error(void)
+  // The `print`/`write`/`eprint` builtins, as machine-code functions with the
+  // same convention as a bytecode proto (`AotValue entry(AotValue* args, long
+  // argc, AotClosure* self)`). The chunk seeds each into its global slot as an
+  // `AotClosure`, so a `CALL` reaches them through the ordinary `jolt_call`
+  // path. `print` and `eprint` add a trailing newline, `write` does not;
+  // `eprint` writes to stderr. Arguments are joined with single spaces
+  // (PHASE 7c.2d).
+  CodeGen::Label printBuiltin;   // AotValue jolt_builtin_print(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label writeBuiltin;   // AotValue jolt_builtin_write(...)
+  CodeGen::Label eprintBuiltin;  // AotValue jolt_builtin_eprint(...)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
@@ -90,7 +106,8 @@ inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
-      code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
   };
 }
 
