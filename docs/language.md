@@ -268,6 +268,8 @@ An optional **type annotation** may follow the name: `let x: int = 5`. See
 
 `const` is also immutable, but its value must be a compile-time constant expression: literals, arithmetic (`+ - * / %`), unary minus, comparisons and boolean operators over other constants, and references to other top-level `const` names (including forward references, which the parser resolves to a fixed point). The parser folds each `const` initializer to a literal before the program runs, so uses of the name cost nothing at runtime. If an initializer cannot be folded (for example it calls a function or reads a `var`), the parser reports an error instead of silently falling back to runtime evaluation. Nested blocks fold their `const`s eagerly as well.
 
+An integer `const` initializer whose folded value does not fit an `int` (`+ - *` or `**`) still wraps around — the same result the expression would produce at run time — but the parser prints a **warning** naming the operator, so a value that is almost always a mistake does not pass unnoticed. It is a warning and not an error because the program is valid and would run. A shift that drops high bits (`1 << 63`) is not an arithmetic overflow and does not warn.
+
 ### 4.2 Block scope
 
 Every block `{ ... }` creates a new scope. Variables are resolved from the current scope up through the parents.

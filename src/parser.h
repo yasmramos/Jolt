@@ -52,10 +52,26 @@ class Parser {
 
   const std::string& where() const { return where_; }
 
+  // Non-fatal diagnostics raised while folding `const` initializers. An integer
+  // overflow in a constant expression wraps around (docs/language.md §2.3), so
+  // the program still compiles and runs; the warning just surfaces a value that
+  // is almost always a mistake. The CLI prints these to stderr.
+  const std::vector<Warning>& warnings() const { return warnings_; }
+
  private:
   std::vector<Token> tokens_;
   size_t pos_ = 0;
   std::string where_;
+  // Records a fold-time warning, ignoring an exact duplicate so a const that
+  // `resolveTopLevelConsts` retries does not report the same site twice.
+  void warn(const std::string& message, int line, int col) const {
+    for (const Warning& existing : warnings_) {
+      if (existing.line == line && existing.col == col && existing.message == message) return;
+    }
+    warnings_.push_back(Warning{message, line, col});
+  }
+  // Fold-time warnings (see `warn`). `mutable` because `foldConstant` is const.
+  mutable std::vector<Warning> warnings_;
   // Folded values of `const` declarations seen so far, used by the parser to
   // evaluate constant expressions at parse time (see foldConstant).
   std::unordered_map<std::string, Value> constValues_;
