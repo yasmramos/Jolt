@@ -222,6 +222,18 @@ struct StringConstant {
   std::string bytes;
 };
 
+void loadMemberName(CodeGen& cg, const Bytecode& proto, int c, X64Reg tag, X64Reg payload,
+                    std::vector<StringConstant>& stringConstants) {
+  const Value& value = proto.constants.at(static_cast<std::size_t>(-c - 1));
+  if (!value.isStr()) {
+    throw LoweringError("lowering: member name is not a string constant");
+  }
+  StringConstant constant{cg.newLabel(), value.asStr()};
+  cg.movImm(tag, static_cast<std::int64_t>(AotTag::Str));
+  cg.leaRipLabel(payload, constant.label);
+  stringConstants.push_back(std::move(constant));
+}
+
 // Global variables (PHASE 7c.2a). The compiler names a global by a string
 // constant index (`instruction.b`), but the binary has no strings: each
 // distinct name gets an index into a flat `AotValue` array. The lowerer
@@ -636,13 +648,62 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       break;
     }
     case OpCode::NEWTABLE:
+      // R[a] = a fresh array (`c == 0`) or map (`c == 1`); `b` is a capacity
+      // hint the runtime ignores, exactly like the VM (PHASE 6c).
+      cg.movImm(X64Reg::Rdi, instr.c);
+      cg.callLabel(rt.tableNew);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
     case OpCode::GETTABLE:
+      // R[a] = R[b][R[c]] (dynamic index) or R[b].<name> (constant member name,
+      // encoded as `-c - 1`). The name form loads the string constant into
+      // rdx:rcx as a value, so both paths share one helper.
+      loadValue(cg, instr.b, X64Reg::Rdi, X64Reg::Rsi);
+      if (instr.c >= 0) {
+        loadValue(cg, instr.c, X64Reg::Rdx, X64Reg::Rcx);
+        cg.callLabel(rt.tableGet);
+      } else {
+        loadMemberName(cg, proto, instr.c, X64Reg::Rdx, X64Reg::Rcx, stringConstants);
+        cg.callLabel(rt.memberGet);
+      }
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
     case OpCode::SETTABLE:
-      unsupported("NEWTABLE/GETTABLE/SETTABLE", "PHASE 7c.3");
-    case OpCode::IN:
-      unsupported("IN", "PHASE 7c.3");
-    case OpCode::ITER:
-      unsupported("ITER", "PHASE 7c.3");
+      // R[b][R[c]] = R[a] or R[b].<name> = R[a]. The value goes in r8:r9 (the
+      // third `AotValue`), after the object (rdi:rsi) and the index (rdx:rcx).
+      loadValue(cg, instr.b, X64Reg::Rdi, X64Reg::Rsi);
+      if (instr.c >= 0) {
+        loadValue(cg, instr.c, X64Reg::Rdx, X64Reg::Rcx);
+        loadValue(cg, instr.a, X64Reg::R8, X64Reg::R9);
+        cg.callLabel(rt.tableSet);
+      } else {
+        loadMemberName(cg, proto, instr.c, X64Reg::Rdx, X64Reg::Rcx, stringConstants);
+        loadValue(cg, instr.a, X64Reg::R8, X64Reg::R9);
+        cg.callLabel(rt.memberSet);
+      }
+      break;
+    case OpCode::IN: {
+      // R[a] = R[b] in R[c]: the needle in rdi:rsi, the haystack in rdx:rcx.
+      loadValue(cg, instr.b, X64Reg::Rdi, X64Reg::Rsi);
+      loadValue(cg, instr.c, X64Reg::Rdx, X64Reg::Rcx);
+      cg.callLabel(rt.contains);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
+    case OpCode::ITER: {
+      // R[a] = the next item; `instr.jump` holds the register that receives the
+      // done flag (the compiler's private convention, see `compileForIn`). The
+      // iterable is R[b], the cursor R[c]; `jolt_iter_next` takes the cursor's
+      // address (rdi) and the iterable by value (rsi:rdx, the second
+      // `AotValue`), returns the item in rax:rdx and the flag in r8.
+      loadValue(cg, instr.b, X64Reg::Rsi, X64Reg::Rdx);
+      cg.leaMem(X64Reg::Rdi, kFileBase, slotOffset(instr.c));
+      cg.callLabel(rt.iterNext);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      cg.movImmToMem(kFileBase, slotOffset(instr.jump), static_cast<std::int64_t>(AotTag::Bool));
+      cg.movToMem(kFileBase, slotOffset(instr.jump) + 8, X64Reg::R8);
+      break;
+    }
   }
 }
 
@@ -680,6 +741,9 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
       {"print", rt.printBuiltin},
       {"write", rt.writeBuiltin},
       {"eprint", rt.eprintBuiltin},
+      // The hidden `$mapValue` helper the compiler emits for `for k, v in map`.
+      // Its name contains `$`, so user code cannot shadow it.
+      {"$mapValue", rt.mapValueBuiltin},
   };
 
   const GlobalSlots globals = collectGlobals(protos, builtins);

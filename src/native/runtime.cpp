@@ -33,6 +33,19 @@ constexpr std::int64_t kTagFloat = static_cast<std::int64_t>(AotTag::Float);
 constexpr std::int64_t kTagDouble = static_cast<std::int64_t>(AotTag::Double);
 constexpr std::int64_t kTagStr = static_cast<std::int64_t>(AotTag::Str);
 constexpr std::int64_t kTagFunc = static_cast<std::int64_t>(AotTag::Func);
+constexpr std::int64_t kTagArray = static_cast<std::int64_t>(AotTag::Array);
+constexpr std::int64_t kTagMap = static_cast<std::int64_t>(AotTag::Map);
+
+// Field offsets of the collection headers (see `native/value.h`). Arrays and
+// maps share the same three-word header (length, capacity, block), so one set
+// of offsets serves both; a map entry is a key pointer followed by a value.
+constexpr std::int64_t kTableLengthOffset = 0;
+constexpr std::int64_t kTableCapacityOffset = 8;
+constexpr std::int64_t kTableBlockOffset = 16;
+constexpr std::int64_t kArrayItemSize = static_cast<std::int64_t>(sizeof(AotValue));
+constexpr std::int64_t kMapEntrySize = static_cast<std::int64_t>(kAotMapEntrySize);
+constexpr std::int64_t kMapEntryKeyOffset = 0;
+constexpr std::int64_t kMapEntryValueOffset = 8;
 
 // Byte offset of a string's first byte from its `AotString` header (see
 // `native/value.h`): the length is an 8-byte word, the bytes follow.
@@ -86,6 +99,56 @@ void epilogue(CodeGen& cg) {
 struct DataBlob {
   CodeGen::Label label;
   std::string text;
+};
+
+// Everything the collection helpers (PHASE 7c.3a) need from the surrounding
+// runtime: the labels of the helpers they call and the error/format text they
+// reference. Bundled so the emitters take one argument instead of twenty.
+struct CollectionEnv {
+  CodeGen::Label alloc;
+  CodeGen::Label fail;
+  CodeGen::Label write;
+  CodeGen::Label writeInt;
+  CodeGen::Label formatDouble;
+  CodeGen::Label strEq;        // long jolt_str_eq(AotString* a, AotString* b)
+  CodeGen::Label mapFind;      // long jolt_map_find(AotMap* m, AotString* k)
+  CodeGen::Label blockEnsure;  // long jolt_block_ensure(void* h, long n, long itemSize)
+  CodeGen::Label utf8Len;      // long jolt_utf8_len(AotString* s)
+  CodeGen::Label utf8CharAt;   // (AotString*, long) -> char* in rax, length in rdx
+  CodeGen::Label compare;      // AotValue jolt_compare(AotValue, AotValue, long)
+  CodeGen::Label rawPrint;     // void jolt_print_value_raw(AotValue)
+  CodeGen::Label printRepr;    // void jolt_print_repr(AotValue, long depth)
+  CodeGen::Label printStrEsc;  // void jolt_print_str_escaped(AotString*)
+  CodeGen::Label lengthConst;  // data: the string "length"
+  const DataBlob* msgOom;
+  const DataBlob* msgArrayIndexType;
+  const DataBlob* msgIndexRange;
+  const DataBlob* msgMapKeyType;
+  const DataBlob* msgBadIndex;
+  const DataBlob* msgNoMember;
+  const DataBlob* msgImmutable;
+  const DataBlob* msgBadAssign;
+  const DataBlob* msgBadField;
+  const DataBlob* msgBadIn;
+  const DataBlob* msgMapValue;
+  const DataBlob* textTrue;
+  const DataBlob* textFalse;
+  const DataBlob* textNil;
+  const DataBlob* textFunc;
+  const DataBlob* textComma;
+  const DataBlob* textColon;
+  const DataBlob* textOpenBracket;
+  const DataBlob* textCloseBracket;
+  const DataBlob* textOpenBrace;
+  const DataBlob* textCloseBrace;
+  const DataBlob* textEllipsis;
+  const DataBlob* textQuote;
+  const DataBlob* textEscQuote;
+  const DataBlob* textEscBackslash;
+  const DataBlob* textEscNL;
+  const DataBlob* textEscTab;
+  const DataBlob* textEscCR;
+  const DataBlob* textHexPrefix;
 };
 
 // Emits `jolt_write(1, rdi, rsi)`: writes `rsi` bytes from `rdi` to stdout.
@@ -203,7 +266,8 @@ void emitTruthy(CodeGen& cg, CodeGen::Label label) {
 // embedded dtoa (`jolt_format_double`) into an arena buffer, then written.
 void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                         CodeGen::Label fail, CodeGen::Label writeInt,
-                        CodeGen::Label formatDouble, const DataBlob& badValue,
+                        CodeGen::Label formatDouble, CodeGen::Label printRepr,
+                        const DataBlob& badValue,
                         const DataBlob& textTrue, const DataBlob& textFalse,
                         const DataBlob& textNil, const DataBlob& textNewline,
                         std::int64_t fd, bool newline) {
@@ -212,6 +276,7 @@ void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeL
   CodeGen::Label asNil = cg.newLabel();
   CodeGen::Label asStr = cg.newLabel();
   CodeGen::Label asNum = cg.newLabel();
+  CodeGen::Label asRepr = cg.newLabel();
   CodeGen::Label boolFalse = cg.newLabel();
   CodeGen::Label done = cg.newLabel();
 
@@ -232,7 +297,21 @@ void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeL
   cg.jcc(Jcc::Eq, asNum);
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagDouble));
   cg.jcc(Jcc::Eq, asNum);
+  // Functions and collections are rendered by the recursive repr helper, which
+  // quotes nested strings, prints arrays as `[a, b]` and maps as `{k: v}`.
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFunc));
+  cg.jcc(Jcc::Eq, asRepr);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, asRepr);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, asRepr);
   emitFailCall(cg, fail, badValue);
+
+  cg.bind(asRepr);
+  cg.xorReg(Rdx, Rdx);          // depth = 0
+  cg.movImm(Rcx, fd);           // target fd for the nested render
+  cg.callLabel(printRepr);
+  cg.jmp(done);
 
   cg.bind(asInt);
   cg.movReg(Rdi, Rsi);
@@ -298,11 +377,12 @@ void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeL
 // `void jolt_print_value(AotValue v)`: prints the value followed by a newline.
 void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                     CodeGen::Label fail, CodeGen::Label writeInt,
-                    CodeGen::Label formatDouble, const DataBlob& badValue,
+                    CodeGen::Label formatDouble, CodeGen::Label printRepr,
+                    const DataBlob& badValue,
                     const DataBlob& textTrue, const DataBlob& textFalse,
                     const DataBlob& textNil, const DataBlob& textNewline) {
-  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, badValue,
-                     textTrue, textFalse, textNil, textNewline, /*fd=*/1,
+  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, printRepr,
+                     badValue, textTrue, textFalse, textNil, textNewline, /*fd=*/1,
                      /*newline=*/true);
 }
 
@@ -310,11 +390,12 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
 // newline, to stdout, for the `print`/`write` builtins.
 void emitPrintValueRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                        CodeGen::Label fail, CodeGen::Label writeInt,
-                       CodeGen::Label formatDouble, const DataBlob& badValue,
+                       CodeGen::Label formatDouble, CodeGen::Label printRepr,
+                       const DataBlob& badValue,
                        const DataBlob& textTrue, const DataBlob& textFalse,
                        const DataBlob& textNil, const DataBlob& textNewline) {
-  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, badValue,
-                     textTrue, textFalse, textNil, textNewline, /*fd=*/1,
+  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, printRepr,
+                     badValue, textTrue, textFalse, textNil, textNewline, /*fd=*/1,
                      /*newline=*/false);
 }
 
@@ -322,11 +403,12 @@ void emitPrintValueRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLa
 // newline, to stderr, for the `eprint` builtin.
 void emitPrintValueErrRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                           CodeGen::Label fail, CodeGen::Label writeInt,
-                          CodeGen::Label formatDouble, const DataBlob& badValue,
+                          CodeGen::Label formatDouble, CodeGen::Label printRepr,
+                          const DataBlob& badValue,
                           const DataBlob& textTrue, const DataBlob& textFalse,
                           const DataBlob& textNil, const DataBlob& textNewline) {
-  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, badValue,
-                     textTrue, textFalse, textNil, textNewline, /*fd=*/2,
+  emitPrintValueCore(cg, label, writeLabel, fail, writeInt, formatDouble, printRepr,
+                     badValue, textTrue, textFalse, textNil, textNewline, /*fd=*/2,
                      /*newline=*/false);
 }
 
@@ -1413,6 +1495,1395 @@ void emitArityError(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, message);
 }
 
+// `long jolt_str_eq(AotString* a, AotString* b)`: 1 when the two strings have
+// equal length and equal bytes. Map keys are compared by content, so this is
+// the primitive the map helpers build on. A leaf: it calls nothing and uses no
+// callee-saved register.
+void emitStrEq(CodeGen& cg, CodeGen::Label label) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label same = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  cg.movFromMem(R8, Rdi, 0);  // lenA
+  cg.movFromMem(R9, Rsi, 0);  // lenB
+  cg.xorReg(Rax, Rax);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ne, done);
+  cg.xorReg(R10, R10);  // index
+  cg.bind(loop);
+  cg.cmpReg(R10, R8);
+  cg.jcc(Jcc::Ae, same);
+  cg.movReg(R11, R10);
+  cg.addReg(R11, Rdi);
+  cg.movzxFromMem(R11, R11, kStringDataOffset);  // a byte
+  cg.movReg(Rcx, R10);
+  cg.addReg(Rcx, Rsi);
+  cg.movzxFromMem(Rcx, Rcx, kStringDataOffset);  // b byte
+  cg.cmpReg(R11, Rcx);
+  cg.jcc(Jcc::Ne, done);
+  cg.addImm32(R10, 1);
+  cg.jmp(loop);
+  cg.bind(same);
+  cg.movImm(Rax, 1);
+  cg.bind(done);
+  cg.retInsn();
+}
+
+// `long jolt_map_find(AotMap* m, AotString* key)`: the index of `key` in the
+// map's entry array, or -1. A linear scan keeps the layout simple; a hash index
+// can be added later without changing the contract. The loop state survives the
+// `strEq` call on the stack, since that call clobbers r8-r11.
+void emitMapFind(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label found = cg.newLabel();
+  CodeGen::Label notFound = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 16);
+  cg.movReg(Rbx, Rdi);  // m
+  cg.movReg(R12, Rsi);  // key
+  cg.movFromMem(Rax, Rbx, kTableLengthOffset);
+  cg.movToMem(Rbp, -24, Rax);  // len
+  cg.movImmToMem(Rbp, -32, 0); // i
+  cg.bind(loop);
+  cg.movFromMem(R8, Rbp, -32);  // i
+  cg.movFromMem(R9, Rbp, -24);  // len
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, notFound);
+  cg.movReg(R10, R8);
+  cg.imulImm32(R10, R10, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R11, Rbx, kTableBlockOffset);
+  cg.addReg(R10, R11);              // entry = entries + i*24
+  cg.movFromMem(Rdi, R10, kMapEntryKeyOffset);
+  cg.movReg(Rsi, R12);
+  cg.callLabel(env.strEq);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ne, found);
+  cg.movFromMem(R8, Rbp, -32);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, -32, R8);  // i++
+  cg.jmp(loop);
+  cg.bind(found);
+  cg.movFromMem(Rax, Rbp, -32);  // index
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(notFound);
+  cg.movImm(Rax, -1);
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
+// `long jolt_block_ensure(void* header, long needed, long itemSize)`: returns a
+// block with room for `needed` items of `itemSize` bytes. The existing block is
+// returned when its capacity already suffices; otherwise a fresh block of the
+// next power-of-two capacity is allocated from the arena, the live items are
+// copied, and the header's block/capacity are updated. Returns null on
+// exhaustion. `header` is the 3-word array/map header (length, capacity, block).
+void emitBlockEnsure(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label grow = cg.newLabel();
+  CodeGen::Label growLoop = cg.newLabel();
+  CodeGen::Label growLoopDone = cg.newLabel();
+  CodeGen::Label haveCapacity = cg.newLabel();
+  CodeGen::Label noCopy = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 16);
+  cg.movReg(Rbx, Rdi);  // header
+  cg.movReg(R12, Rsi);  // needed
+  cg.movToMem(Rbp, -24, Rdx);  // itemSize
+  cg.movFromMem(R8, Rbx, kTableCapacityOffset);
+  cg.cmpReg(R8, R12);
+  cg.jcc(Jcc::Ae, haveCapacity);
+  // newCap = cap == 0 ? 8 : cap * 2; while (newCap < needed) newCap *= 2.
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, grow);
+  cg.addReg(R8, R8);
+  cg.jmp(growLoop);
+  cg.bind(grow);
+  cg.movImm(R8, 8);
+  cg.bind(growLoop);
+  cg.cmpReg(R8, R12);
+  cg.jcc(Jcc::Ae, growLoopDone);
+  cg.addReg(R8, R8);
+  cg.jmp(growLoop);
+  cg.bind(growLoopDone);
+  cg.movToMem(Rbp, -32, R8);  // newCap
+  // size = newCap * itemSize
+  cg.movReg(Rdi, R8);
+  cg.movFromMem(Rax, Rbp, -24);
+  cg.imulReg(Rdi, Rax);
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movReg(R10, Rax);  // new block
+  // bytes = length * itemSize
+  cg.movFromMem(Rcx, Rbx, kTableLengthOffset);
+  cg.movFromMem(Rax, Rbp, -24);
+  cg.imulReg(Rcx, Rax);
+  cg.testReg(Rcx);
+  cg.jcc(Jcc::Eq, noCopy);
+  cg.movReg(Rdi, R10);
+  cg.movFromMem(Rsi, Rbx, kTableBlockOffset);
+  cg.repMovsb();
+  cg.bind(noCopy);
+  cg.movToMem(Rbx, kTableBlockOffset, R10);
+  cg.movFromMem(Rax, Rbp, -32);
+  cg.movToMem(Rbx, kTableCapacityOffset, Rax);
+  cg.movReg(Rax, R10);
+  cg.jmp(done);
+  cg.bind(haveCapacity);
+  cg.movFromMem(Rax, Rbx, kTableBlockOffset);
+  cg.jmp(done);
+  cg.bind(oom);
+  cg.xorReg(Rax, Rax);
+  cg.bind(done);
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
+// `long jolt_utf8_len(AotString* s)`: the number of UTF-8 code points, i.e. the
+// count of bytes that are not continuation bytes (0b10xxxxxx). A leaf.
+void emitUtf8Len(CodeGen& cg, CodeGen::Label label) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label skip = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  cg.movFromMem(R8, Rdi, 0);  // length in bytes
+  cg.xorReg(Rax, Rax);        // code-point count
+  cg.xorReg(R9, R9);          // index
+  cg.bind(loop);
+  cg.cmpReg(R9, R8);
+  cg.jcc(Jcc::Ae, done);
+  cg.movReg(R10, R9);
+  cg.addReg(R10, Rdi);
+  cg.movzxFromMem(R10, R10, kStringDataOffset);
+  cg.andImm32(R10, 0xC0);
+  cg.cmpImm32(R10, 0x80);
+  cg.jcc(Jcc::Eq, skip);
+  cg.addImm32(Rax, 1);
+  cg.bind(skip);
+  cg.addImm32(R9, 1);
+  cg.jmp(loop);
+  cg.bind(done);
+  cg.retInsn();
+}
+
+// Emits the length of the UTF-8 character whose lead byte is in `lead` (r8) into
+// `len` (r9). 1/2/3/4 from the high bits of the lead byte. Clobbers r10.
+void emitUtf8LeadLen(CodeGen& cg, X64Reg lead, X64Reg len, X64Reg scratch) {
+  CodeGen::Label one = cg.newLabel();
+  CodeGen::Label two = cg.newLabel();
+  CodeGen::Label three = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  cg.movReg(scratch, lead);
+  cg.andImm32(scratch, 0x80);
+  cg.testReg(scratch);
+  cg.jcc(Jcc::Eq, one);  // < 0x80
+  cg.movReg(scratch, lead);
+  cg.andImm32(scratch, 0xE0);
+  cg.cmpImm32(scratch, 0xC0);
+  cg.jcc(Jcc::Eq, two);
+  cg.movReg(scratch, lead);
+  cg.andImm32(scratch, 0xF0);
+  cg.cmpImm32(scratch, 0xE0);
+  cg.jcc(Jcc::Eq, three);
+  cg.movImm(len, 4);
+  cg.jmp(done);
+  cg.bind(one);
+  cg.movImm(len, 1);
+  cg.jmp(done);
+  cg.bind(two);
+  cg.movImm(len, 2);
+  cg.jmp(done);
+  cg.bind(three);
+  cg.movImm(len, 3);
+  cg.bind(done);
+}
+
+// `(AotString*, long index) -> (char* in rax, byte length in rdx)`: the bytes of
+// the `index`-th UTF-8 code point, or rax = 0 when the index is past the end.
+// A leaf used by string indexing and string iteration.
+void emitUtf8CharAt(CodeGen& cg, CodeGen::Label label) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label found = cg.newLabel();
+  CodeGen::Label notFound = cg.newLabel();
+
+  cg.bind(label);
+  cg.movFromMem(R8, Rdi, 0);           // total bytes
+  cg.movReg(R9, Rdi);
+  cg.addImm32(R9, static_cast<std::int32_t>(kStringDataOffset));  // cursor
+  cg.movReg(R10, R9);
+  cg.addReg(R10, R8);                  // end
+  cg.xorReg(R11, R11);                 // code-point index
+  cg.bind(loop);
+  cg.cmpReg(R9, R10);
+  cg.jcc(Jcc::Ae, notFound);
+  cg.movzxFromMem(Rcx, R9, 0);         // lead byte
+  emitUtf8LeadLen(cg, Rcx, Rdx, R8);
+  cg.cmpReg(R11, Rsi);
+  cg.jcc(Jcc::Eq, found);
+  cg.addReg(R9, Rdx);
+  cg.addImm32(R11, 1);
+  cg.jmp(loop);
+  cg.bind(found);
+  cg.movReg(Rax, R9);
+  cg.retInsn();
+  cg.bind(notFound);
+  cg.xorReg(Rax, Rax);
+  cg.xorReg(Rdx, Rdx);
+  cg.retInsn();
+}
+
+// `AotValue jolt_table_new(long kind)`: allocate a zeroed array (kind 0) or map
+// (kind 1) header in the arena. The items/entries block is allocated lazily by
+// `jolt_block_ensure` on the first store, so an empty collection costs one
+// allocation.
+void emitTableNew(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.movReg(Rbx, Rdi);  // kind
+  cg.movImm(Rdi, static_cast<std::int64_t>(kAotArrayHeaderSize));
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movImmToMem(Rax, kTableLengthOffset, 0);
+  cg.movImmToMem(Rax, kTableCapacityOffset, 0);
+  cg.movImmToMem(Rax, kTableBlockOffset, 0);
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagArray);
+  cg.testReg(Rbx);
+  cg.jcc(Jcc::Eq, done);
+  cg.movImm(Rax, kTagMap);
+  cg.bind(done);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(oom);
+  emitFailCall(cg, env.fail, *env.msgOom);
+}
+
+// `AotValue jolt_table_get(AotValue obj, AotValue index)`: `obj[index]` for an
+// array (int index, negative from the end), a string (int code-point index) or
+// a map (string key, missing key yields nil), mirroring `ops::indexGet`.
+void emitTableGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label arr = cg.newLabel();
+  CodeGen::Label str = cg.newLabel();
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label arrNonNeg = cg.newLabel();
+  CodeGen::Label mapMiss = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label failArrayType = cg.newLabel();
+  CodeGen::Label failStrType = cg.newLabel();
+  CodeGen::Label failMapType = cg.newLabel();
+  CodeGen::Label failRange = cg.newLabel();
+  CodeGen::Label failIndex = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rdi);              // obj tag
+  cg.movReg(R12, Rsi);              // obj payload
+  cg.movToMem(Rbp, -24, Rdx);       // index tag
+  cg.movToMem(Rbp, -32, Rcx);       // index payload
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, arr);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, str);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  cg.jmp(failIndex);
+
+  // --- array[index] ---
+  cg.bind(arr);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, failArrayType);
+  cg.movFromMem(R8, Rbp, -32);      // i
+  cg.movFromMem(R9, R12, kTableLengthOffset);  // len
+  cg.testReg(R8);
+  cg.jcc(Jcc::Ge, arrNonNeg);
+  cg.addReg(R8, R9);                // negative index from the end
+  cg.bind(arrNonNeg);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Lt, failRange);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ge, failRange);
+  cg.shlImm8(R8, 4);                // i * 16
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, R8);
+  cg.movFromMem(Rax, R10, 0);
+  cg.movFromMem(Rdx, R10, 8);
+  cg.jmp(done);
+
+  // --- string[index] ---
+  cg.bind(str);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, failStrType);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -32);
+  cg.callLabel(env.utf8CharAt);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, failRange);
+  cg.movToMem(Rbp, -40, Rax);       // char pointer
+  cg.movToMem(Rbp, -48, Rdx);       // char byte length
+  cg.movReg(Rdi, Rdx);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movFromMem(Rcx, Rbp, -48);
+  cg.movToMem(Rax, 0, Rcx);         // length word
+  cg.movReg(Rdi, Rax);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.movFromMem(Rsi, Rbp, -40);
+  cg.movFromMem(Rcx, Rbp, -48);
+  cg.repMovsb();
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagStr);
+  cg.jmp(done);
+
+  // --- map[index] ---
+  cg.bind(map);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, failMapType);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -32);
+  cg.callLabel(env.mapFind);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Lt, mapMiss);
+  cg.imulImm32(Rax, Rax, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, Rax);
+  cg.movFromMem(Rax, R10, kMapEntryValueOffset);
+  cg.movFromMem(Rdx, R10, kMapEntryValueOffset + 8);
+  cg.jmp(done);
+  cg.bind(mapMiss);
+  cg.xorReg(Rax, Rax);
+  cg.xorReg(Rdx, Rdx);
+  cg.jmp(done);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+
+  cg.bind(failArrayType);
+  emitFailCall(cg, env.fail, *env.msgArrayIndexType);
+  cg.bind(failStrType);
+  emitFailCall(cg, env.fail, *env.msgArrayIndexType);
+  cg.bind(failMapType);
+  emitFailCall(cg, env.fail, *env.msgMapKeyType);
+  cg.bind(failRange);
+  emitFailCall(cg, env.fail, *env.msgIndexRange);
+  cg.bind(failIndex);
+  emitFailCall(cg, env.fail, *env.msgBadIndex);
+  cg.bind(oom);
+  emitFailCall(cg, env.fail, *env.msgOom);
+}
+
+// `AotValue jolt_member_get(AotValue obj, AotValue name)`: `obj.name` for a map
+// (the entry, else `length`, else nil), an array (`.length`) or a string
+// (`.length`). Methods are not bound yet, so a miss on an array/string is the
+// "no member" error, exactly as `ops::memberGet` reports it.
+void emitMemberGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label arr = cg.newLabel();
+  CodeGen::Label str = cg.newLabel();
+  CodeGen::Label mapMiss = cg.newLabel();
+  CodeGen::Label isLength = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label failMember = cg.newLabel();
+  CodeGen::Label failIndex = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 16);
+  cg.movReg(Rbx, Rdi);          // obj tag
+  cg.movReg(R12, Rsi);          // obj payload
+  cg.movToMem(Rbp, -24, Rcx);   // name payload (AotString*)
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, arr);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, str);
+  cg.jmp(failMember);
+
+  cg.bind(map);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -24);
+  cg.callLabel(env.mapFind);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Lt, mapMiss);
+  cg.imulImm32(Rax, Rax, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, Rax);
+  cg.movFromMem(Rax, R10, kMapEntryValueOffset);
+  cg.movFromMem(Rdx, R10, kMapEntryValueOffset + 8);
+  cg.jmp(done);
+  cg.bind(mapMiss);
+  cg.movFromMem(Rdi, Rbp, -24);
+  cg.leaRipLabel(Rsi, env.lengthConst);
+  cg.callLabel(env.strEq);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ne, isLength);
+  cg.xorReg(Rax, Rax);          // no such member -> nil (methods deferred)
+  cg.xorReg(Rdx, Rdx);
+  cg.jmp(done);
+
+  cg.bind(arr);
+  cg.movFromMem(Rdi, Rbp, -24);
+  cg.leaRipLabel(Rsi, env.lengthConst);
+  cg.callLabel(env.strEq);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, failMember);
+  cg.movFromMem(Rdx, R12, kTableLengthOffset);
+  cg.movImm(Rax, kTagInt);
+  cg.jmp(done);
+
+  cg.bind(str);
+  cg.movFromMem(Rdi, Rbp, -24);
+  cg.leaRipLabel(Rsi, env.lengthConst);
+  cg.callLabel(env.strEq);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, failMember);
+  cg.movReg(Rdi, R12);
+  cg.callLabel(env.utf8Len);
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagInt);
+  cg.jmp(done);
+
+  cg.bind(isLength);
+  cg.movFromMem(Rdx, R12, kTableLengthOffset);
+  cg.movImm(Rax, kTagInt);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(failMember);
+  emitFailCall(cg, env.fail, *env.msgNoMember);
+  cg.bind(failIndex);
+  emitFailCall(cg, env.fail, *env.msgBadIndex);
+}
+
+// `void jolt_table_set(AotValue obj, AotValue index, AotValue value)`:
+// `obj[index] = value`. An array index equal to the length appends; a map key
+// that exists is overwritten, otherwise appended. A string is immutable,
+// mirroring `ops::indexSet`.
+void emitTableSet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label arr = cg.newLabel();
+  CodeGen::Label arrAppend = cg.newLabel();
+  CodeGen::Label arrStore = cg.newLabel();
+  CodeGen::Label arrNonNeg = cg.newLabel();
+  CodeGen::Label arrRange = cg.newLabel();
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label mapAppend = cg.newLabel();
+  CodeGen::Label mapStore = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label failArrType = cg.newLabel();
+  CodeGen::Label failMapType = cg.newLabel();
+  CodeGen::Label failImmutable = cg.newLabel();
+  CodeGen::Label failAssign = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rdi);              // obj tag
+  cg.movReg(R12, Rsi);              // obj payload
+  cg.movToMem(Rbp, -24, Rdx);       // index tag
+  cg.movToMem(Rbp, -32, Rcx);       // index payload
+  cg.movToMem(Rbp, -40, R8);        // value tag
+  cg.movToMem(Rbp, -48, R9);        // value payload
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, arr);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, failImmutable);
+  cg.jmp(failAssign);
+
+  cg.bind(arr);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, failArrType);
+  cg.movFromMem(R8, Rbp, -32);                 // i
+  cg.movFromMem(R9, R12, kTableLengthOffset);  // len
+  cg.testReg(R8);
+  cg.jcc(Jcc::Ge, arrNonNeg);
+  cg.addReg(R8, R9);
+  cg.bind(arrNonNeg);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Eq, arrAppend);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Lt, arrRange);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ge, arrRange);
+  cg.jmp(arrStore);
+  cg.bind(arrAppend);
+  // Grow to len + 1, then store at index len and bump the length.
+  cg.movReg(Rdi, R12);
+  cg.movReg(Rsi, R9);
+  cg.addImm32(Rsi, 1);
+  cg.movImm(Rdx, kArrayItemSize);
+  cg.callLabel(env.blockEnsure);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movFromMem(R8, R12, kTableLengthOffset);
+  cg.movFromMem(R9, Rbp, -40);
+  cg.movFromMem(R10, Rbp, -48);
+  cg.movReg(R11, R8);
+  cg.shlImm8(R11, 4);
+  cg.addReg(R11, Rax);
+  cg.movToMem(R11, 0, R9);
+  cg.movToMem(R11, 8, R10);
+  cg.addImm32(R8, 1);
+  cg.movToMem(R12, kTableLengthOffset, R8);
+  cg.jmp(done);
+  cg.bind(arrStore);
+  cg.shlImm8(R8, 4);
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, R8);
+  cg.movFromMem(R9, Rbp, -40);
+  cg.movFromMem(R11, Rbp, -48);
+  cg.movToMem(R10, 0, R9);
+  cg.movToMem(R10, 8, R11);
+  cg.jmp(done);
+
+  cg.bind(map);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, failMapType);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -32);
+  cg.callLabel(env.mapFind);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Lt, mapAppend);
+  cg.imulImm32(Rax, Rax, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, Rax);
+  cg.addImm32(R10, static_cast<std::int32_t>(kMapEntryValueOffset));
+  cg.jmp(mapStore);
+  cg.bind(mapAppend);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, R12, kTableLengthOffset);
+  cg.addImm32(Rsi, 1);
+  cg.movImm(Rdx, kMapEntrySize);
+  cg.callLabel(env.blockEnsure);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movFromMem(R8, R12, kTableLengthOffset);
+  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
+  cg.addReg(R8, Rax);
+  cg.movFromMem(R9, Rbp, -32);
+  cg.movToMem(R8, kMapEntryKeyOffset, R9);
+  cg.addImm32(R8, static_cast<std::int32_t>(kMapEntryValueOffset));
+  cg.movFromMem(R9, R12, kTableLengthOffset);
+  cg.addImm32(R9, 1);
+  cg.movToMem(R12, kTableLengthOffset, R9);
+  cg.movReg(R10, R8);
+  cg.bind(mapStore);
+  cg.movFromMem(R9, Rbp, -40);
+  cg.movFromMem(R11, Rbp, -48);
+  cg.movToMem(R10, 0, R9);
+  cg.movToMem(R10, 8, R11);
+  cg.jmp(done);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(failArrType);
+  emitFailCall(cg, env.fail, *env.msgArrayIndexType);
+  cg.bind(failMapType);
+  emitFailCall(cg, env.fail, *env.msgMapKeyType);
+  cg.bind(failImmutable);
+  emitFailCall(cg, env.fail, *env.msgImmutable);
+  cg.bind(failAssign);
+  emitFailCall(cg, env.fail, *env.msgBadAssign);
+  cg.bind(arrRange);
+  emitFailCall(cg, env.fail, *env.msgIndexRange);
+  cg.bind(oom);
+  emitFailCall(cg, env.fail, *env.msgOom);
+}
+
+// `void jolt_member_set(AotValue obj, AotValue name, AotValue value)`:
+// `obj.name = value`, valid only on a map (mirrors `ops::memberSet`).
+void emitMemberSet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label append = cg.newLabel();
+  CodeGen::Label store = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label failField = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rdi);              // obj tag
+  cg.movReg(R12, Rsi);              // obj payload
+  cg.movToMem(Rbp, -24, Rcx);       // name payload (AotString*)
+  cg.movToMem(Rbp, -40, R8);        // value tag
+  cg.movToMem(Rbp, -48, R9);        // value payload
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  cg.jmp(failField);
+
+  cg.bind(map);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -24);
+  cg.callLabel(env.mapFind);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Lt, append);
+  cg.imulImm32(Rax, Rax, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, Rax);
+  cg.addImm32(R10, static_cast<std::int32_t>(kMapEntryValueOffset));
+  cg.jmp(store);
+  cg.bind(append);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, R12, kTableLengthOffset);
+  cg.addImm32(Rsi, 1);
+  cg.movImm(Rdx, kMapEntrySize);
+  cg.callLabel(env.blockEnsure);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movFromMem(R8, R12, kTableLengthOffset);
+  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
+  cg.addReg(R8, Rax);
+  cg.movFromMem(R9, Rbp, -24);
+  cg.movToMem(R8, kMapEntryKeyOffset, R9);
+  cg.addImm32(R8, static_cast<std::int32_t>(kMapEntryValueOffset));
+  cg.movFromMem(R9, R12, kTableLengthOffset);
+  cg.addImm32(R9, 1);
+  cg.movToMem(R12, kTableLengthOffset, R9);
+  cg.movReg(R10, R8);
+  cg.bind(store);
+  cg.movFromMem(R9, Rbp, -40);
+  cg.movFromMem(R11, Rbp, -48);
+  cg.movToMem(R10, 0, R9);
+  cg.movToMem(R10, 8, R11);
+  cg.bind(done);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(failField);
+  emitFailCall(cg, env.fail, *env.msgBadField);
+  cg.bind(oom);
+  emitFailCall(cg, env.fail, *env.msgOom);
+}
+
+// `AotValue jolt_contains(AotValue needle, AotValue haystack)`: the `in`
+// operator for arrays (value equality via `jolt_compare`), maps (string key)
+// and strings (substring). Ranges are not lowered yet.
+void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label arr = cg.newLabel();
+  CodeGen::Label arrLoop = cg.newLabel();
+  CodeGen::Label arrFound = cg.newLabel();
+  CodeGen::Label arrMiss = cg.newLabel();
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label mapFound = cg.newLabel();
+  CodeGen::Label str = cg.newLabel();
+  CodeGen::Label strLoop = cg.newLabel();
+  CodeGen::Label strOuter = cg.newLabel();
+  CodeGen::Label strNext = cg.newLabel();
+  CodeGen::Label strFound = cg.newLabel();
+  CodeGen::Label strMiss = cg.newLabel();
+  CodeGen::Label trueDone = cg.newLabel();
+  CodeGen::Label falseDone = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label failType = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 48);
+  cg.movReg(Rbx, Rdi);              // needle tag
+  cg.movReg(R12, Rsi);              // needle payload
+  cg.movToMem(Rbp, -24, Rdx);       // haystack tag
+  cg.movToMem(Rbp, -32, Rcx);       // haystack payload
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, arr);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, str);
+  cg.jmp(failType);
+
+  cg.bind(arr);
+  cg.movFromMem(R8, Rbp, -32);      // array ptr
+  cg.movImmToMem(Rbp, -40, 0);      // index
+  cg.movFromMem(R9, R8, kTableLengthOffset);
+  cg.movToMem(Rbp, -48, R9);        // len
+  cg.bind(arrLoop);
+  cg.movFromMem(R10, Rbp, -40);
+  cg.movFromMem(R11, Rbp, -48);
+  cg.cmpReg(R10, R11);
+  cg.jcc(Jcc::Ae, arrMiss);
+  cg.movReg(R11, R10);
+  cg.shlImm8(R11, 4);
+  cg.movFromMem(R9, R8, kTableBlockOffset);
+  cg.addReg(R11, R9);
+  cg.movFromMem(Rdi, R11, 0);       // item tag
+  cg.movFromMem(Rsi, R11, 8);       // item payload
+  cg.movReg(Rdx, Rbx);
+  cg.movReg(Rcx, R12);
+  cg.movImm(R8, static_cast<std::int64_t>(AotCompareOp::Eq));
+  cg.callLabel(env.compare);
+  cg.testReg(Rdx);
+  cg.jcc(Jcc::Ne, arrFound);
+  cg.movFromMem(R10, Rbp, -40);
+  cg.addImm32(R10, 1);
+  cg.movToMem(Rbp, -40, R10);
+  cg.movFromMem(R8, Rbp, -32);
+  cg.jmp(arrLoop);
+
+  cg.bind(map);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, failType);
+  cg.movFromMem(Rdi, Rbp, -32);
+  cg.movReg(Rsi, R12);
+  cg.callLabel(env.mapFind);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ge, mapFound);
+  cg.jmp(falseDone);
+
+  cg.bind(str);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Ne, failType);
+  // Substring search: for each start in the haystack where the needle's first
+  // byte matches, compare the following bytes.
+  cg.movFromMem(R8, Rbp, -32);       // haystack AotString*
+  cg.movFromMem(R9, R12, 0);         // needle byte length
+  cg.testReg(R9);
+  cg.jcc(Jcc::Eq, strFound);         // an empty needle is always contained
+  cg.movImmToMem(Rbp, -40, 0);       // outer index
+  cg.bind(strOuter);
+  cg.movFromMem(R10, Rbp, -40);      // i
+  cg.movFromMem(R11, R8, 0);         // haystack length
+  cg.cmpReg(R10, R11);
+  cg.jcc(Jcc::Ae, strMiss);
+  // Compare needle[0] with haystack[i]; if equal, compare the rest.
+  cg.movReg(Rcx, R12);
+  cg.movzxFromMem(Rcx, Rcx, kStringDataOffset);
+  cg.movReg(Rdx, R10);
+  cg.addReg(Rdx, R8);
+  cg.movzxFromMem(Rdx, Rdx, kStringDataOffset);
+  cg.cmpReg(Rcx, Rdx);
+  cg.jcc(Jcc::Ne, strNext);
+  // Check that needle fits and every byte matches.
+  cg.movReg(R11, R10);
+  cg.addReg(R11, R9);
+  cg.movFromMem(Rcx, R8, 0);
+  cg.cmpReg(R11, Rcx);
+  cg.jcc(Jcc::A, strMiss);           // does not fit
+  cg.movImmToMem(Rbp, -48, 0);       // j
+  cg.bind(strLoop);
+  cg.movFromMem(R11, Rbp, -48);
+  cg.cmpReg(R11, R9);
+  cg.jcc(Jcc::Ae, strFound);
+  cg.movReg(Rcx, R11);
+  cg.addReg(Rcx, R12);
+  cg.movzxFromMem(Rcx, Rcx, kStringDataOffset);
+  cg.movReg(Rdx, R11);
+  cg.addReg(Rdx, R10);
+  cg.addReg(Rdx, R8);
+  cg.movzxFromMem(Rdx, Rdx, kStringDataOffset);
+  cg.cmpReg(Rcx, Rdx);
+  cg.jcc(Jcc::Ne, strNext);
+  cg.movFromMem(R11, Rbp, -48);
+  cg.addImm32(R11, 1);
+  cg.movToMem(Rbp, -48, R11);
+  cg.jmp(strLoop);
+  cg.bind(strNext);
+  cg.movFromMem(R10, Rbp, -40);
+  cg.addImm32(R10, 1);
+  cg.movToMem(Rbp, -40, R10);
+  cg.jmp(strOuter);
+
+  cg.bind(arrFound);
+  cg.bind(mapFound);
+  cg.bind(strFound);
+  cg.jmp(trueDone);
+  cg.bind(arrMiss);
+  cg.bind(strMiss);
+  cg.jmp(falseDone);
+
+  cg.bind(trueDone);
+  cg.movImm(Rax, kTagBool);
+  cg.movImm(Rdx, 1);
+  cg.jmp(done);
+  cg.bind(falseDone);
+  cg.movImm(Rax, kTagBool);
+  cg.xorReg(Rdx, Rdx);
+  cg.bind(done);
+  cg.addImm32(Rsp, 48);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(failType);
+  emitFailCall(cg, env.fail, *env.msgBadIn);
+}
+
+// `AotValue jolt_iter_next(AotValue* cursor, AotValue iterable)`: advance a
+// `for-in` cursor and return the item (rax:rdx) with the done flag in r8. The
+// cursor starts nil; it holds an int index afterwards. Arrays yield items, maps
+// yield keys and strings yield one code point, mirroring the VM's `ITER`.
+void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
+  CodeGen::Label zero = cg.newLabel();
+  CodeGen::Label arr = cg.newLabel();
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label str = cg.newLabel();
+  CodeGen::Label dispatch = cg.newLabel();
+  CodeGen::Label storeCursor = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label doneTrue = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label failType = cg.newLabel();
+  CodeGen::Label failState = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rdi);              // cursor pointer
+  cg.movReg(R12, Rdx);              // iterable payload
+  cg.movToMem(Rbp, -24, Rsi);       // iterable tag
+  cg.movFromMem(R8, Rbx, 0);        // cursor tag
+  cg.movFromMem(R9, Rbx, 8);        // cursor payload
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagNil));
+  cg.jcc(Jcc::Eq, zero);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, failState);
+  cg.jmp(dispatch);
+  cg.bind(zero);
+  cg.xorReg(R9, R9);
+  cg.bind(dispatch);
+  cg.movToMem(Rbp, -32, R9);        // index
+  cg.movFromMem(R8, Rbp, -24);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, arr);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, str);
+  cg.jmp(failType);
+
+  cg.bind(arr);
+  cg.movFromMem(R9, Rbp, -32);
+  cg.movFromMem(R10, R12, kTableLengthOffset);
+  cg.cmpReg(R9, R10);
+  cg.jcc(Jcc::Ae, doneTrue);
+  cg.movReg(R11, R9);
+  cg.shlImm8(R11, 4);
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R11, R10);
+  cg.movFromMem(Rax, R11, 0);
+  cg.movFromMem(Rdx, R11, 8);
+  cg.jmp(storeCursor);
+
+  cg.bind(map);
+  cg.movFromMem(R9, Rbp, -32);
+  cg.movFromMem(R10, R12, kTableLengthOffset);
+  cg.cmpReg(R9, R10);
+  cg.jcc(Jcc::Ae, doneTrue);
+  cg.imulImm32(R9, R9, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R9, R10);
+  cg.movImm(Rax, kTagStr);
+  cg.movFromMem(Rdx, R9, kMapEntryKeyOffset);
+  cg.jmp(storeCursor);
+
+  cg.bind(str);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -32);
+  cg.callLabel(env.utf8CharAt);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, doneTrue);
+  cg.movToMem(Rbp, -40, Rax);       // char pointer
+  cg.movToMem(Rbp, -48, Rdx);       // char byte length
+  cg.movReg(Rdi, Rdx);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movFromMem(Rcx, Rbp, -48);
+  cg.movToMem(Rax, 0, Rcx);
+  cg.movReg(Rdi, Rax);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.movFromMem(Rsi, Rbp, -40);
+  cg.movFromMem(Rcx, Rbp, -48);
+  cg.repMovsb();
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagStr);
+
+  cg.bind(storeCursor);
+  cg.movFromMem(R9, Rbp, -32);
+  cg.addImm32(R9, 1);
+  cg.movImmToMem(Rbx, 0, kTagInt);
+  cg.movToMem(Rbx, 8, R9);
+  cg.xorReg(R8, R8);                // done = false
+  cg.jmp(done);
+
+  cg.bind(doneTrue);
+  cg.xorReg(Rax, Rax);
+  cg.xorReg(Rdx, Rdx);
+  cg.movImm(R8, 1);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+  cg.bind(failType);
+  emitFailCall(cg, env.fail, *env.msgBadIn);
+  cg.bind(failState);
+  emitFailCall(cg, env.fail, *env.msgBadIn);
+  cg.bind(oom);
+  emitFailCall(cg, env.fail, *env.msgOom);
+}
+
+// `AotValue jolt_builtin_map_value(AotValue* args, long argc, AotClosure* self)`:
+// the hidden `$mapValue` helper the compiler calls for `for k, v in map`. It
+// returns the value paired with the key `args[0]`, so the key/value loop form
+// is an ordinary call. A non-map iterable is rejected, matching the hosted
+// `$mapValue` (`for k, v in [1, 2, 3]` is a runtime error).
+void emitMapValueBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label mapFind,
+                         const CollectionEnv& env) {
+  CodeGen::Label map = cg.newLabel();
+  CodeGen::Label missing = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.movReg(Rbx, Rdi);          // args
+  // args[0] is the map, args[1] the key. The argument window grows *down* from
+  // `args`, so args[1] sits 16 bytes below args[0].
+  cg.movFromMem(R8, Rbx, 0);    // map tag
+  cg.movFromMem(R12, Rbx, 8);   // map payload
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, map);
+  emitFailCall(cg, env.fail, *env.msgMapValue);
+
+  cg.bind(map);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbx, -8);  // args[1] payload (the key)
+  cg.callLabel(mapFind);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Lt, missing);
+  cg.imulImm32(Rax, Rax, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R10, R12, kTableBlockOffset);
+  cg.addReg(R10, Rax);
+  cg.movFromMem(Rax, R10, kMapEntryValueOffset);
+  cg.movFromMem(Rdx, R10, kMapEntryValueOffset + 8);
+  cg.jmp(done);
+
+  cg.bind(missing);
+  cg.xorReg(Rax, Rax);
+  cg.xorReg(Rdx, Rdx);
+
+  cg.bind(done);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
+// `void jolt_print_str_escaped(AotString* s, long fd)`: writes `s` between
+// double quotes with the same escapes as `quoteString`: `\"`, `\\`, `\n`,
+// `\t`, `\r`, and `\xHH` for any other control byte.
+void emitPrintStrEsc(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
+                     const DataBlob& textQuote, const DataBlob& textEscQuote,
+                     const DataBlob& textEscBackslash, const DataBlob& textEscNL,
+                     const DataBlob& textEscTab, const DataBlob& textEscCR,
+                     const DataBlob& textHexPrefix) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label plain = cg.newLabel();
+  CodeGen::Label hex = cg.newLabel();
+  CodeGen::Label next = cg.newLabel();
+  CodeGen::Label loopDone = cg.newLabel();
+  CodeGen::Label escQuote = cg.newLabel();
+  CodeGen::Label escBack = cg.newLabel();
+  CodeGen::Label escNL = cg.newLabel();
+  CodeGen::Label escTab = cg.newLabel();
+  CodeGen::Label escCR = cg.newLabel();
+  CodeGen::Label hexLow = cg.newLabel();
+  CodeGen::Label hexHigh = cg.newLabel();
+  CodeGen::Label hexLowDone = cg.newLabel();
+  CodeGen::Label hexHighDone = cg.newLabel();
+  (void)textHexPrefix;
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rdi);  // string
+  cg.movReg(R12, Rsi);  // fd
+  cg.movImmToMem(Rbp, -24, 0);  // index
+
+  cg.leaRipLabel(Rdi, textQuote.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textQuote.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+
+  cg.bind(loop);
+  cg.movFromMem(R8, Rbp, -24);
+  cg.movFromMem(R9, Rbx, 0);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, loopDone);
+
+  cg.movReg(R10, R8);
+  cg.addReg(R10, Rbx);
+  cg.movzxFromMem(R10, R10, kStringDataOffset);  // byte
+  cg.cmpImm32(R10, '"');
+  cg.jcc(Jcc::Eq, escQuote);
+  cg.cmpImm32(R10, '\\');
+  cg.jcc(Jcc::Eq, escBack);
+  cg.cmpImm32(R10, '\n');
+  cg.jcc(Jcc::Eq, escNL);
+  cg.cmpImm32(R10, '\t');
+  cg.jcc(Jcc::Eq, escTab);
+  cg.cmpImm32(R10, '\r');
+  cg.jcc(Jcc::Eq, escCR);
+  cg.cmpImm32(R10, 0x20);
+  cg.jcc(Jcc::B, hex);
+  cg.jmp(plain);
+
+  cg.bind(escQuote);
+  cg.leaRipLabel(Rdi, textEscQuote.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textEscQuote.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.jmp(next);
+  cg.bind(escBack);
+  cg.leaRipLabel(Rdi, textEscBackslash.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textEscBackslash.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.jmp(next);
+  cg.bind(escNL);
+  cg.leaRipLabel(Rdi, textEscNL.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textEscNL.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.jmp(next);
+  cg.bind(escTab);
+  cg.leaRipLabel(Rdi, textEscTab.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textEscTab.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.jmp(next);
+  cg.bind(escCR);
+  cg.leaRipLabel(Rdi, textEscCR.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textEscCR.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.jmp(next);
+
+  cg.bind(hex);
+  // Build "\xHH" in a 4-byte stack buffer and write it in one syscall.
+  cg.movImmByteToMem(Rbp, -40, '\\');
+  cg.movImmByteToMem(Rbp, -39, 'x');
+  cg.movFromMem(R10, Rbp, -24);
+  cg.addReg(R10, Rbx);
+  cg.movzxFromMem(R10, R10, kStringDataOffset);
+  cg.movReg(R9, R10);
+  cg.shrImm8(R9, 4);
+  cg.andImm32(R9, 0x0F);
+  cg.movReg(R8, R9);
+  cg.cmpImm32(R8, 10);
+  cg.jcc(Jcc::B, hexHigh);
+  cg.addImm32(R8, 'a' - 10);
+  cg.jmp(hexHighDone);
+  cg.bind(hexHigh);
+  cg.addImm32(R8, '0');
+  cg.bind(hexHighDone);
+  cg.movByteToMem(Rbp, -38, R8);
+  cg.andImm32(R10, 0x0F);
+  cg.cmpImm32(R10, 10);
+  cg.jcc(Jcc::B, hexLow);
+  cg.addImm32(R10, 'a' - 10);
+  cg.jmp(hexLowDone);
+  cg.bind(hexLow);
+  cg.addImm32(R10, '0');
+  cg.bind(hexLowDone);
+  cg.movByteToMem(Rbp, -37, R10);
+  cg.leaMem(Rdi, Rbp, -40);
+  cg.movImm(Rsi, 4);
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.jmp(next);
+
+  cg.bind(plain);
+  cg.movFromMem(R8, Rbp, -24);
+  cg.movReg(R9, R8);
+  cg.addReg(R9, Rbx);
+  cg.addImm32(R9, static_cast<std::int32_t>(kStringDataOffset));
+  cg.movReg(Rdi, R9);
+  cg.movImm(Rsi, 1);
+  inlineWriteFd(cg, writeLabel, R12);
+
+  cg.bind(next);
+  cg.movFromMem(R8, Rbp, -24);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, -24, R8);
+  cg.jmp(loop);
+
+  cg.bind(loopDone);
+  cg.leaRipLabel(Rdi, textQuote.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textQuote.text.size()));
+  inlineWriteFd(cg, writeLabel, R12);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
+// `void jolt_print_repr(AotValue v, long depth, long fd)`: the recursive
+// container renderer, matching `Value::repr` (`[1, 2]`, `{"k": 1}`, quoted
+// strings, `<fn>`). Depth is capped at 8, where a `...` is printed instead, so a
+// self-referential structure cannot recurse forever. Scalars reuse the existing
+// writers; strings go through `jolt_print_str_escaped`.
+void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
+                   CodeGen::Label writeInt, CodeGen::Label formatDouble,
+                   CodeGen::Label printStrEsc, const DataBlob& textTrue,
+                   const DataBlob& textFalse, const DataBlob& textNil,
+                   const DataBlob& textFunc, const DataBlob& textComma,
+                   const DataBlob& textColon, const DataBlob& textOpenBracket,
+                   const DataBlob& textCloseBracket, const DataBlob& textOpenBrace,
+                   const DataBlob& textCloseBrace, const DataBlob& textEllipsis) {
+  CodeGen::Label asInt = cg.newLabel();
+  CodeGen::Label asBool = cg.newLabel();
+  CodeGen::Label boolFalse = cg.newLabel();
+  CodeGen::Label asNil = cg.newLabel();
+  CodeGen::Label asStr = cg.newLabel();
+  CodeGen::Label asNum = cg.newLabel();
+  CodeGen::Label asFunc = cg.newLabel();
+  CodeGen::Label asArray = cg.newLabel();
+  CodeGen::Label asMap = cg.newLabel();
+  CodeGen::Label arrayLoop = cg.newLabel();
+  CodeGen::Label arrayBody = cg.newLabel();
+  CodeGen::Label arraySep = cg.newLabel();
+  CodeGen::Label arrayEnd = cg.newLabel();
+  CodeGen::Label mapLoop = cg.newLabel();
+  CodeGen::Label mapBody = cg.newLabel();
+  CodeGen::Label mapSep = cg.newLabel();
+  CodeGen::Label mapEnd = cg.newLabel();
+  CodeGen::Label tooDeep = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rcx);          // fd
+  cg.movToMem(Rbp, -24, Rdx);   // depth
+  cg.movToMem(Rbp, -32, Rdi);   // tag
+  cg.movToMem(Rbp, -40, Rsi);   // payload
+
+  cg.cmpImm32(Rdx, 8);
+  cg.jcc(Jcc::Gt, tooDeep);
+
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Eq, asInt);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagBool));
+  cg.jcc(Jcc::Eq, asBool);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagNil));
+  cg.jcc(Jcc::Eq, asNil);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, asStr);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFloat));
+  cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagDouble));
+  cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFunc));
+  cg.jcc(Jcc::Eq, asFunc);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, asArray);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, asMap);
+  cg.jmp(done);
+
+  cg.bind(asInt);
+  cg.movReg(Rdi, Rsi);
+  cg.movReg(R10, Rbx);
+  cg.callLabel(writeInt);
+  cg.jmp(done);
+
+  cg.bind(asNum);
+  cg.subRegImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.movReg(Rcx, Rsp);
+  cg.movReg(Rdx, Rsp);
+  cg.addImm32(Rdx, static_cast<std::int32_t>(kDtoaScratchBytes));
+  cg.callLabel(formatDouble);
+  cg.movReg(Rsi, Rax);
+  cg.movReg(Rdi, Rsp);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kDtoaScratchBytes));
+  cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.movReg(R10, Rbx);
+  inlineWriteFd(cg, writeLabel, R10);
+  cg.jmp(done);
+
+  cg.bind(asBool);
+  cg.movFromMem(R8, Rbp, -40);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, boolFalse);
+  cg.leaRipLabel(Rdi, textTrue.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textTrue.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(done);
+  cg.bind(boolFalse);
+  cg.leaRipLabel(Rdi, textFalse.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textFalse.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(done);
+
+  cg.bind(asNil);
+  cg.leaRipLabel(Rdi, textNil.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textNil.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(done);
+
+  cg.bind(asFunc);
+  cg.leaRipLabel(Rdi, textFunc.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textFunc.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(done);
+
+  cg.bind(asStr);
+  cg.movReg(Rdi, Rsi);
+  cg.movReg(Rsi, Rbx);
+  cg.callLabel(printStrEsc);
+  cg.jmp(done);
+
+  cg.bind(asArray);
+  cg.leaRipLabel(Rdi, textOpenBracket.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textOpenBracket.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.movFromMem(R12, Rbp, -40);        // array ptr
+  cg.movImmToMem(Rbp, -48, 0);         // index
+  cg.bind(arrayLoop);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.movFromMem(R9, R12, kTableLengthOffset);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, arrayEnd);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, arrayBody);
+  cg.bind(arraySep);
+  cg.leaRipLabel(Rdi, textComma.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textComma.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.bind(arrayBody);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.shlImm8(R8, 4);
+  cg.movFromMem(R9, R12, kTableBlockOffset);
+  cg.addReg(R9, R8);
+  cg.movFromMem(Rdi, R9, 0);
+  cg.movFromMem(Rsi, R9, 8);
+  cg.movFromMem(Rdx, Rbp, -24);
+  cg.addImm32(Rdx, 1);
+  cg.movReg(Rcx, Rbx);
+  cg.callLabel(label);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, -48, R8);
+  cg.jmp(arrayLoop);
+  cg.bind(arrayEnd);
+  cg.leaRipLabel(Rdi, textCloseBracket.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textCloseBracket.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(done);
+
+  cg.bind(asMap);
+  cg.leaRipLabel(Rdi, textOpenBrace.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textOpenBrace.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.movFromMem(R12, Rbp, -40);        // map ptr
+  cg.movImmToMem(Rbp, -48, 0);         // index
+  cg.bind(mapLoop);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.movFromMem(R9, R12, kTableLengthOffset);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, mapEnd);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, mapBody);
+  cg.bind(mapSep);
+  cg.leaRipLabel(Rdi, textComma.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textComma.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.bind(mapBody);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R9, R12, kTableBlockOffset);
+  cg.addReg(R9, R8);
+  cg.movFromMem(Rdi, R9, kMapEntryKeyOffset);
+  cg.movReg(Rsi, Rbx);
+  cg.callLabel(printStrEsc);
+  cg.leaRipLabel(Rdi, textColon.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textColon.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R9, R12, kTableBlockOffset);
+  cg.addReg(R9, R8);
+  cg.movFromMem(Rdi, R9, kMapEntryValueOffset);
+  cg.movFromMem(Rsi, R9, kMapEntryValueOffset + 8);
+  cg.movFromMem(Rdx, Rbp, -24);
+  cg.addImm32(Rdx, 1);
+  cg.movReg(Rcx, Rbx);
+  cg.callLabel(label);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, -48, R8);
+  cg.jmp(mapLoop);
+  cg.bind(mapEnd);
+  cg.leaRipLabel(Rdi, textCloseBrace.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textCloseBrace.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(done);
+
+  cg.bind(tooDeep);
+  cg.leaRipLabel(Rdi, textEllipsis.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textEllipsis.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
 }  // namespace
 
 void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
@@ -1438,18 +2909,93 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob msgOom = addText("jolt: out of memory\n");
   DataBlob msgCallNonFunc = addText("jolt: cannot call a non-function value\n");
   DataBlob msgArity = addText("jolt: wrong number of arguments\n");
+  DataBlob msgArrayIndexType = addText("jolt: array index must be an integer\n");
+  DataBlob msgIndexRange = addText("jolt: index out of range\n");
+  DataBlob msgMapKeyType = addText("jolt: map key must be a string\n");
+  DataBlob msgBadIndex = addText("jolt: value is not indexable\n");
+  DataBlob msgNoMember = addText("jolt: value has no such member\n");
+  DataBlob msgImmutable = addText("jolt: strings are immutable\n");
+  DataBlob msgBadAssign = addText("jolt: cannot assign to this value\n");
+  DataBlob msgBadField = addText("jolt: cannot assign a field on this value\n");
+  DataBlob msgBadIn = addText("jolt: unsupported operands for 'in'\n");
+  DataBlob msgMapValue = addText("jolt: key/value iteration ('for k, v in ...') requires a map\n");
   DataBlob textTrue = addText("true");
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
   DataBlob textNewline = addText("\n");
   DataBlob textSpace = addText(" ");
+  DataBlob textFunc = addText("<fn>");
+  DataBlob textComma = addText(", ");
+  DataBlob textColon = addText(": ");
+  DataBlob textOpenBracket = addText("[");
+  DataBlob textCloseBracket = addText("]");
+  DataBlob textOpenBrace = addText("{");
+  DataBlob textCloseBrace = addText("}");
+  DataBlob textEllipsis = addText("...");
+  DataBlob textQuote = addText("\"");
+  DataBlob textEscQuote = addText("\\\"");
+  DataBlob textEscBackslash = addText("\\\\");
+  DataBlob textEscNL = addText("\\n");
+  DataBlob textEscTab = addText("\\t");
+  DataBlob textEscCR = addText("\\r");
+  DataBlob textHexPrefix = addText("\\x");
 
   CodeGen::Label fail = cg.newLabel();
   CodeGen::Label writeInt = cg.newLabel();
+  CodeGen::Label printRepr = cg.newLabel();
+  CodeGen::Label printStrEsc = cg.newLabel();
 
   // The float/double formatter is part of the embedded runtime: bind its
   // handles and emit the whole dtoa routine so `jolt_print_value` can call it.
   dtoa::DtoaHandles dtoaHandles = dtoa::newDtoaHandles(cg);
+
+  // Collection helpers reference one another and the printers, so the env is
+  // built from the handles and the labels above before any of them is emitted.
+  CollectionEnv env{};
+  env.alloc = handles.alloc;
+  env.fail = fail;
+  env.write = entry.write;
+  env.writeInt = writeInt;
+  env.formatDouble = dtoaHandles.formatDouble;
+  env.strEq = handles.strEq;
+  env.mapFind = cg.newLabel();
+  env.blockEnsure = cg.newLabel();
+  env.utf8Len = cg.newLabel();
+  env.utf8CharAt = cg.newLabel();
+  env.compare = handles.compareValues;
+  env.rawPrint = handles.printValueRaw;
+  env.printRepr = printRepr;
+  env.printStrEsc = printStrEsc;
+  env.lengthConst = cg.newLabel();
+  env.msgOom = &msgOom;
+  env.msgArrayIndexType = &msgArrayIndexType;
+  env.msgIndexRange = &msgIndexRange;
+  env.msgMapKeyType = &msgMapKeyType;
+  env.msgBadIndex = &msgBadIndex;
+  env.msgNoMember = &msgNoMember;
+  env.msgImmutable = &msgImmutable;
+  env.msgBadAssign = &msgBadAssign;
+  env.msgBadField = &msgBadField;
+  env.msgBadIn = &msgBadIn;
+  env.msgMapValue = &msgMapValue;
+  env.textTrue = &textTrue;
+  env.textFalse = &textFalse;
+  env.textNil = &textNil;
+  env.textFunc = &textFunc;
+  env.textComma = &textComma;
+  env.textColon = &textColon;
+  env.textOpenBracket = &textOpenBracket;
+  env.textCloseBracket = &textCloseBracket;
+  env.textOpenBrace = &textOpenBrace;
+  env.textCloseBrace = &textCloseBrace;
+  env.textEllipsis = &textEllipsis;
+  env.textQuote = &textQuote;
+  env.textEscQuote = &textEscQuote;
+  env.textEscBackslash = &textEscBackslash;
+  env.textEscNL = &textEscNL;
+  env.textEscTab = &textEscTab;
+  env.textEscCR = &textEscCR;
+  env.textHexPrefix = &textHexPrefix;
 
   emitFail(cg, fail, entry.write, entry.exit);
   emitWriteInt(cg, writeInt, entry.write);
@@ -1462,15 +3008,21 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitCellNew(cg, handles.cellNew, handles.alloc, fail, msgOom);
   emitCall(cg, handles.call, fail, msgCallNonFunc);
   emitArityError(cg, handles.arityError, fail, msgArity);
+  emitPrintStrEsc(cg, printStrEsc, entry.write, textQuote, textEscQuote,
+                  textEscBackslash, textEscNL, textEscTab, textEscCR, textHexPrefix);
+  emitPrintRepr(cg, printRepr, entry.write, writeInt, dtoaHandles.formatDouble,
+                printStrEsc, textTrue, textFalse, textNil, textFunc, textComma,
+                textColon, textOpenBracket, textCloseBracket, textOpenBrace,
+                textCloseBrace, textEllipsis);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
-                 dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
-                 textNewline);
+                 dtoaHandles.formatDouble, printRepr, msgPrint, textTrue, textFalse,
+                 textNil, textNewline);
   emitPrintValueRaw(cg, handles.printValueRaw, entry.write, fail, writeInt,
-                    dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
-                    textNewline);
+                    dtoaHandles.formatDouble, printRepr, msgPrint, textTrue, textFalse,
+                    textNil, textNewline);
   emitPrintValueErrRaw(cg, handles.printValueErrRaw, entry.write, fail, writeInt,
-                       dtoaHandles.formatDouble, msgPrint, textTrue, textFalse, textNil,
-                       textNewline);
+                       dtoaHandles.formatDouble, printRepr, msgPrint, textTrue,
+                       textFalse, textNil, textNewline);
   emitPrintBuiltin(cg, handles.printBuiltin, handles.printValueRaw, entry.write,
                    textSpace, textNewline, /*fd=*/1, /*newline=*/true);
   emitPrintBuiltin(cg, handles.writeBuiltin, handles.printValueRaw, entry.write,
@@ -1486,7 +3038,25 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitBitNot(cg, handles.bitNotValue, fail, msgBitNot);
   emitNot(cg, handles.notValue);
   emitCompare(cg, handles.compareValues, fail, msgCompare);
+  emitStrEq(cg, handles.strEq);
+  emitMapFind(cg, env.mapFind, env);
+  emitBlockEnsure(cg, env.blockEnsure, env);
+  emitUtf8Len(cg, env.utf8Len);
+  emitUtf8CharAt(cg, env.utf8CharAt);
+  emitTableNew(cg, handles.tableNew, env);
+  emitTableGet(cg, handles.tableGet, env);
+  emitMemberGet(cg, handles.memberGet, env);
+  emitTableSet(cg, handles.tableSet, env);
+  emitMemberSet(cg, handles.memberSet, env);
+  emitContains(cg, handles.contains, env);
+  emitIterNext(cg, handles.iterNext, env);
+  emitMapValueBuiltin(cg, handles.mapValueBuiltin, env.mapFind, env);
   dtoa::emitDtoa(cg, dtoaHandles);
+
+  // The "length" member name is a raw `AotString` (8-byte length + bytes), laid
+  // out with the other data islands so no code falls through into it.
+  cg.bind(env.lengthConst);
+  cg.emitBytes(reinterpret_cast<const std::uint8_t*>("\x06\x00\x00\x00\x00\x00\x00\x00length"), 14);
 
   // Data islands last: every code path above ends in `ret` or `ud2`, so
   // control never reaches them, and their addresses are already referenced by
