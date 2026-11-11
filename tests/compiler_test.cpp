@@ -61,6 +61,14 @@ std::vector<Warning> compileWarnings(const std::string& source) {
   return compiler.warnings();
 }
 
+// Parses `source` and returns the parser's fold-time warnings (const overflow).
+std::vector<Warning> parseWarnings(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<compiler-test>");
+  parser.parseProgram();
+  return parser.warnings();
+}
+
 void testArithmeticAndPrint() {
   Bytecode bc = compileSource("let x = 1 + 2;\nprint(x);\n");
 
@@ -1112,6 +1120,36 @@ void testIntegerLiteralAtInt64Min() {
   assert(found);
 }
 
+void testConstOverflowWarning() {
+  // A const initializer that overflows wraps around (like the runtime) but
+  // raises a non-fatal warning instead of failing silently.
+  auto warns = [](const std::string& source) {
+    return !parseWarnings(source).empty();
+  };
+  assert(warns("const x = 9223372036854775807 + 1;\n"));
+  assert(warns("const x = 9223372036854775807 * 2;\n"));
+  assert(warns("const x = 2 ** 64;\n"));
+  assert(warns("const x = 3 ** 40;\n"));
+  assert(warns("const x = -(-9223372036854775807 - 1);\n"));
+  // Folding to a value that does fit stays silent, even when intermediate
+  // operands are large, and a plain literal never warns.
+  assert(!warns("const x = 10 * 2;\n"));
+  assert(!warns("const x = 2 ** 62;\n"));
+  assert(!warns("const x = 9223372036854775807;\n"));
+  assert(!warns("const x = 0 - 9223372036854775807;\n"));
+  // A shift drops high bits by design and is not an arithmetic overflow.
+  assert(!warns("const x = 1 << 63;\n"));
+
+  // The warning does not stop the program: the const still compiles and its
+  // value matches the wrapped result the same expression yields at run time.
+  Bytecode bc = compileSource("const x = 2 ** 64;\nlet y = x;\n");
+  bool found = false;
+  for (const Value& constant : bc.constants) {
+    if (constant.isInt() && constant.asInt() == 0) found = true;
+  }
+  assert(found);
+}
+
 void testLogicalAssignmentBytecode() {
   // `x ??= v` (PHASE 6.5 operators, compound form): read the target once,
   // compare against nil with NEQ, and short-circuit with JMP_IF_TRUE. No new
@@ -1644,6 +1682,7 @@ int main() {
   testTypeMismatchErrors();
   testFloatLiteralRange();
   testIntegerLiteralAtInt64Min();
+  testConstOverflowWarning();
   testNullCoalesceBytecode();
   testLogicalAssignmentBytecode();
   testLogicalAssignmentErrors();

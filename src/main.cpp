@@ -162,7 +162,10 @@ Compiler::ImportLoader makeImportLoader(ModuleResolver resolver) {
     }
     try {
       Parser parser(lex(moduleSource), file);
-      return parser.parseProgram();
+      StmtPtr program = parser.parseProgram();
+      for (const Warning &warning : parser.warnings())
+        printCompileWarning(file, moduleSource, warning, platformPosix());
+      return program;
     } catch (const CompileError &error) {
       throw CompileError{"in module '" + path + "': " + error.message, error.line, error.col};
     }
@@ -183,12 +186,17 @@ int runSource(const std::string &source, const std::string &name,
   }
 
   StmtPtr program;
+  std::vector<Warning> warnings;
   try {
     Parser parser(std::move(tokens), name);
     program = parser.parseProgram();
+    warnings = parser.warnings();
   } catch (const CompileError &error) {
     printCompileError(name, source, error, platformPosix());
     return 65;
+  }
+  for (const Warning &warning : warnings) {
+    printCompileWarning(name, source, warning, platformPosix());
   }
 
   // Imports are resolved during compilation, so `--check` validates them too.
@@ -310,6 +318,8 @@ bool handleCommand(VM &vm, Compiler &compiler, const std::string &command,
       parser.seedStructNames(compiler.structNames());
       Bytecode bytecode = compiler.compileLoaded(
           parser.parseProgram(), makeImportLoader(resolverFor(path, argv0)), path);
+      for (const Warning &warning : parser.warnings())
+        printCompileWarning(path, source, warning, platformPosix());
       for (const Warning &warning : compiler.warnings())
         printCompileWarning(path, source, warning, platformPosix());
       vm.run(bytecode);
@@ -412,10 +422,12 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
     }
 
     StmtPtr program;
+    std::vector<Warning> parseWarnings;
     try {
       Parser parser(tokens, "<repl>");
       parser.seedStructNames(compiler.structNames());
       program = parser.parseProgram();
+      parseWarnings = parser.warnings();
     } catch (const CompileError &error) {
       if (error.message.find("end of input") != std::string::npos) {
         // Convenience: accept a missing ';' at the end of a REPL entry.
@@ -423,6 +435,7 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
           Parser parser(lex(buffer + ";"), "<repl>");
           parser.seedStructNames(compiler.structNames());
           program = parser.parseProgram();
+          parseWarnings = parser.warnings();
         } catch (const CompileError &retry) {
           bool incomplete =
               retry.message.find("end of input") != std::string::npos ||
@@ -455,6 +468,8 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) 
       }
 
       Bytecode bytecode = compiler.compileRepl(program);
+      for (const Warning &warning : parseWarnings)
+        printCompileWarning("<repl>", buffer, warning, platformPosix());
       for (const Warning &warning : compiler.warnings())
         printCompileWarning("<repl>", buffer, warning, platformPosix());
       Value value = vm.run(bytecode);
