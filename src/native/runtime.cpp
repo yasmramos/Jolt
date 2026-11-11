@@ -1171,10 +1171,12 @@ void emitGlobalGet(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `AotValue jolt_closure(void* code, long arity)`: allocate an `AotClosure`
-// (code, arity, upvalueCount = 0) in the arena and return it as a `Func` value
-// (rax:rdx). The captured cells of 7c.2c.2 will extend the allocation; for now
-// the closure is the three-word header alone.
+// `AotValue jolt_closure(void* code, long arity, long upvalueCount)`: allocate
+// an `AotClosure` (code, arity, upvalueCount) followed by `upvalueCount` cell
+// pointers in the arena and return it as a `Func` value (rax:rdx). The slot
+// area is left for the lowering to fill: it knows which cells the child
+// captures and writes each pointer with a plain store, so the helper does not
+// need the descriptor table.
 void emitClosure(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
                  CodeGen::Label fail, const DataBlob& msgOom) {
   CodeGen::Label oom = cg.newLabel();
@@ -1183,19 +1185,55 @@ void emitClosure(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   prologue(cg);
   cg.push(Rbx);
   cg.push(R12);
-  cg.movReg(Rbx, Rdi);   // code address
-  cg.movReg(R12, Rsi);   // arity
-
-  cg.movImm(Rdi, 24);    // sizeof(AotClosure) with no cells
+  cg.subRegImm32(Rsp, 16);  // scratch slot for the capture count (keeps rsp aligned)
+  cg.movReg(Rbx, Rdi);      // code address
+  cg.movReg(R12, Rsi);      // arity
+  cg.movToMem(Rbp, -24, Rdx);  // stash upvalueCount
+  cg.movReg(Rdi, Rdx);
+  cg.shlImm8(Rdi, 3);       // count * 8 bytes of cell pointers
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotClosureHeaderSize));
   cg.callLabel(allocLabel);
   cg.testReg(Rax);
   cg.jcc(Jcc::Eq, oom);
 
   cg.movToMem(Rax, 0, Rbx);             // code
   cg.movToMem(Rax, 8, R12);             // arity
-  cg.movImmToMem(Rax, 16, 0);           // upvalueCount = 0
+  cg.movFromMem(R11, Rbp, -24);
+  cg.movToMem(Rax, 16, R11);            // upvalueCount
   cg.movReg(Rdx, Rax);                  // payload
   cg.movImm(Rax, kTagFunc);             // tag
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  cg.movReg(Rsp, Rbp);
+  cg.pop(Rbp);
+  cg.retInsn();
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
+}
+
+// `AotValue* jolt_cell_new(AotValue v)`: allocate a 16-byte cell in the arena
+// holding `v` (rdi:rsi) and return its address (rax). A captured local lives in
+// such a cell, shared with every closure that captures it, so a write through
+// the closure and a read in the defining frame observe the same value -- the
+// `Cell` the hosted engine uses (PHASE 7c.2c.2).
+void emitCellNew(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                 CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label oom = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.movReg(Rbx, Rdi);   // tag
+  cg.movReg(R12, Rsi);   // payload
+  cg.movImm(Rdi, static_cast<std::int64_t>(sizeof(AotValue)));
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rax, 0, Rbx);
+  cg.movToMem(Rax, 8, R12);
   cg.pop(R12);
   cg.pop(Rbx);
   cg.movReg(Rsp, Rbp);
@@ -1294,6 +1332,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitGlobalSet(cg, handles.globalSet);
   emitGlobalGet(cg, handles.globalGet);
   emitClosure(cg, handles.closure, handles.alloc, fail, msgOom);
+  emitCellNew(cg, handles.cellNew, handles.alloc, fail, msgOom);
   emitCall(cg, handles.call, fail, msgCallNonFunc);
   emitArityError(cg, handles.arityError, fail, msgArity);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,

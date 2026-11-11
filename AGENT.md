@@ -777,13 +777,29 @@ Slices, each independently shippable:
       root frame saves rbx/r12-r15 and maps the arena; a function frame saves only
       rbp, because the arena cursor/end (r13/r14) and the global base (r15) are
       the program's state, not the call's -- an allocation inside a function must
-      advance the shared cursor. Capture-free lambdas lower; a `CLOSURE` whose
-      child captures upvalues is still a `LoweringError` (7c.2c.2), as are
-      `GETUPVAL`/`SETUPVAL`. Covered by `tests/lower_test.cpp` (add, `fact`
-      recursion, mutual recursion, a capture-free lambda, the capturing-closure
-      error) and `tests/freestanding_test.cpp` (a call through the real `_start`
-      and the non-function error). Closures with upvalues and dynamic dispatch
-      stay for 7c.2c.2.
+      advance the shared cursor. Covered by `tests/lower_test.cpp` (add, `fact`
+      recursion, mutual recursion, a capture-free lambda) and
+      `tests/freestanding_test.cpp` (a call through the real `_start` and the
+      non-function error).
+    - **7c.2c.2** (done) — closures with upvalues. A local a child proto
+      captures lives in a shared *cell* (a 16-byte `AotValue` in the arena)
+      instead of an inline frame slot, so the closure and the defining frame
+      mutate the same variable, exactly like the hosted engine's `Cell`. A slot
+      no child captures stays inline, so an ordinary local still costs no
+      allocation. `jolt_cell_new` allocates the cell; `DECLLOCAL` allocates a
+      fresh cell and stores the value, `SETLOCAL`/`GETLOCAL` store/load through
+      it, and a plain slot keeps the direct 16-byte store/load. `jolt_closure`
+      now takes `(code, arity, upvalueCount)` and reserves the capture slots;
+      the lowering writes each captured cell pointer with a plain store, reading
+      it from a local slot of this frame or, for a re-exported capture, from this
+      frame's own `self`. The frame reserves one extra slot below the locals for
+      the `AotClosure*` (`self`, passed in rdx) that `GETUPVAL`/`SETUPVAL` and a
+      nested `CLOSURE` resolve through. A frame no longer saves the arena state:
+      the root owns rbx/r12-r15, a function frame saves only rbp. Covered by
+      `tests/lower_test.cpp` (escaping closure, a shared-cell counter, two
+      closures over one variable, nested capture through two frames, a captured
+      parameter, creation-time independence) and `tests/freestanding_test.cpp`
+      (a captured local read through the real `_start`).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -817,9 +833,11 @@ Slices, each independently shippable:
   (`Double` tag, `jolt_arith`/`jolt_shift`/`jolt_pow`), with the int/float/double
   promotion of the hosted engine. 7c.2c.1 lowers calls: each proto becomes a
   machine function, `CALL` dispatches it through `jolt_call` and `CLOSURE`
-  allocates an `AotClosure` with `jolt_closure` (capture-free closures only).
-  Still missing: closures with upvalues (7c.2c.2), collections (7c.3) and
-  `jolt build` (7d).
+  allocates an `AotClosure` with `jolt_closure`. 7c.2c.2 adds captured cells:
+  a captured local lives in a shared arena cell, `jolt_cell_new` allocates it,
+  `GETUPVAL`/`SETUPVAL` and nested `CLOSURE`s resolve through the frame's saved
+  `self`, and `jolt_closure` reserves the capture slots the lowering fills.
+  Still missing: collections (7c.3) and `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -856,7 +874,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-c.1 done; 7c.2c.2, 7c.3, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-c.2 done; 7c.3, 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

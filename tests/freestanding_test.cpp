@@ -463,6 +463,50 @@ static void test_boxed_runtime_call_non_function() {
         "the runtime error names the non-function call");
 }
 
+// Captured locals through the real process entry (PHASE 7c.2c.2): a child
+// proto that captures a local of its parent. The closure escapes its defining
+// frame and is called afterwards, so the captured cell must outlive the frame.
+// The root reads the result back into R0 (checked by direct execution) and the
+// same chunk runs cleanly under `_start`.
+static void test_boxed_runtime_closure_capture() {
+  // Root: R0 = closure(inner)  -- `inner` captures the root's local slot 0.
+  //       R1 = 40; R0 = R0(); R0 = R0 + R1; HALT.  -> 40 + 40 = 80 in R0.
+  Bytecode root = makeProto({instr(OpCode::LOADK, 1, 0), instr(OpCode::DECLLOCAL, 1, 0),
+                             instr(OpCode::CLOSURE, 0, 0), instr(OpCode::CALL, 0, 0),
+                             instr(OpCode::ADD, 0, 0, 1), instr(OpCode::HALT)},
+                            {Value(static_cast<int64_t>(40))}, 3, 1);
+  root.name = "<capture-root>";
+  auto inner = std::make_shared<Bytecode>();
+  inner->name = "inner";
+  inner->numParams = 0;
+  inner->numRegisters = 1;
+  inner->numLocals = 0;
+  inner->upvalues.push_back(UpvalDesc{true, 0});  // capture the parent's slot 0
+  inner->code = {instr(OpCode::GETUPVAL, 0, 0), instr(OpCode::RETURN, 0)};
+  root.children.push_back(inner);
+
+  LoweredChunk chunk = lowerToX64(Target::linuxX64(), root, CodeGen{});
+  long pageSize = sysconf(_SC_PAGESIZE);
+  std::size_t span = static_cast<std::size_t>(pageSize);
+  while (span < chunk.code.size()) span += static_cast<std::size_t>(pageSize);
+  void* mem = mmap(nullptr, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem == MAP_FAILED) {
+    check(false, "mmap for the closure capture test");
+    return;
+  }
+  std::memcpy(mem, chunk.code.data(), chunk.code.size());
+  mprotect(mem, span, PROT_READ | PROT_EXEC);
+  auto fn = reinterpret_cast<AotValue (*)()>(
+      static_cast<std::uint8_t*>(mem) + chunk.programEntry);
+  AotValue value = fn();
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 80,
+        "a lowered closure reads a captured local (40 + 40 == 80)");
+
+  RunResult result = buildAndRun("/tmp/jolt_boxed_capture", root);
+  check(result.exitCode == 0, "a chunk with a captured local exits 0 through _start");
+}
+
 // Locals (PHASE 7c.2b) through the real process entry: a chunk with a local
 // region must build, allocate its larger frame and run cleanly under `_start`.
 // The value itself is covered by direct execution in `lower_test.cpp`; here the
@@ -605,6 +649,7 @@ int main() {
   test_boxed_runtime_locals();
   test_boxed_runtime_call();
   test_boxed_runtime_call_non_function();
+  test_boxed_runtime_closure_capture();
   test_boxed_runtime_string();
   test_boxed_runtime_float_mod();
 #else

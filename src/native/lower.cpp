@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -34,12 +35,26 @@ constexpr X64Reg kTmpPayload = X64Reg::Rdx;
 // *below* R0, hence the negative offset.
 constexpr std::int64_t slotOffset(int index) { return -16LL * (index + 1); }
 
-// Local cells (PHASE 7c.2b) live in a second region of the same frame, right
+// Local slots (PHASE 7c.2b) live in a second region of the same frame, right
 // below the register file. Slot `b` sits at `[rbp - 16 * (numRegisters + b + 1)]`.
 // The `numRegisters` argument is the *allocated* file size (at least 1), which
 // is what the frame actually reserved, not the proto's declared count.
+//
+// From 7c.2c.2 a slot the proto captures (some child's upvalue points at it)
+// holds a *cell*: the first 8 bytes are a pointer to a 16-byte `AotValue` in
+// the arena, shared with every closure that captured the slot. A slot no child
+// captures stays a plain inline `AotValue` (16 bytes), so the common local
+// costs no allocation.
 constexpr std::int64_t localSlotOffset(int numRegisters, int index) {
   return -16LL * (numRegisters + index + 1);
+}
+
+// The `AotClosure*` the frame was entered with, saved just below the locals so
+// `GETUPVAL`/`SETUPVAL` and a nested `CLOSURE` can reach the captured cells.
+// Only a bytecode function has one; the root chunk reserves the slot too (the
+// frame is a fixed shape) but never reads it.
+constexpr std::int64_t selfSlotOffset(int numRegisters, int numLocals) {
+  return -16LL * (numRegisters + numLocals + 1);
 }
 
 // The frame of the root chunk: six callee-saved registers are pushed (rbp is
@@ -84,11 +99,14 @@ void emitRootEpilogue(CodeGen& cg) {
 // restore them -- an allocation inside a function has to advance the shared
 // cursor, and restoring it on return would lose the allocation. rbp is the
 // caller's register-file base, so it must be preserved. One push keeps rsp
-// 16-byte aligned at the body's first `call` (entry rsp % 16 == 8).
+// 16-byte aligned at the body's first `call` (entry rsp % 16 == 8). The frame
+// reserves one extra slot past the locals for the saved `AotClosure*` (the
+// `self` the call passed in rdx), which a captured local is reached through.
 void emitFunctionPrologue(CodeGen& cg, int fileRegisters, int fileLocals) {
   cg.push(X64Reg::Rbp);
   cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
-  cg.subRegImm32(X64Reg::Rsp, static_cast<std::int32_t>(frameBytes(fileRegisters, fileLocals)));
+  cg.subRegImm32(X64Reg::Rsp,
+                 static_cast<std::int32_t>(frameBytes(fileRegisters, fileLocals + 1)));
 }
 
 void emitFunctionEpilogue(CodeGen& cg) {
@@ -280,12 +298,42 @@ void emitStringConstants(CodeGen& cg, const std::vector<StringConstant>& constan
   }
 }
 
+// The shape of the frame a proto's body runs in, and the set of its local
+// slots some child captures. `fileRegisters` is the allocated register-file
+// size and `fileLocals` the allocated local region; both are at least the
+// proto's declared counts. A slot in `capturedSlots` holds a cell pointer
+// instead of an inline `AotValue`, and `hasSelf` says whether the frame has an
+// `AotClosure*` in its `self` slot (a bytecode function does, the root chunk
+// does not).
+struct FrameInfo {
+  int fileRegisters = 1;
+  int fileLocals = 0;
+  bool hasSelf = false;
+  std::unordered_set<int> capturedSlots;
+};
+
+// The local slots of `proto` that at least one of its children captures: each
+// is a `UpvalDesc` with `inParentLocal` pointing at the slot. Such a slot must
+// live in a shared cell so a closure and the frame observe the same variable
+// (PHASE 7c.2c.2).
+std::unordered_set<int> capturedLocalSlots(const Bytecode& proto) {
+  std::unordered_set<int> captured;
+  for (const std::shared_ptr<Bytecode>& child : proto.children) {
+    if (!child) continue;
+    for (const UpvalDesc& desc : child->upvalues) {
+      if (desc.inParentLocal) captured.insert(desc.index);
+    }
+  }
+  return captured;
+}
+
 void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& cg,
                       const std::vector<CodeGen::Label>& labels,
                       const AotRuntimeHandles& rt, const GlobalSlots& globals,
-                      int fileRegisters,
+                      const FrameInfo& frame,
                       const std::unordered_map<const Bytecode*, CodeGen::Label>& protoEntry,
                       std::vector<StringConstant>& stringConstants) {
+  const int fileRegisters = frame.fileRegisters;
   switch (instr.op) {
     case OpCode::LOADK: {
       const Value& value = proto.constants.at(static_cast<std::size_t>(instr.b));
@@ -448,24 +496,49 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       cg.callLabel(rt.globalSet);
       break;
     }
-    // Locals (PHASE 7c.2b). `b` is the cell index in the current frame. Until
-    // frames and closures land (7c.2c) a local is a plain 16-byte slot in the
-    // second region of the chunk frame -- no `Cell`, no arena -- because a
-    // `CLOSURE` (the only way to capture one) is not lowered yet, so a captured
-    // local cannot reach the backend. `DECLLOCAL` boxes R[a] into the slot and
-    // `SETLOCAL` overwrites it; the hosted engine's "undefined local" check
-    // needs a null cell, which a stack slot cannot express, so a well-formed
-    // chunk (the compiler always emits `DECLLOCAL` first) is assumed.
+    // Locals (PHASE 7c.2b, cells in 7c.2c.2). `b` is the cell index in the
+    // current frame. A slot no child captures is a plain 16-byte slot in the
+    // second region of the frame; a slot some child captures holds a pointer to
+    // a shared `AotValue` cell, so a closure and the frame mutate the same
+    // variable. `DECLLOCAL` allocates the cell (once) and stores the value,
+    // `SETLOCAL` stores through it, `GETLOCAL` loads through it. The hosted
+    // engine's "undefined local" check needs a null cell, which a stack slot
+    // cannot express, so a well-formed chunk (the compiler always emits
+    // `DECLLOCAL` first) is assumed.
     case OpCode::DECLLOCAL:
     case OpCode::SETLOCAL: {
       loadValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
-      cg.movToMem(kFileBase, localSlotOffset(fileRegisters, instr.b), X64Reg::Rax);
-      cg.movToMem(kFileBase, localSlotOffset(fileRegisters, instr.b) + 8, X64Reg::Rdx);
+      const std::int64_t off = localSlotOffset(fileRegisters, instr.b);
+      if (frame.capturedSlots.count(instr.b) != 0) {
+        if (instr.op == OpCode::DECLLOCAL) {
+          // jolt_cell_new(value) -> cell pointer; keep it in the slot. A fresh
+          // cell per declaration, so a closure created earlier keeps the cell
+          // it captured (a loop body re-declaring a variable shadows it).
+          cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+          cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+          cg.callLabel(rt.cellNew);
+          cg.movToMem(kFileBase, off, X64Reg::Rax);
+        } else {
+          cg.movFromMem(X64Reg::Rcx, kFileBase, off);  // rcx = cell
+          cg.movToMem(X64Reg::Rcx, 0, X64Reg::Rax);
+          cg.movToMem(X64Reg::Rcx, 8, X64Reg::Rdx);
+        }
+      } else {
+        cg.movToMem(kFileBase, off, X64Reg::Rax);
+        cg.movToMem(kFileBase, off + 8, X64Reg::Rdx);
+      }
       break;
     }
     case OpCode::GETLOCAL: {
-      cg.movFromMem(X64Reg::Rax, kFileBase, localSlotOffset(fileRegisters, instr.b));
-      cg.movFromMem(X64Reg::Rdx, kFileBase, localSlotOffset(fileRegisters, instr.b) + 8);
+      const std::int64_t off = localSlotOffset(fileRegisters, instr.b);
+      if (frame.capturedSlots.count(instr.b) != 0) {
+        cg.movFromMem(X64Reg::Rcx, kFileBase, off);  // rcx = cell
+        cg.movFromMem(X64Reg::Rax, X64Reg::Rcx, 0);
+        cg.movFromMem(X64Reg::Rdx, X64Reg::Rcx, 8);
+      } else {
+        cg.movFromMem(X64Reg::Rax, kFileBase, off);
+        cg.movFromMem(X64Reg::Rdx, kFileBase, off + 8);
+      }
       storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
       break;
     }
@@ -494,21 +567,60 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
                             " is out of range");
       }
       const Bytecode* child = proto.children[static_cast<std::size_t>(instr.b)].get();
-      // A proto with upvalues captures its defining frame's locals, which needs
-      // capturable cells (7c.2c.2); only a capture-free closure is lowered here.
-      if (!child->upvalues.empty()) {
-        unsupported("CLOSURE with captured upvalues", "PHASE 7c.2c.2");
-      }
-      // jolt_closure(code, arity) -> Func in rax:rdx, stored in R[a].
+      // jolt_closure(code, arity, upvalueCount) -> Func in rax:rdx.
       cg.leaRipLabel(X64Reg::Rdi, protoEntry.at(child));
       cg.movImm(X64Reg::Rsi, child->numParams);
+      cg.movImm(X64Reg::Rdx, static_cast<std::int64_t>(child->upvalues.size()));
       cg.callLabel(rt.closure);
+      // The capture slots are the words after the header; the lowering fills
+      // each with the cell pointer it resolved. The child's upvalue `i` points
+      // either at a local slot of this frame or at one of this frame's own
+      // upvalues (re-exported), exactly as `resolveFromFrame` decided.
+      for (std::size_t i = 0; i < child->upvalues.size(); ++i) {
+        const UpvalDesc& desc = child->upvalues[i];
+        const std::int64_t cellSlot = static_cast<std::int64_t>(kAotClosureHeaderSize) +
+                                      static_cast<std::int64_t>(i) * 8;
+        if (desc.inParentLocal) {
+          // This frame's local slot holds the cell pointer (it is captured, so
+          // it is a cell slot by construction).
+          cg.movFromMem(X64Reg::Rcx, kFileBase, localSlotOffset(fileRegisters, desc.index));
+        } else {
+          if (!frame.hasSelf) {
+            throw LoweringError("lowering: CLOSURE re-exports an upvalue but the frame has no self");
+          }
+          cg.movFromMem(X64Reg::Rcx, kFileBase, selfSlotOffset(fileRegisters, frame.fileLocals));
+          cg.movFromMem(X64Reg::Rcx, X64Reg::Rcx,
+                        static_cast<std::int64_t>(kAotClosureHeaderSize) +
+                            static_cast<std::int64_t>(desc.index) * 8);
+        }
+        // The closure object is in rdx (the payload); store the cell pointer
+        // into its slot `i`.
+        cg.movToMem(X64Reg::Rdx, cellSlot, X64Reg::Rcx);
+      }
       storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
       break;
     }
-    case OpCode::GETUPVAL:
-    case OpCode::SETUPVAL:
-      unsupported("GETUPVAL/SETUPVAL", "PHASE 7c.2c.2");
+    case OpCode::GETUPVAL: {
+      // Load the captured cell from self, then the value it holds.
+      cg.movFromMem(X64Reg::Rcx, kFileBase, selfSlotOffset(fileRegisters, frame.fileLocals));
+      cg.movFromMem(X64Reg::Rcx, X64Reg::Rcx,
+                    static_cast<std::int64_t>(kAotClosureHeaderSize) +
+                        static_cast<std::int64_t>(instr.b) * 8);
+      cg.movFromMem(X64Reg::Rax, X64Reg::Rcx, 0);
+      cg.movFromMem(X64Reg::Rdx, X64Reg::Rcx, 8);
+      storeValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      break;
+    }
+    case OpCode::SETUPVAL: {
+      loadValue(cg, instr.a, X64Reg::Rax, X64Reg::Rdx);
+      cg.movFromMem(X64Reg::Rcx, kFileBase, selfSlotOffset(fileRegisters, frame.fileLocals));
+      cg.movFromMem(X64Reg::Rcx, X64Reg::Rcx,
+                    static_cast<std::int64_t>(kAotClosureHeaderSize) +
+                        static_cast<std::int64_t>(instr.b) * 8);
+      cg.movToMem(X64Reg::Rcx, 0, X64Reg::Rax);
+      cg.movToMem(X64Reg::Rcx, 8, X64Reg::Rdx);
+      break;
+    }
     case OpCode::NEWTABLE:
     case OpCode::GETTABLE:
     case OpCode::SETTABLE:
@@ -563,12 +675,17 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
   cg.movImm(X64Reg::Rdi, globals.count);
   cg.callLabel(rt.initGlobals);
   {
+    FrameInfo frame;
+    frame.fileRegisters = rootRegisters;
+    frame.fileLocals = rootLocals;
+    frame.hasSelf = false;
+    frame.capturedSlots = capturedLocalSlots(proto);
     std::vector<CodeGen::Label> labels;
     labels.reserve(proto.code.size());
     for (std::size_t i = 0; i < proto.code.size(); ++i) labels.push_back(cg.newLabel());
     for (std::size_t i = 0; i < proto.code.size(); ++i) {
       cg.bind(labels[i]);
-      lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, rootRegisters,
+      lowerInstruction(proto.code[i], proto, cg, labels, rt, globals, frame,
                        protoEntry, stringConstants);
     }
   }
@@ -590,6 +707,12 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
     // collection (7c.3); reject it before emitting anything else.
     if (fn.variadic) unsupported("variadic function", "PHASE 7c.3");
 
+    // Save the closure this frame was entered with (`self`, in rdx) just below
+    // the locals. `GETUPVAL`/`SETUPVAL` and a nested `CLOSURE` read the captured
+    // cells through it. `self` is the callee's payload, so it is never null for
+    // a well-formed call.
+    cg.movToMem(kFileBase, selfSlotOffset(fnRegisters, fnLocals), X64Reg::Rdx);
+
     // The compiler does not check a user function's arity -- the hosted engine
     // does at run time -- so the prologue checks `argc` (rsi) against the
     // declared parameter count and reports the mismatch. A non-variadic
@@ -601,6 +724,12 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
       cg.callLabel(rt.arityError);
       cg.bind(arityOk);
     }
+
+    FrameInfo frame;
+    frame.fileRegisters = fnRegisters;
+    frame.fileLocals = fnLocals;
+    frame.hasSelf = true;
+    frame.capturedSlots = capturedLocalSlots(fn);
 
     // Copy the arguments into the register file. `args` points at the caller's
     // R[a+1]; the file grows *down*, so consecutive registers sit 16 bytes
@@ -618,7 +747,7 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
     for (std::size_t i = 0; i < fn.code.size(); ++i) labels.push_back(cg.newLabel());
     for (std::size_t i = 0; i < fn.code.size(); ++i) {
       cg.bind(labels[i]);
-      lowerInstruction(fn.code[i], fn, cg, labels, rt, globals, fnRegisters,
+      lowerInstruction(fn.code[i], fn, cg, labels, rt, globals, frame,
                        protoEntry, stringConstants);
     }
   }
