@@ -1,8 +1,10 @@
 #!/usr/bin/env sh
 # Runs every .jolt test.
-# Positive tests live in tests/ and must exit with code 0.
+# Positive tests live in tests/ and examples/ and must exit with code 0.
 # Error tests live in tests/errors/ and declare their expected exit code with
 # a first-line comment such as: // expect-exit: 70
+# Check tests live in tests/check/ and run under `-c` (compile only): the
+# declared exit code must match and nothing may reach stdout.
 #
 # A test may declare a capability it needs on its first line, such as:
 #   // requires: libffi
@@ -54,49 +56,47 @@ required_capability() {
     sed -n '1,5s/.*requires:[[:space:]]*\([A-Za-z0-9_-][A-Za-z0-9_-]*\).*/\1/p' "$1" | head -1
 }
 
-failed=0
-total=0
-skipped=0
+# Prints the exit code a test declares with a first-line `expect-exit: N`
+# comment, or nothing when it declares none.
+declared_exit() {
+    sed -n '1s/.*expect-exit:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1"
+}
 
-for test in "$test_dir"/*.jolt; do
-    [ -e "$test" ] || continue
-    name=$(basename "$test")
+# Runs one test and records the result. `mode` is `run` (execute the script) or
+# `check` (compile only with `-c`). A check test must additionally leave stdout
+# empty, because `-c` must never start the VM (see tests/run_check_case.cmake).
+run_one() {
+    name=$1
+    path=$2
+    mode=$3
+    expected=$4
 
-    need=$(required_capability "$test")
+    need=$(required_capability "$path")
     if [ -n "$need" ] && ! has_capability "$need"; then
         printf '[SKIP] %s (needs %s)\n' "$name" "$need"
         skipped=$((skipped + 1))
-        continue
+        return
     fi
 
     total=$((total + 1))
-    if output=$("$exe" "$test" 2>&1); then
-        printf '[OK]   %s\n' "$name"
-    else
-        status=$?
-        printf '[FAIL] %s (exit %s)\n' "$name" "$status"
-        printf '%s\n' "$output" | sed 's/^/       /'
+
+    if [ "$mode" = "check" ]; then
+        stdout=$("$exe" -c "$path" 2>/dev/null)
+        actual=$?
+        if [ "$actual" -eq "$expected" ] && [ -z "$stdout" ]; then
+            printf '[OK]   %s\n' "$name"
+            return
+        fi
+        if [ "$actual" -ne "$expected" ]; then
+            printf '[FAIL] %s (expected exit %s, got %s)\n' "$name" "$expected" "$actual"
+        else
+            printf '[FAIL] %s (-c produced output, so the program ran)\n' "$name"
+        fi
         failed=$((failed + 1))
-    fi
-done
-
-error_dir="$test_dir/errors"
-for test in "$error_dir"/*.jolt; do
-    [ -e "$test" ] || continue
-    name="errors/$(basename "$test")"
-
-    need=$(required_capability "$test")
-    if [ -n "$need" ] && ! has_capability "$need"; then
-        printf '[SKIP] %s (needs %s)\n' "$name" "$need"
-        skipped=$((skipped + 1))
-        continue
+        return
     fi
 
-    total=$((total + 1))
-    expected=$(sed -n '1s/.*expect-exit:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$test")
-    [ -n "$expected" ] || expected=70
-
-    output=$("$exe" "$test" 2>&1)
+    output=$("$exe" "$path" 2>&1)
     actual=$?
     if [ "$actual" -eq "$expected" ]; then
         printf '[OK]   %s\n' "$name"
@@ -105,6 +105,42 @@ for test in "$error_dir"/*.jolt; do
         printf '%s\n' "$output" | sed 's/^/       /'
         failed=$((failed + 1))
     fi
+}
+
+failed=0
+total=0
+skipped=0
+
+# tests/*.jolt and examples/*.jolt: run the script, expected exit 0 unless the
+# first line declares otherwise.
+for test in "$test_dir"/*.jolt; do
+    [ -e "$test" ] || continue
+    expected=$(declared_exit "$test")
+    [ -n "$expected" ] || expected=0
+    run_one "$(basename "$test")" "$test" run "$expected"
+done
+
+for test in "$root/examples"/*.jolt; do
+    [ -e "$test" ] || continue
+    expected=$(declared_exit "$test")
+    [ -n "$expected" ] || expected=0
+    run_one "examples/$(basename "$test")" "$test" run "$expected"
+done
+
+# tests/errors/*.jolt: run the script, expected exit 70 unless declared.
+for test in "$test_dir/errors"/*.jolt; do
+    [ -e "$test" ] || continue
+    expected=$(declared_exit "$test")
+    [ -n "$expected" ] || expected=70
+    run_one "errors/$(basename "$test")" "$test" run "$expected"
+done
+
+# tests/check/*.jolt: compile only with `-c`, expected exit 0 unless declared.
+for test in "$test_dir/check"/*.jolt; do
+    [ -e "$test" ] || continue
+    expected=$(declared_exit "$test")
+    [ -n "$expected" ] || expected=0
+    run_one "check/$(basename "$test")" "$test" check "$expected"
 done
 
 if [ "$total" -eq 0 ]; then
