@@ -820,6 +820,62 @@ Slices, each independently shippable:
       `for-in` and container printing under the real `_start`) and
       `tests/lower_test.cpp` (the collection opcodes now lower instead of
       raising).
+    - **7c.4a** (done) — the hidden `$nonNull` and `$isError` helpers. The
+      compiler emits `$nonNull` for the non-null assertion `a!!` and `$isError`
+      for `try` / `x catch y` (PHASE 6.5/6.7); the AOT backend had no binding
+      for them, so a program using either failed to build with
+      `lowering: global '$nonNull'/'$isError' is read but never assigned`. They
+      are now seeded builtins like `print` and `$mapValue`:
+      `jolt_builtin_non_null` returns its operand or calls `fail` with the
+      hosted helper's message, and `jolt_builtin_is_error` returns `false`
+      (the AOT runtime has no error values yet, so the success path of `try`/
+      `catch` runs; a real failure still exits 70). Covered by
+      `tests/freestanding_test.cpp` (both helpers under the real `_start`, plus
+      the failing `!!` exiting 70) and the `jolt build` fixture.
+    - **7c.4b** (done) — the hidden `$str` helper for string interpolation and
+      computed keys. It renders the operand to an `AotString` in the arena,
+      byte-identical to the hosted `Value::toString` for nil, booleans,
+      integers (with the sign), floats/doubles (through the embedded dtoa) and
+      strings (returned unchanged, so a string interpolates without quotes);
+      a collection or function operand fails with a clear message instead of
+      producing different text (deferred to 7c.4b.2). Covered by
+      `tests/freestanding_test.cpp` and the `jolt build` fixture.
+    - **7c.4b.2** (done) — `$str` for collections and functions (recursive
+      repr). The printer's traversal is factored into `jolt_repr_into`, which
+      appends the representation of a value to a string builder; `print` and
+      `$str` both go through it, so `"${[1, 2]}"` and `print([1, 2])` agree
+      byte for byte (nested strings quoted, maps as `{k: v}`, functions as
+      `<fn>`, depth capped at 8). `jolt_print_repr` renders into a stack
+      builder and writes once; `jolt_repr_to_string` renders into an arena
+      `AotString`. The string builder (`jolt_sb_*`, `AotStringBuilder`) grows
+      by doubling in the arena. A function's *name* is not part of the AOT
+      closure yet, so `$str`/`print` render `<fn>` where the VM renders
+      `<fn name>`; that is pre-existing and tracked separately. Covered by
+      `tests/freestanding_test.cpp` and the `jolt build` fixture.
+    - **7c.4c** (done) — the hidden `$range` helper for the range literals
+      `a..b` / `a..=b`. A new `AotTag::Range` names a three-word arena header
+      (start, end, inclusive). `jolt_builtin_range` builds it from two integer
+      bounds (a non-integer bound fails with the hosted message). The value is
+      wired through the runtime: `for-in` (`jolt_iter_next` walks the range up
+      or down, inclusive or exclusive, stepping with unsigned arithmetic so
+      INT64_MIN/MAX stay defined), `in` (`jolt_contains`, including the
+      "descending exclusive matches neither bound" rule), `.length`
+      (`jolt_member_get`, saturated at INT64_MAX) and printing/interpolation
+      (`jolt_print_repr`/`jolt_builtin_str` render `<start>..<end>` or
+      `<start>..=<end>`). Covered by `tests/freestanding_test.cpp` (print,
+      iterate both directions, `.length`, membership, interpolation and the
+      failing bound) and the `jolt build` fixture.
+    - **7c.4d** (done) — the hidden `$slice` helper for
+      `obj[start:end:step]`. `jolt_builtin_slice` slices an array by element
+      and a string by UTF-8 code point, following the hosted rule: an omitted
+      bound is a step-aware default (`0`/`length` for a positive step,
+      `length-1`/`-1` for a negative one), a negative bound counts from the
+      end, and both clamp to `[-1, length-1]` so a reverse slice never wraps.
+      It builds a fresh array/string over the arena (two passes: measure then
+      copy), and fails on a non-integer start or end, a zero step and a
+      non-sliceable operand. Covered by `tests/freestanding_test.cpp` (array
+      and string slices, both step signs, negative and out-of-range bounds,
+      UTF-8, the error cases) and the `jolt build` fixture.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -939,7 +995,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7d done)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7c.4b, 7c.4c, 7c.4d, 7d done)
 Phase 8: 🔶 in progress (JIT for the development VM, slice 1 done: integer leaf protos)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)

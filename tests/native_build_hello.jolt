@@ -65,3 +65,12 @@ print("pair = ${pair}");
 print("nested = ${[[1, 2], {"k": 3}]}");
 print("ages text = ${ages}");
 
+// Slices lower to the hidden `$slice` helper (PHASE 7c.4d): an array by
+// element and a string by UTF-8 code point, with omitted, negative and
+// step-carrying bounds.
+print("slice =", squares[1:]);
+print("reverse =", squares[::-1]);
+print("even =", [0, 1, 2, 3, 4, 5][::2]);
+print("text =", "abcdef"[1:4]);
+print("text reverse =", "abcdef"[::-1]);
+

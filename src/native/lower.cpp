@@ -753,11 +753,12 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
       // The remaining hidden helpers the compiler emits for PHASE 6.5 features.
       // `$isError` (try/catch) and `$nonNull` (`a!!`) are seeded the same way,
       // so those constructs lower to ordinary calls. `$str`, `$range` and
-      // `$slice` follow in later slices.
+      // `$slice` are seeded too.
       {"$isError", rt.isErrorBuiltin},
       {"$nonNull", rt.nonNullBuiltin},
       {"$str", rt.strBuiltin},
       {"$range", rt.rangeBuiltin},
+      {"$slice", rt.sliceBuiltin},
   };
 
   const GlobalSlots globals = collectGlobals(protos, builtins);
