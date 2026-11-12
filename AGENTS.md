@@ -42,6 +42,11 @@ Repository-specific workflow for AI agents. Project conventions live in
 - `jolt build` prints lowering errors (unsupported builtins, unlowered
   opcodes) and exits 65 without writing a binary; it never emits a
   mis-compiled one.
+- A host binding (`native fn`, `extern "C"`) and `var x = x;` both compile to
+  `GETGLOBAL N; SETGLOBAL N`. The AOT backend has no host, so it rejects that
+  shape as "global 'N' is read but never assigned" (exit 65) rather than
+  emitting a binary that calls nil. FFI in the AOT backend is still PHASE 7
+  work; the lowerer only fails it cleanly.
 
 ## Release and artifacts
 
