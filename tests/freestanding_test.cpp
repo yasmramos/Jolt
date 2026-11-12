@@ -350,6 +350,38 @@ static void test_collections() {
   check(result.exitCode == 0, "a program using collections exits 0 through _start");
 }
 
+// The hidden helpers for PHASE 6.5 features that lower to a call (PHASE 7c.4a):
+// `$nonNull` (`a!!`) and `$isError` (`try` / `x catch y`). Before this slice the
+// backend rejected both with `global '$nonNull'/'$isError' is read but never
+// assigned`; now they are seeded builtins and a compiled program runs them.
+static void test_hidden_helpers() {
+  Bytecode proto = compileSource(
+      "var a = 7;\n"
+      "var b = a!!;\n"
+      "print(b);\n"
+      "var c = b catch 0;\n"
+      "print(c);\n"
+      "fn f() { var x = 9; return try x; }\n"
+      "print(f());\n");
+  RunResult result = buildAndRun("/tmp/jolt_hidden_helpers", proto);
+  check(result.output == "7\n7\n9\n",
+        "a compiled program runs the non-null and catch helpers");
+  check(result.exitCode == 0, "a program using the hidden helpers exits 0");
+}
+
+// `$nonNull` on nil must fail with the hosted helper's message and exit 70,
+// proving the AOT helper takes the same error path as the VM.
+static void test_hidden_helpers_non_null_failure() {
+  Bytecode proto = compileSource(
+      "var a = nil;\n"
+      "var b = a!!;\n"
+      "print(b);\n");
+  RunResult result = buildAndRun("/tmp/jolt_hidden_helpers_nil", proto);
+  check(result.exitCode == 70, "a failed '!!' exits 70");
+  check(result.output.find("non-null assertion") != std::string::npos,
+        "the failed '!!' names the non-null assertion");
+}
+
 // A nested container prints with the recursive repr, and a self-referential one
 // stops at the depth cap instead of recursing forever.
 static void test_collection_repr() {
@@ -752,6 +784,8 @@ int main() {
   test_boxed_runtime_float_mod();
   test_builtin_print();
   test_collections();
+  test_hidden_helpers();
+  test_hidden_helpers_non_null_failure();
   test_collection_repr();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");

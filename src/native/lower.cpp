@@ -750,6 +750,12 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
       // The hidden `$mapValue` helper the compiler emits for `for k, v in map`.
       // Its name contains `$`, so user code cannot shadow it.
       {"$mapValue", rt.mapValueBuiltin},
+      // The remaining hidden helpers the compiler emits for PHASE 6.5 features.
+      // `$isError` (try/catch) and `$nonNull` (`a!!`) are seeded the same way,
+      // so those constructs lower to ordinary calls. `$str`, `$range` and
+      // `$slice` follow in later slices.
+      {"$isError", rt.isErrorBuiltin},
+      {"$nonNull", rt.nonNullBuiltin},
   };
 
   const GlobalSlots globals = collectGlobals(protos, builtins);
