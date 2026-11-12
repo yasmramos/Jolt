@@ -125,8 +125,10 @@ inside this set compiles to native code:
 
 A few things the development engine offers are **not** in the AOT backend yet.
 `jolt build` reports them as a lowering error instead of emitting a broken
-binary — for example `args()`, `exit()`, `type()`, `len()`, `range()` and the
-array/map/string methods (`concat`, `slice`, `sorted`, `keys`, `upper`, …):
+binary — for example `args()`, `exit()`, `type()`, `len()`, `range()`, the
+array/map/string methods (`concat`, `slice`, `sorted`, `keys`, `upper`, …) and
+FFI declarations (`extern "C"` and `native fn`, which need a host to resolve the
+symbol):
 
 ```sh
 $ echo 'print(range(3));' > r.jolt && jolt build r.jolt
@@ -138,6 +140,26 @@ a crash: the program is rejected at compile time, never mis-compiled. Until the
 rest of the standard library is lowered, keep `args()` and file I/O in the
 development engine, or pass data in as literals.
 
+### 3.1 How the binary grows
+
+The 24 KB of a hello-world is almost all fixed cost — the embedded runtime
+(arena, value runtime, `print`/`format`, collections) is linked in whole whether
+the program uses it or not. What the *program itself* adds on top is small and
+roughly linear in the code, not in the source size:
+
+| Program | Source | Binary |
+| --- | --- | --- |
+| `hello.jolt` (`print("hello")`) | 1 line | **24 KB** |
+| `wordcount.jolt` (functions, maps, `for-in`, interpolation) | 23 lines | **26 KB** |
+| 60 generated functions, each called once | 122 lines | **46 KB** |
+
+The runtime floor is the bulk of it; the 60 functions add about 22 KB, i.e.
+**~370 bytes per small function** of real machine code and metadata. There is no
+interpreter loop or bytecode table carried along, so a larger program does not
+pay a per-feature startup cost — it just emits more instructions. That is the
+opposite of shipping an interpreter, where every feature is present in the
+binary whether you use it or not.
+
 ---
 
 ## 4. Development speed vs. product speed
@@ -148,15 +170,36 @@ speeds on the same source (`n = 30_000_000`):
 
 | Engine | Time |
 | --- | --- |
-| `jolt --no-jit` (pure VM) | ~6.2 s |
-| `jolt` (VM + JIT) | **~0.27 s** |
-| `jolt build` then `./prog` (AOT) | ~0.62 s |
+| `jolt --no-jit` (pure VM) | ~4.6 s |
+| `jolt` (VM + JIT) | **~0.20 s** |
+| `jolt build` then `./prog` (AOT) | ~0.45 s |
 
-The JIT wins on a pure integer loop because it compiles exactly that
-specialisation (unboxed `int`). The AOT binary is **general** — boxed values,
-full dynamic semantics — so it is slower than a specialised JIT path here, but
-it is still about **10× faster than the plain VM**, starts in half a
-millisecond, and is the only one of the three that runs with no Jolt installed.
+### Why the JIT wins here, and why that is expected
+
+The JIT *specialises* this loop and the AOT backend *generalises* it, and that
+difference is the whole story.
+
+- The JIT watches the loop run, sees that `s` and `i` are always integers, and
+  emits a machine loop that keeps them in CPU registers as **unboxed** 64-bit
+  ints. An `add` is one instruction; the tag is not carried at all.
+- The AOT backend has to be correct for *every* value that could ever reach the
+  loop — an `int`, a `float`, a string (where `+` concatenates), a table — so it
+  emits the **general** lowering: each value is a boxed 16-byte `AotValue` in a
+  stack register file, and every `+` reads two tags, branches to the int fast
+  path, and writes a tag back. It never guesses, so it never needs a bailout.
+
+That is not a bug in the AOT backend; it is the price of a static compiler with
+no runtime type feedback. Jolt forbids exactly the escape hatch that would close
+the gap — profile-guided or on-stack recompilation inside the AOT binary is a
+VM-only feature (§3 of `AGENT.md`: no VM-only features), and per-instruction
+type annotations for the AOT fast paths are explicitly deferred (PHASE 7,
+"Deferred"). The JIT may specialise because it runs in the development engine,
+where a wrong guess can bail out to the VM; a shipped binary cannot.
+
+So the fair comparison is the one that matters for a CLI: the AOT binary is
+still about **10× faster than the plain VM** on this loop (it removes the
+dispatch and the per-opcode interpretation), starts in half a millisecond, and
+is the only one of the three that runs with no Jolt installed.
 
 Use the JIT while you develop; ship the AOT binary.
 
