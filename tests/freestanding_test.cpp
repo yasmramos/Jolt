@@ -533,6 +533,97 @@ static void test_str_helper_collections() {
   check(result.exitCode == 0, "a program interpolating a collection exits 0");
 }
 
+// The `$slice` helper (PHASE 7c.4d) slices an array by element and a string by
+// UTF-8 code point, following the hosted rule: an omitted bound is a step-aware
+// default, a negative bound counts from the end, and both clamp so a reverse
+// slice never wraps. A compiled program must agree with the VM.
+static void test_slice_helper() {
+  Bytecode proto = compileSource(
+      "let a = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];\n"
+      "print(a[1:4]);\n"
+      "print(a[:3]);\n"
+      "print(a[7:]);\n"
+      "print(a[:]);\n"
+      "print(a[::2]);\n"
+      "print(a[::-1]);\n"
+      "print(a[::-2]);\n"
+      "print(a[8:2:-1]);\n"
+      "print(a[-3:]);\n"
+      "print(a[:-3]);\n"
+      "print(a[-100:100]);\n"
+      "print(a[100:]);\n"
+      "print(a[5:5]);\n"
+      "print(a[1:8:3]);\n"
+      "let s = \"abcdef\";\n"
+      "print(s[1:4]);\n"
+      "print(s[::-1]);\n"
+      "print(s[1:4:2]);\n"
+      "print(s[-2:]);\n"
+      "print(s[:-2]);\n"
+      "print(s[10:]);\n"
+      "let u = \"caf\\u00e9\\u00e8\";\n"
+      "print(u.length);\n"
+      "print(u[1:3]);\n"
+      "print(u[::-1]);\n"
+      "print(u[::2]);\n");
+  RunResult result = buildAndRun("/tmp/jolt_slice_helper", proto);
+  std::string expected =
+      "[1, 2, 3]\n"
+      "[0, 1, 2]\n"
+      "[7, 8, 9]\n"
+      "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\n"
+      "[0, 2, 4, 6, 8]\n"
+      "[9, 8, 7, 6, 5, 4, 3, 2, 1, 0]\n"
+      "[9, 7, 5, 3, 1]\n"
+      "[8, 7, 6, 5, 4, 3]\n"
+      "[7, 8, 9]\n"
+      "[0, 1, 2, 3, 4, 5, 6]\n"
+      "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\n"
+      "[]\n"
+      "[]\n"
+      "[1, 4, 7]\n"
+      "bcd\n"
+      "fedcba\n"
+      "bd\n"
+      "ef\n"
+      "abcd\n"
+      "\n"
+      "5\n"
+      "af\n"
+      "\u00e8\u00e9fac\n"
+      "cf\u00e8\n";
+  check(result.output == expected,
+        "a compiled program slices arrays and strings like the VM");
+  check(result.exitCode == 0, "a program using slices exits 0");
+}
+
+// A bad slice bound, a zero step and a non-sliceable operand must fail with the
+// hosted helper's message and exit 70.
+static void test_slice_helper_errors() {
+  Bytecode badStart = compileSource(
+      "let a = [1, 2, 3];\n"
+      "print(a[1.5:]);\n");
+  RunResult start = buildAndRun("/tmp/jolt_slice_bad_start", badStart);
+  check(start.exitCode == 70, "a non-integer slice start exits 70");
+  check(start.output.find("slice start must be an integer") != std::string::npos,
+        "the failed slice names the integer-start rule");
+
+  Bytecode zeroStep = compileSource(
+      "let a = [1, 2, 3];\n"
+      "print(a[::0]);\n");
+  RunResult step = buildAndRun("/tmp/jolt_slice_zero_step", zeroStep);
+  check(step.exitCode == 70, "a zero slice step exits 70");
+  check(step.output.find("slice step must not be zero") != std::string::npos,
+        "the failed slice names the non-zero-step rule");
+
+  Bytecode notSliceable = compileSource(
+      "print(5[1:2]);\n");
+  RunResult value = buildAndRun("/tmp/jolt_slice_not_sliceable", notSliceable);
+  check(value.exitCode == 70, "slicing a non-collection exits 70");
+  check(value.output.find("not sliceable") != std::string::npos,
+        "the failed slice names the non-sliceable operand");
+}
+
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
 // the `print` builtin will call once `CALL` lands (7c.2), so this checks the
 // integer-to-text routine (including the negative case) and the boolean/nil
@@ -922,6 +1013,8 @@ int main() {
   test_range_helper_bad_bounds();
   test_collection_repr();
   test_str_helper_collections();
+  test_slice_helper();
+  test_slice_helper_errors();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif
