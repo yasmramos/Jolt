@@ -624,6 +624,111 @@ static void test_slice_helper_errors() {
         "the failed slice names the non-sliceable operand");
 }
 
+// The public standard-library builtins (PHASE 7c.5a) through the real process
+// entry: `len`, `type`, `str`, `repr`, `bool`, `ord`, `chr`, `assert`,
+// `panic` and `isError`. The program prints one line per result and the output
+// is asserted byte for byte against the hosted engine's semantics.
+static void test_public_builtins() {
+  Bytecode proto = compileSource(
+      "print(len(\"h\\u00e9llo\"));\n"      // 5 code points, not 6 bytes
+      "print(len([1, 2, 3]));\n"
+      "print(len({\"a\": 1, \"b\": 2}));\n"
+      "print(len(0..=5));\n"
+      "print(type(nil));\n"
+      "print(type(true));\n"
+      "print(type(1));\n"
+      "print(type(1.5));\n"
+      "print(type(\"x\"));\n"
+      "print(type([1]));\n"
+      "print(type({\"k\": 1}));\n"
+      "print(type(0..1));\n"
+      "print(str(42), str(3.5), str(true), str(nil));\n"
+      "print(repr(\"hi\"), repr([1, \"two\"]), repr(7));\n"
+      "print(bool(0), bool(1), bool(nil), bool(\"\"), bool([]));\n"
+      "print(ord(\"A\"), ord(\"\\u00e9\"), ord(\"\U0001F600\"));\n"
+      "print(chr(65), chr(233), chr(128512));\n"
+      "assert(true);\n"
+      "assert(1 == 1, \"should pass\");\n"
+      "print(\"after asserts\");\n"
+      "print(isError(5), isError(\"x\"));\n");
+  RunResult result = buildAndRun("/tmp/jolt_public_builtins", proto);
+  std::string expected =
+      "5\n"
+      "3\n"
+      "2\n"
+      "6\n"
+      "nil\n"
+      "bool\n"
+      "int\n"
+      "double\n"
+      "string\n"
+      "array\n"
+      "map\n"
+      "range\n"
+      "42 3.5 true nil\n"
+      "\"hi\" [1, \"two\"] 7\n"
+      "true true false true true\n"
+      "65 233 128512\n"
+      "A \u00e9 \U0001F600\n"
+      "after asserts\n"
+      "false false\n";
+  check(result.output == expected,
+        "the public builtins compute like the hosted engine");
+  check(result.exitCode == 0, "a program using the public builtins exits 0");
+}
+
+// The failure paths of the public builtins must report a message and exit 70,
+// matching the hosted engine's runtime-error code.
+static void test_public_builtin_errors() {
+  Bytecode badLen = compileSource("print(len(42));\n");
+  RunResult len = buildAndRun("/tmp/jolt_builtin_bad_len", badLen);
+  check(len.exitCode == 70, "len of a non-collection exits 70");
+  check(len.output.find("len() is not defined") != std::string::npos,
+        "the failed len names the unsupported type");
+
+  Bytecode badOrd = compileSource("print(ord(5));\n");
+  RunResult ord = buildAndRun("/tmp/jolt_builtin_bad_ord", badOrd);
+  check(ord.exitCode == 70, "ord of a non-string exits 70");
+  check(ord.output.find("ord() expects a string") != std::string::npos,
+        "the failed ord names the string argument");
+
+  Bytecode longOrd = compileSource("print(ord(\"ab\"));\n");
+  RunResult multi = buildAndRun("/tmp/jolt_builtin_long_ord", longOrd);
+  check(multi.exitCode == 70, "ord of a multi-character string exits 70");
+  check(multi.output.find("ord() expects a single character") != std::string::npos,
+        "the failed ord names the single-character rule");
+
+  Bytecode badChr = compileSource("print(chr(2000000));\n");
+  RunResult chr = buildAndRun("/tmp/jolt_builtin_bad_chr", badChr);
+  check(chr.exitCode == 70, "chr of an out-of-range code point exits 70");
+  check(chr.output.find("chr() code point out of range") != std::string::npos,
+        "the failed chr names the code-point range");
+
+  Bytecode failedAssert = compileSource("assert(false);\n");
+  RunResult assertion = buildAndRun("/tmp/jolt_builtin_assert", failedAssert);
+  check(assertion.exitCode == 70, "a failed assert exits 70");
+  check(assertion.output.find("jolt: assertion failed") != std::string::npos,
+        "a failed assert reports the default message");
+
+  Bytecode customAssert = compileSource("assert(false, \"custom message\");\n");
+  RunResult custom = buildAndRun("/tmp/jolt_builtin_assert_msg", customAssert);
+  check(custom.exitCode == 70, "a failed assert with a message exits 70");
+  check(custom.output.find("jolt: custom message") != std::string::npos,
+        "a failed assert reports the caller's message");
+
+  Bytecode panicked = compileSource("panic(\"boom\");\n");
+  RunResult panic = buildAndRun("/tmp/jolt_builtin_panic", panicked);
+  check(panic.exitCode == 70, "panic exits 70");
+  check(panic.output.find("jolt: boom") != std::string::npos,
+        "panic reports the caller's message");
+
+  Bytecode barePanic = compileSource("panic();\n");
+  RunResult bare = buildAndRun("/tmp/jolt_builtin_panic_bare", barePanic);
+  check(bare.exitCode == 70, "a bare panic exits 70");
+  check(bare.output.find("jolt: panic") != std::string::npos,
+        "a bare panic reports the default message");
+}
+
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
 // the `print` builtin will call once `CALL` lands (7c.2), so this checks the
 // integer-to-text routine (including the negative case) and the boolean/nil
@@ -1015,6 +1120,8 @@ int main() {
   test_str_helper_collections();
   test_slice_helper();
   test_slice_helper_errors();
+  test_public_builtins();
+  test_public_builtin_errors();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif
