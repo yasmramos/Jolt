@@ -2524,6 +2524,41 @@ void emitMapValueBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label mapFi
   epilogue(cg);
 }
 
+// `AotValue jolt_builtin_is_error(AotValue* args, long argc, AotClosure* self)`:
+// the hidden `$isError` helper that `try` and `x catch y` compile to. The AOT
+// runtime has no error values yet, so a value is never an error: the helper
+// returns `false` and the success path of the construct runs. A real runtime
+// failure still exits with code 70 before any `try` can observe it.
+void emitIsErrorBuiltin(CodeGen& cg, CodeGen::Label label) {
+  cg.bind(label);
+  prologue(cg);
+  cg.movImm(Rax, kTagBool);
+  cg.xorReg(Rdx, Rdx);  // false
+  epilogue(cg);
+}
+
+// `AotValue jolt_builtin_non_null(AotValue* args, long argc, AotClosure* self)`:
+// the hidden `$nonNull` helper for `a!!`. It returns the operand unchanged, or
+// fails when it is nil, matching the hosted helper.
+void emitNonNullBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
+                        const DataBlob& msgNonNull) {
+  CodeGen::Label ok = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  // args[0] is the operand: the argument window grows *down* from `args`, so
+  // args[0] sits at [rdi + 0] (tag) and [rdi + 8] (payload).
+  cg.movFromMem(Rax, Rdi, 0);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagNil));
+  cg.jcc(Jcc::Ne, ok);
+  emitFailCall(cg, fail, msgNonNull);
+
+  cg.bind(ok);
+  cg.movFromMem(Rax, Rdi, 0);   // tag
+  cg.movFromMem(Rdx, Rdi, 8);   // payload
+  epilogue(cg);
+}
+
 // `void jolt_print_str_escaped(AotString* s, long fd)`: writes `s` between
 // double quotes with the same escapes as `quoteString`: `\"`, `\\`, `\n`,
 // `\t`, `\r`, and `\xHH` for any other control byte.
@@ -2919,6 +2954,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob msgBadField = addText("jolt: cannot assign a field on this value\n");
   DataBlob msgBadIn = addText("jolt: unsupported operands for 'in'\n");
   DataBlob msgMapValue = addText("jolt: key/value iteration ('for k, v in ...') requires a map\n");
+  DataBlob msgNonNull = addText("jolt: unexpected nil (non-null assertion '!!' failed)\n");
   DataBlob textTrue = addText("true");
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
@@ -3051,6 +3087,8 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitContains(cg, handles.contains, env);
   emitIterNext(cg, handles.iterNext, env);
   emitMapValueBuiltin(cg, handles.mapValueBuiltin, env.mapFind, env);
+  emitIsErrorBuiltin(cg, handles.isErrorBuiltin);
+  emitNonNullBuiltin(cg, handles.nonNullBuiltin, fail, msgNonNull);
   dtoa::emitDtoa(cg, dtoaHandles);
 
   // The "length" member name is a raw `AotString` (8-byte length + bytes), laid

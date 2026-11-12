@@ -118,6 +118,24 @@ struct AotRuntimeHandles {
   // convention. It returns the value paired with a key, so the key/value loop
   // form lowers to an ordinary call.
   CodeGen::Label mapValueBuiltin;  // AotValue jolt_builtin_map_value(AotValue* args, long argc, AotClosure* self)
+  // The remaining hidden helpers the compiler emits for PHASE 6.5 features.
+  // They use the proto convention too and are seeded into their global slots
+  // like `print` and `$mapValue`, so each one is an ordinary call.
+  // `$isError` (try/catch) reports whether a value is an error; the AOT runtime
+  // has no error values yet, so it is always false and the success path of
+  // `try`/`x catch y` runs (a real failure still exits 70).
+  CodeGen::Label isErrorBuiltin;   // AotValue jolt_builtin_is_error(AotValue* args, long argc, AotClosure* self)
+  // `$nonNull` (`a!!`): returns the operand, or fails when it is nil.
+  CodeGen::Label nonNullBuiltin;   // AotValue jolt_builtin_non_null(AotValue* args, long argc, AotClosure* self)
+  // `$str` (string interpolation and computed keys): renders the operand to a
+  // string, byte-identical to the hosted `Value::toString`.
+  CodeGen::Label strBuiltin;       // AotValue jolt_builtin_str(AotValue* args, long argc, AotClosure* self)
+  // `$range` (`a..b` / `a..=b`): allocates a `Range` value from two integer
+  // bounds and an inclusive flag.
+  CodeGen::Label rangeBuiltin;     // AotValue jolt_builtin_range(AotValue* args, long argc, AotClosure* self)
+  // `$slice` (`obj[start:end:step]`): slices a string by UTF-8 character or an
+  // array by element, following Python's bounds rule.
+  CodeGen::Label sliceBuiltin;     // AotValue jolt_builtin_slice(AotValue* args, long argc, AotClosure* self)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
@@ -130,7 +148,8 @@ inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
-      code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(),
   };
 }
 
