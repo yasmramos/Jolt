@@ -46,6 +46,7 @@ const char *kUsage =
     "  -v, --version             show the version\n"
     "  -e, --eval <code>         evaluate code from the command line\n"
     "  -c, --check               only check the script for errors\n"
+    "  --no-jit                  disable the JIT (development engine only)\n"
     "  -o, --output <file>       output path for `build` (default: the script's base name)\n";
 
 // Joins a directory and a relative path without doubling the separator.
@@ -183,7 +184,7 @@ Compiler::ImportLoader makeImportLoader(ModuleResolver resolver) {
 // Returns 0 on success, 65 for compile errors, 70 for runtime errors.
 int runSource(const std::string &source, const std::string &name,
               const std::vector<std::string> &scriptArgs, bool checkOnly,
-              const std::string &argv0) {
+              const std::string &argv0, bool useJit) {
   std::vector<Token> tokens;
   try {
     tokens = lex(source);
@@ -225,6 +226,7 @@ int runSource(const std::string &source, const std::string &name,
   VM vm;
   vm.sourceName = name;
   vm.scriptArgs = scriptArgs;
+  vm.setJitEnabled(useJit);
   registerBuiltins(vm);
   try {
     vm.run(bytecode);
@@ -417,10 +419,11 @@ void publishReplValue(VM &vm, const Value &value) {
     std::cout << value.repr() << '\n';
 }
 
-void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0) {
+void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0, bool useJit) {
   VM vm;
   vm.sourceName = "<repl>";
   vm.scriptArgs = scriptArgs;
+  vm.setJitEnabled(useJit);
   registerBuiltins(vm);
 
   // One compiler for the whole session so a module imported in an earlier
@@ -618,6 +621,7 @@ int main(int argc, char **argv) {
   std::string evalCode;
   bool hasEval = false;
   bool checkOnly = false;
+  bool useJit = true;
   std::vector<std::string> scriptArgs;
 
   for (size_t i = 0; i < arguments.size(); ++i) {
@@ -645,6 +649,10 @@ int main(int argc, char **argv) {
       checkOnly = true;
       continue;
     }
+    if (arg == "--no-jit") {
+      useJit = false;
+      continue;
+    }
     if (arg == "--") {
       if (i + 1 < arguments.size()) {
         file = arguments[i + 1];
@@ -665,7 +673,7 @@ int main(int argc, char **argv) {
   }
 
   if (hasEval)
-    return runSource(evalCode, "<eval>", scriptArgs, checkOnly, argv[0]);
+    return runSource(evalCode, "<eval>", scriptArgs, checkOnly, argv[0], useJit);
 
   if (!file.empty()) {
     std::string source;
@@ -673,7 +681,7 @@ int main(int argc, char **argv) {
       std::cerr << "jolt: cannot read file '" << file << "'\n";
       return 66;
     }
-    return runSource(source, file, scriptArgs, checkOnly, argv[0]);
+    return runSource(source, file, scriptArgs, checkOnly, argv[0], useJit);
   }
 
   if (checkOnly) {
@@ -681,6 +689,6 @@ int main(int argc, char **argv) {
     return 64;
   }
 
-  repl(scriptArgs, argv[0]);
+  repl(scriptArgs, argv[0], useJit);
   return 0;
 }
