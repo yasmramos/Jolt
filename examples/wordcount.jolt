@@ -1,0 +1,23 @@
+fn tally(words) {
+  var counts = {};
+  for w in words {
+    if (w in counts) {
+      counts[w] = counts[w] + 1;
+    } else {
+      counts[w] = 1;
+    }
+  }
+  return counts;
+}
+
+fn report(counts, total) {
+  print("word frequency report");
+  print("total words:", total);
+  for k, v in counts {
+    var pct = (v * 100) / total;
+    print(" ", k, v, pct);
+  }
+}
+
+var words = ["red", "blue", "red", "green", "blue", "red"];
+report(tally(words), words.length);
