@@ -194,8 +194,8 @@ using RangePtr = Ref<Range>;
 using NativeFn = std::function<Value(Runtime&, std::vector<Value>&)>;
 
 // FFI pointer (PHASE 6.6). A `ptr`/`cstring` is an *opaque handle*, never a raw
-// address: exposing a machine address to Jolt would let a program dereference
-// arbitrary memory (Jolt is meant to be memory-safe) and would hide the
+// address: exposing a machine address to Oskel would let a program dereference
+// arbitrary memory (Oskel is meant to be memory-safe) and would hide the
 // allocation from the cycle collector, which only understands `Value` edges.
 // The handle owns the C-side storage; the host is the only code that ever sees
 // the address.
@@ -350,7 +350,7 @@ struct Value {
   double asDouble() const { return data.number; }
   double number() const { return isInt() ? static_cast<double>(asInt()) : data.number; }
 
-  // Jolt strings are immutable. The shared object is never exposed as mutable.
+  // Oskel strings are immutable. The shared object is never exposed as mutable.
   const std::string& asStr() const { return data.string->value; }
 
   StringPtr strPtr() const { return data.string; }
@@ -630,7 +630,7 @@ std::shared_ptr<void> pinGcNode(const Ref<T>& ref) {
 
 std::string quoteString(const std::string& s);
 
-// UTF-8 helpers. Jolt strings are byte strings, but these functions treat
+// UTF-8 helpers. Oskel strings are byte strings, but these functions treat
 // them as sequences of code points so that accented text behaves sanely.
 size_t utf8Length(const std::string& s);
 std::vector<std::string> utf8Chars(const std::string& s);

@@ -116,7 +116,7 @@ void gcCollect() {
 }
 
 void gcCollectIfNeeded() {
-#ifdef JOLT_GC_STRESS
+#ifdef OSKEL_GC_STRESS
   // Test builds collect at every safe point to flush out objects the collector
   // would free while they are still in use.
   gcCollect();

@@ -2,7 +2,7 @@
 //
 // The emitted machine code is mapped as executable memory and called through a
 // function pointer, exactly like the hosted engine would call it. The contract
-// is Jolt's `str()`: the shortest text that round-trips, matching
+// is Oskel's `str()`: the shortest text that round-trips, matching
 // `std::to_chars` byte for byte, including the fixed/scientific choice.
 //
 // On any platform other than Linux x86-64 the execution section is skipped.

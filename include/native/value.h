@@ -45,7 +45,7 @@ enum class AotTag : std::uint64_t {
 };
 
 // On-image layout of a string: an 8-byte length followed by the bytes. The
-// bytes are not NUL-terminated -- a Jolt string can hold an embedded NUL -- so
+// bytes are not NUL-terminated -- a Oskel string can hold an embedded NUL -- so
 // every string helper carries the length explicitly, exactly like `std::string`
 // and unlike C. A `Str` payload points at the length word, so a helper reads
 // the length from `[ptr]` and the first byte from `[ptr + 8]`.

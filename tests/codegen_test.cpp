@@ -812,9 +812,9 @@ static void test_exec_rbp_disp32_roundtrip() {
 }
 
 static void test_exec_syscall_write() {
-  // Emits `write(1, "Jolt\n", 5)` followed by a zero return, proving the
+  // Emits `write(1, "Oskel\n", 5)` followed by a zero return, proving the
   // syscall gate and rip-relative addressing work end to end.
-  static const char message[] = "Jolt\n";
+  static const char message[] = "Oskel\n";
   CodeGen g;
   g.movImm(X64Reg::Rax, 1);  // SYS_write
   g.movImm(X64Reg::Rdi, 1);  // stdout
@@ -834,7 +834,7 @@ static void test_exec_syscall_write() {
   bytes.insert(bytes.end(), message, message + sizeof(message));
   auto fn = reinterpret_cast<std::int64_t (*)()>(emitExecutable(bytes));
   std::int64_t result = fn();
-  check(result == 0, "exec: write(\"Jolt\\n\", stdout) via syscall returned 0");
+  check(result == 0, "exec: write(\"Oskel\\n\", stdout) via syscall returned 0");
 }
 #endif
 

@@ -54,7 +54,7 @@ class VM : public Runtime {
   int localCount() const { return static_cast<int>(locals_.size()); }
 
   // Enables or disables the JIT. Off by default: the development engine turns
-  // it on (`jolt`, `-e`, the REPL) and `joltc` never does, because the AOT
+  // it on (`oskel`, `-e`, the REPL) and `oskelc` never does, because the AOT
   // product must not carry a JIT (AGENT.md §8). While enabled, a call to a
   // proto the JIT accepts runs the compiled code; every other call is
   // interpreted exactly as before, so results never change.
@@ -138,7 +138,7 @@ class VM : public Runtime {
 
   // Pushes the frame for a bytecode function, copying its arguments into the
   // new window. Throws on arity, depth or a function without a proto.
-  void pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
+  void pushOskelFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
                      int col);
 
   Value callNative(Function& fn, std::vector<Value> args, int line, int col);

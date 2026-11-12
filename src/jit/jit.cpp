@@ -442,7 +442,7 @@ std::vector<std::uint8_t> emitProto(const Bytecode& proto, const Analysis& analy
       case OpCode::UNOP: {
         const UnaryOp op = static_cast<UnaryOp>(in.c);
         if (op == UnaryOp::Not) {
-          // Jolt truthiness: only `nil` and `false` are falsy, so `!int` is
+          // Oskel truthiness: only `nil` and `false` are falsy, so `!int` is
           // always false and `!nil` always true; only a bool operand needs a
           // real test.
           const Ty operand = tyOf(in.b);

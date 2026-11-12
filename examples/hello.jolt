@@ -1,6 +1,0 @@
-// The classic greeting.
-// Run: build\jolt.exe examples\hello.jolt
-
-var name = "world";
-print("Hello, ${name}!");
-print("Jolt is written in C++.");

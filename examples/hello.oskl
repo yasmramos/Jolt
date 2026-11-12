@@ -1,0 +1,6 @@
+// The classic greeting.
+// Run: build\oskel.exe examples\hello.oskl
+
+var name = "world";
+print("Hello, ${name}!");
+print("Oskel is written in C++.");

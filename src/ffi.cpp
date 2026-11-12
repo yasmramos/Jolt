@@ -7,7 +7,7 @@
 
 #include "ffi_types.h"
 
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
 // libffi builds the trampoline a C function calls back into. It is only used
 // for callbacks, and only in the development engine (AGENT.md §5.1/§6.6).
 // `ffi.h` is the system header: the project's own header is `ffi_marshal.h`
@@ -59,7 +59,7 @@ namespace {
 
 // The machine address behind a pointer argument. A `void *` carries an opaque
 // token; an owned `cstring`/buffer exposes the address of its bytes, which is
-// what a C callee dereferences. A Jolt string is NUL-terminated and stays alive
+// what a C callee dereferences. A Oskel string is NUL-terminated and stays alive
 // for the whole call, so its bytes are a valid `const char *`.
 std::int64_t pointerAddress(Runtime& rt, const Value& value, const std::string& typeName) {
   if (value.isNil()) return 0;  // NULL
@@ -74,7 +74,7 @@ std::int64_t pointerAddress(Runtime& rt, const Value& value, const std::string& 
 }
 
 // A general-purpose-register argument: an integer, a bool or a pointer. All of
-// them travel in the same register; the declaration decides how the Jolt value
+// them travel in the same register; the declaration decides how the Oskel value
 // is turned into the 64-bit word.
 std::int64_t marshalGpr(Runtime& rt, const Value& value, ParamClass cls,
                         const std::string& typeName) {
@@ -156,7 +156,7 @@ void writeStructField(std::vector<char>& bytes, std::size_t offset, const std::s
 }
 
 // Reads one scalar field of a returned struct from `bytes` at `offset` and boxes
-// it as a Jolt value, reading only the field's declared width.
+// it as a Oskel value, reading only the field's declared width.
 Value readStructField(Runtime& rt, const char* bytes, std::size_t offset,
                       const std::string& type) {
   if (type == "float") {
@@ -190,7 +190,7 @@ struct PodSS { double a; double b; };
 struct PodIS { std::int64_t a; double b; };
 struct PodSI { double a; std::int64_t b; };
 
-// Rebuilds the Jolt map of a returned struct from its raw bytes.
+// Rebuilds the Oskel map of a returned struct from its raw bytes.
 Value boxStructResult(Runtime& rt, const StructLayout& layout, const char* bytes) {
   MapPtr result = makeMap();
   for (std::size_t k = 0; k < layout.fields.size(); ++k) {
@@ -285,7 +285,7 @@ Value dispatch(void* address, ReturnClass rc, StructShape shape, const StructLay
   }
 }
 
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
 // ------------------------------------------------------------------ callbacks
 
 // Maps an FFI scalar type name to the libffi type the trampoline marshals it
@@ -308,7 +308,7 @@ ffi_type* libffiTypeFor(const std::string& typeName) {
   return &ffi_type_sint32;
 }
 
-// The state behind one Jolt function passed to C as a callback: the function
+// The state behind one Oskel function passed to C as a callback: the function
 // itself, its prepared `ffi_cif`, and the libffi closure C calls. The object is
 // kept alive for the whole extern call (the caller holds a `Ref`), so the
 // trampoline address stays valid while C runs. A callback C stores for later is
@@ -327,7 +327,7 @@ struct CallbackObj : RefCounted {
   ffi_cif cif{};
   ffi_closure* closure = nullptr;
   void* code = nullptr;
-  // A RuntimeError raised inside the Jolt callback cannot unwind through the C
+  // A RuntimeError raised inside the Oskel callback cannot unwind through the C
   // frame that called the trampoline, so the trampoline stores it here and the
   // extern call re-raises it once C returns.
   bool hasPendingError = false;
@@ -337,7 +337,7 @@ struct CallbackObj : RefCounted {
 };
 
 // Reads one callback argument from the `void*` libffi hands the trampoline and
-// boxes it as a Jolt value, using the declared width so a narrow C `int` is not
+// boxes it as a Oskel value, using the declared width so a narrow C `int` is not
 // read as 64 bits.
 Value readCallbackArg(Runtime& rt, const std::string& typeName, void* slot) {
   if (typeName == "float") return Value::fromFloat(*static_cast<float*>(slot));
@@ -355,7 +355,7 @@ Value readCallbackArg(Runtime& rt, const std::string& typeName, void* slot) {
   return wrapInteger(rt, typeName, raw);
 }
 
-// Writes the Jolt callback's result into the storage libffi provides, in the
+// Writes the Oskel callback's result into the storage libffi provides, in the
 // declared C type. `void` writes nothing; the error path writes zero of the
 // declared width so C never observes an uninitialised return.
 void writeCallbackResult(const std::string& typeName, const Value& value, void* ret) {
@@ -397,11 +397,11 @@ void writeCallbackResult(const std::string& typeName, const Value& value, void* 
 }
 
 // The C entry point libffi calls for every invocation. It converts the C
-// arguments to Jolt values, re-enters the engine through `Runtime::call`, and
+// arguments to Oskel values, re-enters the engine through `Runtime::call`, and
 // writes the result back. It must never let a C++ exception cross the C frame
-// (the caller is C code such as `qsort`), so a Jolt error is captured and
+// (the caller is C code such as `qsort`), so a Oskel error is captured and
 // re-raised by the extern call once C returns.
-void joltCallbackTrampoline(ffi_cif* cif, void* ret, void** args, void* userData) {
+void oskelCallbackTrampoline(ffi_cif* cif, void* ret, void** args, void* userData) {
   (void)cif;
   CallbackObj* callback = static_cast<CallbackObj*>(userData);
   if (callback->hasPendingError) {
@@ -410,14 +410,14 @@ void joltCallbackTrampoline(ffi_cif* cif, void* ret, void** args, void* userData
     if (callback->returnType != "void") std::memset(ret, 0, 8);
     return;
   }
-  std::vector<Value> joltArgs;
-  joltArgs.reserve(callback->paramTypes.size());
+  std::vector<Value> oskelArgs;
+  oskelArgs.reserve(callback->paramTypes.size());
   for (std::size_t i = 0; i < callback->paramTypes.size(); ++i) {
-    joltArgs.push_back(readCallbackArg(*callback->runtime, callback->paramTypes[i], args[i]));
+    oskelArgs.push_back(readCallbackArg(*callback->runtime, callback->paramTypes[i], args[i]));
   }
   Value result;
   try {
-    result = callback->runtime->call(callback->function, std::move(joltArgs),
+    result = callback->runtime->call(callback->function, std::move(oskelArgs),
                                      callback->runtime->currentLine, callback->runtime->currentCol);
   } catch (const RuntimeError& error) {
     callback->hasPendingError = true;
@@ -435,7 +435,7 @@ void joltCallbackTrampoline(ffi_cif* cif, void* ret, void** args, void* userData
   writeCallbackResult(callback->returnType, result, ret);
 }
 
-// Builds the closure for one Jolt function bound to a callback parameter.
+// Builds the closure for one Oskel function bound to a callback parameter.
 Ref<CallbackObj> makeCallback(Runtime& rt, const std::string& name, const TypeSpec& spec,
                               const Value& function) {
   auto callback = makeRef<CallbackObj>();
@@ -460,7 +460,7 @@ Ref<CallbackObj> makeCallback(Runtime& rt, const std::string& name, const TypeSp
   if (callback->closure == nullptr) {
     rt.fail("cannot allocate a callback for '" + name + "'");
   }
-  if (ffi_prep_closure_loc(callback->closure, &callback->cif, joltCallbackTrampoline,
+  if (ffi_prep_closure_loc(callback->closure, &callback->cif, oskelCallbackTrampoline,
                            callback.get(), code) != FFI_OK) {
     ffi_closure_free(callback->closure);
     callback->closure = nullptr;
@@ -469,7 +469,7 @@ Ref<CallbackObj> makeCallback(Runtime& rt, const std::string& name, const TypeSp
   callback->code = code;
   return callback;
 }
-#endif  // JOLT_HAVE_LIBFFI
+#endif  // OSKEL_HAVE_LIBFFI
 
 }  // namespace
 
@@ -512,7 +512,7 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
     std::vector<ParamClass> classes;
     std::vector<std::string> types;
     std::vector<Value> values;
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
     // Callbacks built for this call, kept alive until C returns so the
     // trampoline address stays valid while the callee runs.
     std::vector<Ref<CallbackObj>> callbacks;
@@ -520,7 +520,7 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
     for (std::size_t i = 0; i < paramTypes.size(); ++i) {
       const TypeSpec& spec = paramTypes[i];
       if (spec.isCallback) {
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
         // A callback is one GPR: the trampoline address (or NULL for `nil`).
         std::int64_t code = 0;
         if (!args[i].isNil()) {
@@ -589,8 +589,8 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
       }
     }
     Value result = dispatch<0>(address, rc, shape, layout, returnScalar, classes, types, values, in);
-#ifdef JOLT_HAVE_LIBFFI
-    // A Jolt error raised inside a callback could not unwind through the C
+#ifdef OSKEL_HAVE_LIBFFI
+    // A Oskel error raised inside a callback could not unwind through the C
     // frame; re-raise it now that C has returned.
     for (const Ref<CallbackObj>& callback : callbacks) {
       if (callback->hasPendingError) {

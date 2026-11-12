@@ -11,7 +11,7 @@ assertEq(noop(), nil);
 fn greet(name) {
   return "Hello, " + name;
 }
-assertEq(greet("Jolt"), "Hello, Jolt");
+assertEq(greet("Oskel"), "Hello, Oskel");
 
 // return exits the function early.
 fn sign(n) {

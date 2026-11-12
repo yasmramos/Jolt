@@ -1,9 +1,9 @@
 // ============================================================
-// Jolt — full example
+// Oskel — full example
 // ============================================================
 // Uses every feature that works today (PHASE 6f + PHASE 4 done).
 //
-// Run with: jolt examples/full.jolt [args...]
+// Run with: oskel examples/full.oskl [args...]
 // ============================================================
 
 // `abs`, `min`, `max` and `clamp` live in the standard library.
@@ -13,11 +13,11 @@ import std.math.*;
 // 1. Constants and variables
 // ------------------------------------------------------------
 const MAX_SCORE = 100 * 2;
-let greeting = "Hello, Jolt!";
+let greeting = "Hello, Oskel!";
 var counter = 0;
 
 assertEq(MAX_SCORE, 200);
-assertEq(greeting, "Hello, Jolt!");
+assertEq(greeting, "Hello, Oskel!");
 
 // ------------------------------------------------------------
 // 2. Arithmetic, comparisons, bitwise, ternary
@@ -287,7 +287,7 @@ assertEq(x, 1);
 fn readsGlobal() {
   return greeting;
 }
-assertEq(readsGlobal(), "Hello, Jolt!");
+assertEq(readsGlobal(), "Hello, Oskel!");
 
 // ------------------------------------------------------------
 // 11. Cycle collector (closures that capture each other)
@@ -370,9 +370,9 @@ if (fileExists(path)) {
   let content = readFile(path);
   print("Content: ${content}");
 }
-writeFile(path, "Hello from Jolt at ${elapsed} seconds");
+writeFile(path, "Hello from Oskel at ${elapsed} seconds");
 assertEq(fileExists(path), true);
-assertEq(readFile(path).startsWith("Hello from Jolt"), true);
+assertEq(readFile(path).startsWith("Hello from Oskel"), true);
 
 // ------------------------------------------------------------
 // 16. Error handling (no exceptions; use nil + panic)

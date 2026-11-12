@@ -17,7 +17,7 @@
 #undef IN
 #endif
 
-// Low-level bytecode for Jolt's register-based VM.
+// Low-level bytecode for Oskel's register-based VM.
 //
 // Every instruction works on registers and has exactly one direct native
 // lowering in PHASE 7: either a short inline instruction sequence or one call

@@ -26,7 +26,7 @@ inline bool startsWith(const std::string& s, const std::string& prefix) {
   return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
 
-// Directory part of a path ("a/b/c.jolt" -> "a/b", "c.jolt" -> "."). Used to
+// Directory part of a path ("a/b/c.oskl" -> "a/b", "c.oskl" -> "."). Used to
 // resolve an import relative to the file that declares it.
 inline std::string directoryOf(const std::string& path) {
   size_t slash = path.find_last_of("/\\");
@@ -50,7 +50,7 @@ inline bool readSourceFile(const std::string& path, std::string& out) {
   return true;
 }
 
-// Writes raw bytes to `path`, creating or truncating it. Used by `jolt build`
+// Writes raw bytes to `path`, creating or truncating it. Used by `oskel build`
 // to drop a generated executable; `data` is already the complete image.
 inline bool writeBinaryFile(const std::string& path,
                             const std::vector<std::uint8_t>& data) {
@@ -61,7 +61,7 @@ inline bool writeBinaryFile(const std::string& path,
   return static_cast<bool>(file);
 }
 
-// The path without its extension ("a/b.jolt" -> "a/b", "a/b" -> "a/b"). A dot
+// The path without its extension ("a/b.oskl" -> "a/b", "a/b" -> "a/b"). A dot
 // in a directory component is not an extension, so only the last component is
 // inspected.
 inline std::string stripExtension(const std::string& path) {

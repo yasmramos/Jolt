@@ -1,10 +1,10 @@
 // String literals, interpolation and methods.
 
-var name = "Jolt";
-assertEq("Hello, ${name}!", "Hello, Jolt!");
+var name = "Oskel";
+assertEq("Hello, ${name}!", "Hello, Oskel!");
 assertEq("1+2=${1 + 2}", "1+2=3");
 assertEq("len=${"abc".length}", "len=3");
-assertEq("nested ${"inner ${name}"}", "nested inner Jolt");
+assertEq("nested ${"inner ${name}"}", "nested inner Oskel");
 assertEq("map ${ {a: 1}.a }", "map 1");
 assertEq("\u00e9", "é");
 assertEq("\x41", "A");

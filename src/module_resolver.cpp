@@ -24,7 +24,7 @@ std::string modulePathToFile(const std::string& path) {
   std::string result;
   result.reserve(path.size() + 5);
   for (char c : path) result += (c == '.') ? '/' : c;
-  result += ".jolt";
+  result += ".oskl";
   return result;
 }
 
@@ -48,7 +48,7 @@ bool ModuleResolver::resolve(const std::string& path, std::string& file,
       }
     }
     // `std.` is reserved for the standard library: a user file that happens to
-    // sit at the same path (std/foo.jolt) is an error, not a valid module.
+    // sit at the same path (std/foo.oskl) is an error, not a valid module.
     if (fileExists(joinPath(projectDir_, relative)) ||
         (!packagesDir_.empty() && fileExists(joinPath(packagesDir_, relative)))) {
       message = "module '" + path + "' is reserved for the standard library";

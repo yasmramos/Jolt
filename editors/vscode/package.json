@@ -1,34 +1,34 @@
 {
-  "name": "jolt",
-  "displayName": "Jolt",
-  "description": "Syntax highlighting for the Jolt programming language (.jolt).",
+  "name": "oskel",
+  "displayName": "Oskel",
+  "description": "Syntax highlighting for the Oskel programming language (.oskl).",
   "version": "0.1.0",
-  "publisher": "jolt-lang",
+  "publisher": "oskel-lang",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yasmramos/Jolt.git",
+    "url": "https://github.com/yasmramos/Oskel.git",
     "directory": "editors/vscode"
   },
   "engines": {
     "vscode": "^1.60.0"
   },
   "categories": ["Programming Languages"],
-  "keywords": ["jolt", "language", "syntax", "highlighting"],
+  "keywords": ["oskel", "language", "syntax", "highlighting"],
   "contributes": {
     "languages": [
       {
-        "id": "jolt",
-        "aliases": ["Jolt", "jolt"],
-        "extensions": [".jolt"],
+        "id": "oskel",
+        "aliases": ["Oskel", "oskel"],
+        "extensions": [".oskl"],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "jolt",
-        "scopeName": "source.jolt",
-        "path": "./syntaxes/jolt.tmLanguage.json"
+        "language": "oskel",
+        "scopeName": "source.oskl",
+        "path": "./syntaxes/oskel.tmLanguage.json"
       }
     ]
   }

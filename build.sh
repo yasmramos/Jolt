@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Builds the Jolt interpreter into build/jolt.
+# Builds the Oskel interpreter into build/oskel.
 # Usage: ./build.sh
 #   CXX=clang++ ./build.sh
 #   CXXFLAGS="-O0 -g" ./build.sh
@@ -22,9 +22,9 @@ fi
 CXXFLAGS=${CXXFLAGS:--O2}
 
 mkdir -p build
-# The development engine includes the AOT backend (PHASE 7d wires `jolt build`
+# The development engine includes the AOT backend (PHASE 7d wires `oskel build`
 # into the CLI) and the JIT (PHASE 8), so `src/native/*.cpp` and `src/jit/*.cpp`
 # are compiled in too, the way CMake's GLOB_RECURSE over src/ picks them up.
 # shellcheck disable=SC2086
-"$CXX" -std=c++17 $CXXFLAGS -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp src/native/*.cpp src/jit/*.cpp
-echo "Built build/jolt"
+"$CXX" -std=c++17 $CXXFLAGS -Wall -Wextra -Iinclude -Isrc -o build/oskel src/*.cpp src/native/*.cpp src/jit/*.cpp
+echo "Built build/oskel"

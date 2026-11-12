@@ -1,6 +1,6 @@
 // Modules and the four Java-style import forms.
 //
-// The fixture lives at examples/modules/geometry.jolt, so the dotted path
+// The fixture lives at examples/modules/geometry.oskl, so the dotted path
 // `modules.geometry` resolves relative to this file.
 
 // 1. Qualified: the module is bound under its path.

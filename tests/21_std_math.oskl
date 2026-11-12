@@ -1,7 +1,7 @@
 // PHASE 6.5: the `std.math` standard-library module.
 //
 // The primitives that need C++ are `native fn` re-exports of host builtins;
-// `abs`, `min`, `max` and `clamp` are plain Jolt (min/max are variadic), and
+// `abs`, `min`, `max` and `clamp` are plain Oskel (min/max are variadic), and
 // `PI`/`E` are constants. `_helper` is private and must not be exported.
 
 import std.math;

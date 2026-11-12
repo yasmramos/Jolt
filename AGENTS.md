@@ -36,10 +36,10 @@ Repository-specific workflow for AI agents. Project conventions live in
 ## Build and tests
 
 - `cmake -S . -B build && cmake --build build -j4 && (cd build && ctest)`.
-  The suite globs `tests/*.jolt` and `examples/*.jolt` at **configure time**, so
+  The suite globs `tests/*.oskl` and `examples/*.oskl` at **configure time**, so
   a new example or test needs `cmake -S . -B build` again before `ctest` picks
   it up (the build alone will not).
-- `jolt build` prints lowering errors (unsupported builtins, unlowered
+- `oskel build` prints lowering errors (unsupported builtins, unlowered
   opcodes) and exits 65 without writing a binary; it never emits a
   mis-compiled one.
 - A host binding (`native fn`, `extern "C"`) and `var x = x;` both compile to
@@ -52,16 +52,16 @@ Repository-specific workflow for AI agents. Project conventions live in
 
 - `.github/workflows/artifacts.yml` builds the engine on Linux, Windows and
   macOS, packages the VS Code extension plus a per-platform installable
-  (`packaging/windows/jolt.iss`, `packaging/linux/package-linux.sh`,
+  (`packaging/windows/oskel.iss`, `packaging/linux/package-linux.sh`,
   `packaging/macos/package-macos.sh`), uploads them as artifacts, and publishes
   a GitHub Release with a `SHA256SUMS` file when a `v*` tag is pushed. Only a
   tag releases; branch pushes and pull requests stop at the artifacts.
-- The engine ships as `bin/jolt` + `share/jolt/std/*.jolt`; `standardLibraryDir`
-  finds the standard library through `../share/jolt/std` relative to the
+- The engine ships as `bin/oskel` + `share/oskel/std/*.oskl`; `standardLibraryDir`
+  finds the standard library through `../share/oskel/std` relative to the
   executable, so `import std.math` resolves from any unpacked archive with no
   environment variable. Every packaging format keeps that layout:
-  `/usr/bin/jolt` + `/usr/share/jolt/std` (deb, rpm) and `/usr/local/bin/jolt` +
-  `/usr/local/share/jolt/std` (pkg, dmg).
+  `/usr/bin/oskel` + `/usr/share/oskel/std` (deb, rpm) and `/usr/local/bin/oskel` +
+  `/usr/local/share/oskel/std` (pkg, dmg).
 - Version comes from the tag, or from `CMakeLists.txt` on a branch. Pre-release
   tags need per-format handling: RPM rejects a `-` in `Version`, and GitHub
   rewrites `~` to `.` in asset names (which breaks `SHA256SUMS`), so the `.deb`

@@ -190,7 +190,7 @@ void testReferencesHiddenInNativesAreNeverFreed() {
   assert(gcTrackedCount() == base + 2);
 }
 
-#ifndef JOLT_GC_STRESS
+#ifndef OSKEL_GC_STRESS
 void testCollectionRunsAutomaticallyAfterEnoughAllocations() {
   const std::size_t base = settledCount();
   for (int i = 0; i < 5000; ++i) {
@@ -227,7 +227,7 @@ int main() {
   testScopeChainStaysAliveThroughAClosure();
   testRecursiveFunctionBoundInAScopeIsCollected();
   testReferencesHiddenInNativesAreNeverFreed();
-#ifndef JOLT_GC_STRESS
+#ifndef OSKEL_GC_STRESS
   testCollectionRunsAutomaticallyAfterEnoughAllocations();
 #endif
   std::puts("gc tests passed");

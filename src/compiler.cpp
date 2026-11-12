@@ -480,7 +480,7 @@ std::string Compiler::assignError(const TypeRef& from, const TypeRef& to,
            ": a nullable value is not allowed here (use '" + to.name + "?')";
   }
 
-  // A Jolt function is the value behind a callback (`fn(int, int): int`): any
+  // A Oskel function is the value behind a callback (`fn(int, int): int`): any
   // function is accepted, because the trampoline marshals the arguments at run
   // time against the declared signature. The exact arity/types are checked when
   // the callback is invoked, not here.
@@ -499,7 +499,7 @@ std::string Compiler::assignError(const TypeRef& from, const TypeRef& to,
   }
 
   // FFI pointers (PHASE 6.6): a `cstring` is also a `ptr` (upcast to `void*`);
-  // the reverse needs an explicit cast, so it is not implicit. A Jolt `string`
+  // the reverse needs an explicit cast, so it is not implicit. A Oskel `string`
   // is not assignable to `cstring`: `cstring` is an owned handle, so binding a
   // string to it would leave a dangling pointer once the string is collected.
   // Passing a string as a `cstring` *argument* is allowed instead, because the
@@ -543,7 +543,7 @@ void Compiler::checkNativeCall(const std::string& name, const NativeSig& sig,
     const TypeRef& param = sig.params[slot].type;
     if (!param.isPresent()) continue;
     const TypeRef argument = inferExprType(*call.args[i]);
-    // A Jolt `string` is NUL-terminated and stays alive for the whole call, so
+    // A Oskel `string` is NUL-terminated and stays alive for the whole call, so
     // it is a valid `const char *` *argument* even though it is not assignable
     // to an owned `cstring` binding (see `checkAssignable`).
     if (param.name == "cstring" && argument.name == "string" && !argument.nullable) continue;
@@ -650,7 +650,7 @@ TypeRef Compiler::inferExprType(const Expr& expr) const {
   }
   // `e catch d` (PHASE 6.7.3, typed in 6.7.4): the result is either the operand
   // or the fallback, so its type is the union of the two. When either side is
-  // unknown the result stays unknown, which keeps untyped Jolt functions
+  // unknown the result stays unknown, which keeps untyped Oskel functions
   // (`f() catch 0`) unchecked as before.
   if (const auto* caught = std::get_if<CatchExpr>(&expr.node)) {
     TypeRef left = inferExprType(*caught->operand);

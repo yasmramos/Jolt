@@ -14,7 +14,7 @@
 // VM (PHASE 3-6).
 //
 // Everything the standard library needs from the engine goes through this
-// class, so a builtin such as `map`, `filter` or `sort` can invoke a Jolt
+// class, so a builtin such as `map`, `filter` or `sort` can invoke a Oskel
 // function without knowing whether the caller is the interpreter or the VM.
 // That is what lets PHASE 6 run the stdlib against VM closures instead of
 // re-entering the AST.

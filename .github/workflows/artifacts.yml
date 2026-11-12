@@ -2,20 +2,20 @@
 # a `v*` tag it also attaches them to a GitHub Release together with a
 # `SHA256SUMS` file.
 #
-#   1. jolt-<platform>          - the development engine (`jolt`/`jolt.exe`)
+#   1. oskel-<platform>          - the development engine (`oskel`/`oskel.exe`)
 #                                 installed next to the standard library
 #                                 (`std/`), the layout `standardLibraryDir`
 #                                 looks for, so `import std.math` resolves from
 #                                 the unpacked archive.
-#   2. jolt-windows-x64-setup   - an Inno Setup installer that puts the engine
+#   2. oskel-windows-x64-setup   - an Inno Setup installer that puts the engine
 #                                 in `Program Files`, adds it to the system
-#                                 PATH and optionally associates `.jolt` files.
-#   3. jolt-linux-packages      - `.deb` and `.rpm` packages that install into
-#                                 `/usr`, so `/usr/bin/jolt` finds
-#                                 `/usr/share/jolt/std`.
-#   4. jolt-macos-packages      - a `.pkg` installer and a `.dmg` disk image
+#                                 PATH and optionally associates `.oskl` files.
+#   3. oskel-linux-packages      - `.deb` and `.rpm` packages that install into
+#                                 `/usr`, so `/usr/bin/oskel` finds
+#                                 `/usr/share/oskel/std`.
+#   4. oskel-macos-packages      - a `.pkg` installer and a `.dmg` disk image
 #                                 that install into `/usr/local`.
-#   5. jolt-vscode-extension    - the packaged VS Code extension (`.vsix`),
+#   5. oskel-vscode-extension    - the packaged VS Code extension (`.vsix`),
 #                                 platform-independent, built once.
 #
 # This is separate from `cmake-multi-platform.yml`, which only builds and tests
@@ -45,17 +45,17 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: jolt-linux-x64
-            archive: jolt-linux-x64.tar.gz
+            artifact: oskel-linux-x64
+            archive: oskel-linux-x64.tar.gz
           - os: windows-latest
-            artifact: jolt-windows-x64
-            archive: jolt-windows-x64.zip
+            artifact: oskel-windows-x64
+            archive: oskel-windows-x64.zip
           # `macos-latest` is the Apple Silicon image (macOS 26, arm64). The
           # dev engine is portable C++, so this builds natively; the native
           # backend stays x86-64 Linux only (see AGENT.md PHASE 7).
           - os: macos-latest
-            artifact: jolt-macos-arm64
-            archive: jolt-macos-arm64.tar.gz
+            artifact: oskel-macos-arm64
+            archive: oskel-macos-arm64.tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -81,8 +81,8 @@ jobs:
 
       - name: Install into a staging prefix
         # `cmake --install` produces the same layout as `make install`:
-        # stage/bin/jolt plus stage/share/jolt/std/*.jolt. The engine finds the
-        # library through `../share/jolt/std` relative to the executable, so the
+        # stage/bin/oskel plus stage/share/oskel/std/*.oskl. The engine finds the
+        # library through `../share/oskel/std` relative to the executable, so the
         # staged tree is self-contained and runs after unpacking.
         run: cmake --install build --config Release --prefix stage
 
@@ -102,7 +102,7 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Packaging Jolt $version"
+          echo "Packaging Oskel $version"
 
       - name: Package the engine (Unix)
         if: runner.os != 'Windows'
@@ -132,17 +132,17 @@ jobs:
                    Select-Object -First 1).FullName
           if (-not $iscc) { throw "ISCC.exe not found; the Windows image no longer ships Inno Setup" }
 
-          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" "/DStageDir=$PWD\stage" "packaging\windows\jolt.iss"
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" "/DStageDir=$PWD\stage" "packaging\windows\oskel.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
-          Get-Item dist\jolt-windows-x64-setup.exe | Format-List Name, Length
+          Get-Item dist\oskel-windows-x64-setup.exe | Format-List Name, Length
 
       - name: Upload the Windows installer
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: jolt-windows-x64-setup
-          path: dist/jolt-windows-x64-setup.exe
+          name: oskel-windows-x64-setup
+          path: dist/oskel-windows-x64-setup.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -156,7 +156,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: jolt-linux-packages
+          name: oskel-linux-packages
           path: |
             dist/*.deb
             dist/*.rpm
@@ -173,7 +173,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: jolt-macos-packages
+          name: oskel-macos-packages
           path: |
             dist/*.pkg
             dist/*.dmg
@@ -194,14 +194,14 @@ jobs:
         working-directory: editors/vscode
         # `--out` pins the file name so the upload and the release assets do not
         # depend on the extension version in package.json.
-        run: npx --yes @vscode/vsce@3 package --out jolt-vscode.vsix
+        run: npx --yes @vscode/vsce@3 package --out oskel-vscode.vsix
 
       - name: Upload the VS Code extension
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: jolt-vscode-extension
-          path: editors/vscode/jolt-vscode.vsix
+          name: oskel-vscode-extension
+          path: editors/vscode/oskel-vscode.vsix
           if-no-files-found: error
           retention-days: 30
 

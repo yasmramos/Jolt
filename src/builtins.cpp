@@ -956,7 +956,7 @@ void registerBuiltins(Runtime& in) {
   });
 
   // Private helper used by compiler-generated code (interpolation and computed
-  // map keys). The `$` makes the name impossible to spell in Jolt source, so a
+  // map keys). The `$` makes the name impossible to spell in Oskel source, so a
   // user binding cannot shadow it.
   in.addNative("$str", [](Runtime& in, Args args) -> Value {
     need(in, "$str", args, 1);
@@ -1416,7 +1416,7 @@ void registerBuiltins(Runtime& in) {
   // the whole marshalling surface available in the development engine; the AOT
   // backend (PHASE 7) lowers the same handles to real C pointers.
 
-  // Builds a C string (`const char *`) from a Jolt string: the bytes plus a
+  // Builds a C string (`const char *`) from a Oskel string: the bytes plus a
   // terminating NUL, exactly what C expects.
   in.addNative("cstring", [](Runtime& in, Args args) -> Value {
     need(in, "cstring", args, 1);
@@ -1435,7 +1435,7 @@ void registerBuiltins(Runtime& in) {
     return makePtr(PtrKind::Buffer, std::vector<char>(static_cast<size_t>(size), '\0'));
   });
 
-  // Reads a `cstring`/`buffer` handle back as a Jolt string. A `cstring` stops
+  // Reads a `cstring`/`buffer` handle back as a Oskel string. A `cstring` stops
   // at the first NUL, like C; a buffer yields all its bytes.
   in.addNative("cstr", [](Runtime& in, Args args) -> Value {
     need(in, "cstr", args, 1);

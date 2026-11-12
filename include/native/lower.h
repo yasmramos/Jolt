@@ -35,7 +35,7 @@
 // From 7c.2c.1 every proto is lowered to its own machine function with the
 // lowering's own convention `AotValue entry(AotValue* args, long argc,
 // AotClosure* self)`. `CALL` builds the argument window in the caller's
-// register file and dispatches through `jolt_call`; `RETURN` publishes R[a];
+// register file and dispatches through `oskel_call`; `RETURN` publishes R[a];
 // `CLOSURE` allocates an `AotClosure` for a capture-free child proto.
 struct LoweringError : std::exception {
   explicit LoweringError(std::string message) : message(std::move(message)) {}

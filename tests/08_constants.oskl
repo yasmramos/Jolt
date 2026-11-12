@@ -31,7 +31,7 @@ assertEq(scaled(2), 46);
 }
 
 // `const` is immutable like `let`: assignment is rejected at runtime here.
-// See tests/errors/constReassign.jolt for the negative test.
+// See tests/errors/constReassign.oskl for the negative test.
 
 // `let` (runtime immutable) and `var` (mutable) still work alongside consts.
 let derived = MAX + 1;

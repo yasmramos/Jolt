@@ -1,6 +1,6 @@
-// Test fixture: a second module with names that do not clash with util.jolt,
+// Test fixture: a second module with names that do not clash with util.oskl,
 // so it can be wildcard-imported alongside it. Conflict detection has its own
-// error test (tests/errors/ambiguous_wildcard.jolt).
+// error test (tests/errors/ambiguous_wildcard.oskl).
 
 fn triple(x) {
   return 3 * x;

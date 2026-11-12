@@ -1,15 +1,15 @@
-# Jolt
+# Oskel
 
-**Jolt** is a dynamic, general-purpose programming language implemented from scratch in **C++17**. The project includes the lexer, the parser, the AST, the bytecode compiler, the register-based virtual machine and the standard library, with no external dependencies beyond the C++ standard library.
+**Oskel** is a dynamic, general-purpose programming language implemented from scratch in **C++17**. The project includes the lexer, the parser, the AST, the bytecode compiler, the register-based virtual machine and the standard library, with no external dependencies beyond the C++ standard library.
 
 Its goal is to be small, readable and easy to study: a single executable, a Lua-style bytecode architecture and a familiar syntax with braces and semicolons.
 
-```jolt
+```oskel
 fn greet(name) {
   return "Hello, ${name}!";
 }
 
-let languages = ["C++", "Jolt"];
+let languages = ["C++", "Oskel"];
 for language in languages {
   print(greet(language));
 }
@@ -31,7 +31,7 @@ for language in languages {
 - Modules with Java-style `import`, and C interop via `extern "C"` / `native fn`.
 - Built-in standard library: strings, arrays, maps, math, files, console and utilities.
 - Interactive REPL with session state, commands and expression evaluation.
-- **Ahead-of-time native compilation**: `jolt build file.jolt` emits a
+- **Ahead-of-time native compilation**: `oskel build file.oskl` emits a
   self-contained static executable (no libc, no runtime to install; `ldd`
   reports *"not a dynamic executable"*). See the
   [CLI tutorial](docs/tutorial-cli.md).
@@ -53,7 +53,7 @@ Version **0.1.0**. The language is functional and covered by a test suite, but i
 
 ```bat
 build.bat
-build\jolt.exe examples\hello.jolt
+build\oskel.exe examples\hello.oskl
 ```
 
 ### Linux, macOS or MSYS2 (script)
@@ -61,7 +61,7 @@ build\jolt.exe examples\hello.jolt
 ```sh
 chmod +x build.sh tests/run.sh
 ./build.sh
-./build/jolt examples/hello.jolt
+./build/oskel examples/hello.oskl
 ```
 
 You can choose the compiler and its options:
@@ -75,29 +75,29 @@ CXX=clang++ CXXFLAGS="-O0 -g" ./build.sh
 ```sh
 cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
 cmake --build build-cmake
-./build-cmake/jolt examples/hello.jolt
+./build-cmake/oskel examples/hello.oskl
 ```
 
 ### Manual build
 
 ```sh
-g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp src/native/*.cpp src/jit/*.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build/oskel src/*.cpp src/native/*.cpp src/jit/*.cpp
 ```
 
 On Windows, with `cmd.exe`:
 
 ```bat
-g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe src\*.cpp src\native\*.cpp src\jit\*.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\oskel.exe src\*.cpp src\native\*.cpp src\jit\*.cpp
 ```
 
 ## Usage
 
 ```text
-jolt                      starts the REPL
-jolt <file.jolt>          runs a script
-jolt -e "<code>"          runs code from the command line
-jolt -c <file.jolt>       compiles the script without running it
-jolt build <file.jolt>    compiles the script to a native binary (AOT)
+oskel                      starts the REPL
+oskel <file.oskl>          runs a script
+oskel -e "<code>"          runs code from the command line
+oskel -c <file.oskl>       compiles the script without running it
+oskel build <file.oskl>    compiles the script to a native binary (AOT)
 ```
 
 Options:
@@ -114,10 +114,10 @@ Options:
 Arguments that follow the file (or the `-e` code) are passed to the script and can be read with `args()`:
 
 ```sh
-jolt greet.jolt Ada Grace
+oskel greet.oskl Ada Grace
 ```
 
-```jolt
+```oskel
 for name in args() {
   print("Hello, ${name}");
 }
@@ -136,16 +136,16 @@ for name in args() {
 
 ### REPL
 
-Running `jolt` with no arguments opens the REPL:
+Running `oskel` with no arguments opens the REPL:
 
 ```text
-Jolt 0.1.0 - a small scripting language written in C++
+Oskel 0.1.0 - a small scripting language written in C++
 Type :help for help, :quit to exit.
-jolt> let x = 21
-jolt> x * 2
+oskel> let x = 21
+oskel> x * 2
 42
-jolt> let double = n => n * 2
-jolt> double(x)
+oskel> let double = n => n * 2
+oskel> double(x)
 42
 ```
 
@@ -172,19 +172,19 @@ In the `examples/` directory:
 
 | File | Contents |
 | --- | --- |
-| `hello.jolt` | Greeting and string interpolation. |
-| `fizzbuzz.jolt` | Loops, conditionals and modulo. |
-| `fibonacci.jolt` | Recursion and an iterative version. |
-| `closures.jolt` | Closures and functions that remember state. |
-| `collections.jolt` | Arrays, maps, filtering, reduction and sorting. |
+| `hello.oskl` | Greeting and string interpolation. |
+| `fizzbuzz.oskl` | Loops, conditionals and modulo. |
+| `fibonacci.oskl` | Recursion and an iterative version. |
+| `closures.oskl` | Closures and functions that remember state. |
+| `collections.oskl` | Arrays, maps, filtering, reduction and sorting. |
 
 ```sh
-jolt examples/fizzbuzz.jolt
+oskel examples/fizzbuzz.oskl
 ```
 
 ## The language in a minute
 
-```jolt
+```oskel
 // Variables: var is mutable, let is immutable, const is a compile-time constant
 let name = "world";
 const VERSION = "0.1.0";
@@ -229,7 +229,7 @@ The full reference is in **[docs/language.md](docs/language.md)**.
 
 ## Tests
 
-The simplest way to run everything (all `.jolt` scripts, the error cases, the
+The simplest way to run everything (all `.oskl` scripts, the error cases, the
 examples and both C++ suites) is CTest:
 
 ```sh
@@ -266,7 +266,7 @@ The positive tests use `assert` and `assertEq`; a script exits with a non-zero c
 
 Current limitations:
 
-- Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. The development engine (`jolt`) also ships a **JIT** for the integer subset of the bytecode: a leaf function whose body only manipulates `nil`/`bool`/`int` is compiled to native x86-64 the first time it is called (about 25x faster on a tight integer loop), while everything else keeps running on the interpreter, so results never change. It is a development-engine feature only: `jolt build` and the generated binary never contain it (`jolt --no-jit` disables it).
+- Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. The development engine (`oskel`) also ships a **JIT** for the integer subset of the bytecode: a leaf function whose body only manipulates `nil`/`bool`/`int` is compiled to native x86-64 the first time it is called (about 25x faster on a tight integer loop), while everything else keeps running on the interpreter, so results never change. It is a development-engine feature only: `oskel build` and the generated binary never contain it (`oskel --no-jit` disables it).
 - There are no classes, interfaces or inheritance; maps and closures replace them. A `struct` (data only, no methods) is a named map shape checked at compile time, not a class.
 - There is no `try`/`catch` *statement* or catchable exceptions. Errors are values: `error(message, code?)` builds a first-class error value and `isError(value)` detects it. `pcall(fn, ...)` turns a raised runtime error into a `{ok, value, error}` map instead of aborting. Two operators work on error values: `try expr` propagates one to the caller (Rust's `?`) and `expr catch default` recovers locally (Zig's `catch`). `panic()` is for unrecoverable errors.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require`; modules are loaded eagerly and a cyclic import is a compile error.

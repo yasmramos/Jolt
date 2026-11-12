@@ -1,41 +1,41 @@
-# End-to-end test for `jolt build` (PHASE 7d): compile a .jolt program to a
+# End-to-end test for `oskel build` (PHASE 7d): compile a .oskl program to a
 # native binary and run it.
 #
 # Registered by CMakeLists.txt on Linux x86-64 only (the AOT backend targets
 # x86_64-linux-sysv). Expects:
-#   -DJOLT_EXE=<path to the jolt executable>
-#   -DJOLT_SCRIPT=<the .jolt file to build>
+#   -DOSKEL_EXE=<path to the oskel executable>
+#   -DOSKEL_SCRIPT=<the .oskl file to build>
 #
 # It asserts:
-#   1. `jolt build` exits 0 and writes the requested output,
+#   1. `oskel build` exits 0 and writes the requested output,
 #   2. the generated binary runs and prints exactly the VM's output,
 #   3. the binary is statically linked (no dynamic dependencies).
 
-if(NOT DEFINED JOLT_EXE OR NOT DEFINED JOLT_SCRIPT)
-  message(FATAL_ERROR "build_binary.cmake requires JOLT_EXE and JOLT_SCRIPT")
+if(NOT DEFINED OSKEL_EXE OR NOT DEFINED OSKEL_SCRIPT)
+  message(FATAL_ERROR "build_binary.cmake requires OSKEL_EXE and OSKEL_SCRIPT")
 endif()
 
-set(out "${CMAKE_CURRENT_BINARY_DIR}/jolt_build_output")
+set(out "${CMAKE_CURRENT_BINARY_DIR}/oskel_build_output")
 file(REMOVE "${out}")
 
 execute_process(
-  COMMAND "${JOLT_EXE}" build "${JOLT_SCRIPT}" -o "${out}"
+  COMMAND "${OSKEL_EXE}" build "${OSKEL_SCRIPT}" -o "${out}"
   RESULT_VARIABLE build_exit
   OUTPUT_VARIABLE build_stdout
   ERROR_VARIABLE build_stderr
 )
 if(NOT build_exit EQUAL 0)
   message(FATAL_ERROR
-    "jolt build exited ${build_exit}\n--- stdout ---\n${build_stdout}\n"
+    "oskel build exited ${build_exit}\n--- stdout ---\n${build_stdout}\n"
     "--- stderr ---\n${build_stderr}")
 endif()
 if(NOT EXISTS "${out}")
-  message(FATAL_ERROR "jolt build did not create '${out}'")
+  message(FATAL_ERROR "oskel build did not create '${out}'")
 endif()
 
 # The reference output is the development VM's: the AOT binary must agree.
 execute_process(
-  COMMAND "${JOLT_EXE}" "${JOLT_SCRIPT}"
+  COMMAND "${OSKEL_EXE}" "${OSKEL_SCRIPT}"
   RESULT_VARIABLE vm_exit
   OUTPUT_VARIABLE vm_stdout
 )

@@ -1,4 +1,4 @@
-# Runs every .jolt test in this directory.
+# Runs every .oskl test in this directory.
 # Positive tests live in tests/ and examples/ and must exit with code 0.
 # Error tests live in tests/errors/ and declare their expected exit code with
 # a first-line comment such as: // expect-exit: 70
@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 
 $testDir = $PSScriptRoot
 $root = Split-Path -Parent $testDir
-$exe = Join-Path $root "build\jolt.exe"
+$exe = Join-Path $root "build\oskel.exe"
 
 if (-not (Test-Path $exe)) {
     Write-Host "error: $exe was not found. Run build.bat first." -ForegroundColor Red
@@ -114,18 +114,18 @@ function Invoke-One {
     }
 }
 
-# tests/*.jolt: run the script, expected exit 0 unless declared otherwise.
-$tests = @(Get-ChildItem -Path $testDir -Filter "*.jolt" | Sort-Object Name)
+# tests/*.oskl: run the script, expected exit 0 unless declared otherwise.
+$tests = @(Get-ChildItem -Path $testDir -Filter "*.oskl" | Sort-Object Name)
 foreach ($test in $tests) {
     $expected = Get-DeclaredExit $test.FullName
     if ($null -eq $expected) { $expected = 0 }
     Invoke-One $test.Name $test.FullName "run" $expected
 }
 
-# examples/*.jolt: run the script, expected exit 0 unless declared otherwise.
+# examples/*.oskl: run the script, expected exit 0 unless declared otherwise.
 $examplesDir = Join-Path $root "examples"
 if (Test-Path $examplesDir) {
-    $examples = @(Get-ChildItem -Path $examplesDir -Filter "*.jolt" | Sort-Object Name)
+    $examples = @(Get-ChildItem -Path $examplesDir -Filter "*.oskl" | Sort-Object Name)
     foreach ($test in $examples) {
         $expected = Get-DeclaredExit $test.FullName
         if ($null -eq $expected) { $expected = 0 }
@@ -133,10 +133,10 @@ if (Test-Path $examplesDir) {
     }
 }
 
-# tests/errors/*.jolt: run the script, expected exit 70 unless declared.
+# tests/errors/*.oskl: run the script, expected exit 70 unless declared.
 $errorDir = Join-Path $testDir "errors"
 if (Test-Path $errorDir) {
-    $errorTests = @(Get-ChildItem -Path $errorDir -Filter "*.jolt" | Sort-Object Name)
+    $errorTests = @(Get-ChildItem -Path $errorDir -Filter "*.oskl" | Sort-Object Name)
     foreach ($test in $errorTests) {
         $expected = Get-DeclaredExit $test.FullName
         if ($null -eq $expected) { $expected = 70 }
@@ -144,10 +144,10 @@ if (Test-Path $errorDir) {
     }
 }
 
-# tests/check/*.jolt: compile only with `-c`, expected exit 0 unless declared.
+# tests/check/*.oskl: compile only with `-c`, expected exit 0 unless declared.
 $checkDir = Join-Path $testDir "check"
 if (Test-Path $checkDir) {
-    $checkTests = @(Get-ChildItem -Path $checkDir -Filter "*.jolt" | Sort-Object Name)
+    $checkTests = @(Get-ChildItem -Path $checkDir -Filter "*.oskl" | Sort-Object Name)
     foreach ($test in $checkTests) {
         $expected = Get-DeclaredExit $test.FullName
         if ($null -eq $expected) { $expected = 0 }

@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "Jolt",
-  "scopeName": "source.jolt",
-  "fileTypes": ["jolt"],
+  "name": "Oskel",
+  "scopeName": "source.oskl",
+  "fileTypes": ["oskl"],
   "patterns": [
     { "include": "#comments" },
     { "include": "#imports" },
@@ -21,15 +21,15 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.line.double-slash.jolt",
+          "name": "comment.line.double-slash.oskl",
           "match": "//.*$"
         },
         {
-          "name": "comment.block.jolt",
+          "name": "comment.block.oskl",
           "begin": "/\\*",
           "end": "\\*/",
-          "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.jolt" } },
-          "endCaptures": { "0": { "name": "punctuation.definition.comment.end.jolt" } },
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.oskl" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.comment.end.oskl" } },
           "patterns": [{ "include": "#comments" }]
         }
       ]
@@ -39,26 +39,26 @@
       "patterns": [
         {
           "comment": "Java-style import: `import std.math;`, `import a.b.*;`, `import a.b as m;`, `import { x, y } from a.b;`",
-          "name": "meta.import.jolt",
+          "name": "meta.import.oskl",
           "begin": "\\b(import)\\b",
           "end": ";",
-          "beginCaptures": { "1": { "name": "keyword.control.import.jolt" } },
-          "endCaptures": { "0": { "name": "punctuation.terminator.jolt" } },
+          "beginCaptures": { "1": { "name": "keyword.control.import.oskl" } },
+          "endCaptures": { "0": { "name": "punctuation.terminator.oskl" } },
           "patterns": [
             {
               "comment": "Selective import list `{ sqrt, pow }`",
               "begin": "\\{",
               "end": "\\}",
-              "beginCaptures": { "0": { "name": "punctuation.section.braces.begin.jolt" } },
-              "endCaptures": { "0": { "name": "punctuation.section.braces.end.jolt" } },
+              "beginCaptures": { "0": { "name": "punctuation.section.braces.begin.oskl" } },
+              "endCaptures": { "0": { "name": "punctuation.section.braces.end.oskl" } },
               "patterns": [
-                { "name": "entity.name.type.import.jolt", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+                { "name": "entity.name.type.import.oskl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
               ]
             },
-            { "name": "keyword.control.import.jolt", "match": "\\b(?:as|from)\\b" },
-            { "name": "punctuation.separator.jolt", "match": "\\." },
-            { "name": "punctuation.definition.wildcard.jolt", "match": "\\*" },
-            { "name": "entity.name.namespace.jolt", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+            { "name": "keyword.control.import.oskl", "match": "\\b(?:as|from)\\b" },
+            { "name": "punctuation.separator.oskl", "match": "\\." },
+            { "name": "punctuation.definition.wildcard.oskl", "match": "\\*" },
+            { "name": "entity.name.namespace.oskl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
           ]
         }
       ]
@@ -68,31 +68,31 @@
       "patterns": [
         {
           "comment": "`struct Name`",
-          "name": "meta.struct.jolt",
+          "name": "meta.struct.oskl",
           "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.type.struct.jolt" },
-            "2": { "name": "entity.name.type.struct.jolt" }
+            "1": { "name": "storage.type.struct.oskl" },
+            "2": { "name": "entity.name.type.struct.oskl" }
           }
         },
         {
           "comment": "`fn name(...)` — the name only; parameters are matched elsewhere",
-          "name": "meta.function.jolt",
+          "name": "meta.function.oskl",
           "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
           "captures": {
-            "1": { "name": "storage.type.function.jolt" },
-            "2": { "name": "entity.name.function.jolt" }
+            "1": { "name": "storage.type.function.oskl" },
+            "2": { "name": "entity.name.function.oskl" }
           }
         },
         {
           "comment": "`native fn` / `extern fn` / `extern \"C\" { fn ... }` declarations",
-          "name": "meta.function.extern.jolt",
+          "name": "meta.function.extern.oskl",
           "match": "\\b(native|extern)\\b(?:\\s+(\"(?:[^\"\\\\]|\\\\.)*\"))?\\s+(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.modifier.jolt" },
-            "2": { "name": "string.quoted.double.abi.jolt" },
-            "3": { "name": "storage.type.function.jolt" },
-            "4": { "name": "entity.name.function.jolt" }
+            "1": { "name": "storage.modifier.oskl" },
+            "2": { "name": "string.quoted.double.abi.oskl" },
+            "3": { "name": "storage.type.function.oskl" },
+            "4": { "name": "entity.name.function.oskl" }
           }
         }
       ]
@@ -101,11 +101,11 @@
     "keywords": {
       "patterns": [
         {
-          "name": "keyword.control.jolt",
+          "name": "keyword.control.oskl",
           "match": "\\b(?:if|else|while|do|for|in|break|continue|return|switch|case|default|try|catch|defer)\\b"
         },
         {
-          "name": "storage.type.jolt",
+          "name": "storage.type.oskl",
           "match": "\\b(?:let|var|const|fn|struct|native|extern|import)\\b"
         }
       ]
@@ -114,7 +114,7 @@
     "constants": {
       "patterns": [
         {
-          "name": "constant.language.jolt",
+          "name": "constant.language.oskl",
           "match": "\\b(?:true|false|nil)\\b"
         }
       ]
@@ -124,19 +124,19 @@
       "patterns": [
         {
           "comment": "Float/double with optional exponent and `f`/`F` suffix; `_` separators allowed.",
-          "name": "constant.numeric.float.jolt",
+          "name": "constant.numeric.float.oskl",
           "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?[fF]\\b"
         },
         {
-          "name": "constant.numeric.float.jolt",
+          "name": "constant.numeric.float.oskl",
           "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?\\b"
         },
         {
-          "name": "constant.numeric.float.jolt",
+          "name": "constant.numeric.float.oskl",
           "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*\\b"
         },
         {
-          "name": "constant.numeric.integer.jolt",
+          "name": "constant.numeric.integer.oskl",
           "match": "\\b[0-9][0-9_]*\\b"
         }
       ]
@@ -145,11 +145,11 @@
     "strings": {
       "patterns": [
         {
-          "name": "string.quoted.double.jolt",
+          "name": "string.quoted.double.oskl",
           "begin": "\"",
           "end": "\"",
-          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.jolt" } },
-          "endCaptures": { "0": { "name": "punctuation.definition.string.end.jolt" } },
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.oskl" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.oskl" } },
           "patterns": [
             { "include": "#interpolation" },
             { "include": "#string-escape" }
@@ -160,11 +160,11 @@
 
     "interpolation": {
       "comment": "`${ expression }` inside a string; recurses into the whole grammar.",
-      "name": "meta.embedded.expression.jolt",
+      "name": "meta.embedded.expression.oskl",
       "begin": "\\$\\{",
       "end": "\\}",
-      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.jolt" } },
-      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.jolt" } },
+      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.oskl" } },
+      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.oskl" } },
       "patterns": [
         { "include": "#comments" },
         { "include": "#strings" },
@@ -182,11 +182,11 @@
     "string-escape": {
       "patterns": [
         {
-          "name": "constant.character.escape.jolt",
+          "name": "constant.character.escape.oskl",
           "match": "\\\\(?:[ntr0\\\\\"$]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4})"
         },
         {
-          "name": "invalid.illegal.escape.jolt",
+          "name": "invalid.illegal.escape.oskl",
           "match": "\\\\."
         }
       ]
@@ -196,17 +196,17 @@
       "patterns": [
         {
           "comment": "Nullable marker `T?` in a type position (before `=`, `,`, `)`, `]`, `}`, `;` or end).",
-          "name": "keyword.operator.nullable.jolt",
+          "name": "keyword.operator.nullable.oskl",
           "match": "\\?(?=\\s*(?:[=,)\\]};]|$))"
         },
         {
           "comment": "Primitive and FFI scalar type names, plus the `fn(...)` callback type head.",
-          "name": "support.type.primitive.jolt",
+          "name": "support.type.primitive.oskl",
           "match": "\\b(?:bool|int|float|double|string|error|array|map|function|range|void|any|ptr|cstring|int8|int16|int32|int64|uint8|uint16|uint32|uint64|uint|size_t)\\b"
         },
         {
           "comment": "A user type used as an annotation: `let p: Point = ...`.",
-          "name": "entity.name.type.jolt",
+          "name": "entity.name.type.oskl",
           "match": "(?<=:\\s*)[A-Z][A-Za-z0-9_]*\\b"
         }
       ]
@@ -216,7 +216,7 @@
       "patterns": [
         {
           "comment": "Standard library / host builtins when used as a call.",
-          "name": "support.function.builtin.jolt",
+          "name": "support.function.builtin.oskl",
           "match": "\\b(?:print|eprint|input|len|type|repr|str|int|float|double|bool|error|isError|panic|pcall|assert|assertEq|range|chr|ord|sqrt|pow|exp|log|sin|cos|tan|ceil|floor|round|random|seed|clock|exit|cstring|cstr|ptrToInt|intToPtr|byteLen|loadByte|storeByte|readFile|writeFile|fileExists|write|free|buffer)\\b(?=\\s*\\()"
         }
       ]
@@ -226,7 +226,7 @@
       "patterns": [
         {
           "comment": "A call to a user-defined name: `foo(...)` or `obj.method(...)`.",
-          "name": "entity.name.function.call.jolt",
+          "name": "entity.name.function.call.oskl",
           "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
         }
       ]
@@ -235,41 +235,41 @@
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.assignment.compound.jolt",
+          "name": "keyword.operator.assignment.compound.oskl",
           "match": "\\*\\*=|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|&&=|\\|\\|=|\\?\\?="
         },
         {
           "comment": "Shifts before comparison so `a << b` is one token, not two `<`. `<<=`/`>>=` are already consumed above.",
-          "name": "keyword.operator.bitwise.jolt",
+          "name": "keyword.operator.bitwise.oskl",
           "match": "<<(?!=)|>>(?!=)"
         },
         {
-          "name": "keyword.operator.comparison.jolt",
+          "name": "keyword.operator.comparison.oskl",
           "match": "===|!==|==|!=|<=|>=|<|>"
         },
         {
-          "name": "keyword.operator.null.jolt",
+          "name": "keyword.operator.null.oskl",
           "match": "\\?\\?|\\?\\.|!!"
         },
         {
           "comment": "`&&` and `||` before the single `&`/`|` bitwise rules so the pair wins.",
-          "name": "keyword.operator.logical.jolt",
+          "name": "keyword.operator.logical.oskl",
           "match": "&&|\\|\\||!(?!=)"
         },
         {
-          "name": "keyword.operator.arithmetic.jolt",
+          "name": "keyword.operator.arithmetic.oskl",
           "match": "\\*\\*|[-+*/%]"
         },
         {
-          "name": "keyword.operator.bitwise.jolt",
+          "name": "keyword.operator.bitwise.oskl",
           "match": "[&|^~]"
         },
         {
-          "name": "keyword.operator.assignment.jolt",
+          "name": "keyword.operator.assignment.oskl",
           "match": "=(?!=)"
         },
         {
-          "name": "keyword.operator.arrow.jolt",
+          "name": "keyword.operator.arrow.oskl",
           "match": "=>|->"
         }
       ]
@@ -277,33 +277,33 @@
 
     "punctuation": {
       "patterns": [
-        { "name": "punctuation.ellipsis.jolt", "match": "\\.\\.\\.|\\.\\.=|\\.\\." },
+        { "name": "punctuation.ellipsis.oskl", "match": "\\.\\.\\.|\\.\\.=|\\.\\." },
         {
-          "name": "punctuation.section.parens.jolt",
+          "name": "punctuation.section.parens.oskl",
           "match": "[()]"
         },
         {
-          "name": "punctuation.section.brackets.jolt",
+          "name": "punctuation.section.brackets.oskl",
           "match": "[\\[\\]]"
         },
         {
-          "name": "punctuation.section.braces.jolt",
+          "name": "punctuation.section.braces.oskl",
           "match": "[{}]"
         },
         {
-          "name": "punctuation.separator.jolt",
+          "name": "punctuation.separator.oskl",
           "match": "[,;]"
         },
         {
-          "name": "punctuation.terminator.jolt",
+          "name": "punctuation.terminator.oskl",
           "match": "\\."
         },
         {
-          "name": "punctuation.section.ternary.jolt",
+          "name": "punctuation.section.ternary.oskl",
           "match": "\\?"
         },
         {
-          "name": "punctuation.separator.colon.jolt",
+          "name": "punctuation.separator.colon.oskl",
           "match": ":"
         }
       ]

@@ -1,4 +1,4 @@
-# Jolt — Project Analysis
+# Oskel — Project Analysis
 
 Date: 2026-11-08 · Branch: `develop` · Language version: **0.1.0**
 
@@ -24,12 +24,12 @@ tests and no CI).
 | AST interpreter | **Retired** | no `src/interpreter.cpp`; the VM is the only engine |
 | Shared runtime | Working | `src/value.cpp`, `src/ops.cpp` (operators), `src/builtins.cpp` (1,524 L), `src/env.cpp`, `src/gc.cpp` |
 | AOT backend | PHASE 7 in progress (7a, 7b, 7c.0–7c.2) | `src/native/*` (codegen, lower, runtime, dtoa, elf, pe, arena, freestanding platform, entry) |
-| Tests | 50 `.jolt` + 100 error `.jolt` + 4 check `.jolt` + 9 examples + 12 C++ suites | `tests/`, `tests/errors/`, `tests/check/`, `examples/`, wired into CTest |
+| Tests | 50 `.oskl` + 100 error `.oskl` + 4 check `.oskl` + 9 examples + 12 C++ suites | `tests/`, `tests/errors/`, `tests/check/`, `examples/`, wired into CTest |
 | CI | Two workflows | `.github/workflows/{cmake-multi-platform,artifacts}.yml` (Linux, Windows, macOS) |
 
 Build (`sh build.sh`) and the full CTest suite run clean on Linux x86-64, and
-`tests/run.sh` now mirrors CTest: it runs the same `.jolt` scripts (including
-`examples/` and the `-c` check tests) and skips `32_ffi_callback.jolt` when
+`tests/run.sh` now mirrors CTest: it runs the same `.oskl` scripts (including
+`examples/` and the `-c` check tests) and skips `32_ffi_callback.oskl` when
 `libffi` is absent (see §3.1).
 
 ---
@@ -45,7 +45,7 @@ destructor; it stores a per-type `destroy` hook and objects are freed through
 `destroyRefCounted`, which walks a work list iteratively so a deep structure is
 released with constant C++ stack depth. A cycle collector (`src/gc.cpp`)
 reclaims the cycles counting cannot, and `Cell`s register lazily. Covered by
-`tests/11_cycles.jolt` and the `gc_test`/`vm_test` suites.
+`tests/11_cycles.oskl` and the `gc_test`/`vm_test` suites.
 
 ### 2.2 Duplicated arithmetic semantics — **resolved**
 Arithmetic now lives in one place, `src/ops.cpp` (`intPow`, `add`, comparisons,
@@ -57,14 +57,14 @@ silently (see `docs/language.md` §4.1).
 `intPow` wraps through `uint64_t` (defined behavior). The negative-exponent
 "huge loop count" landmine the old report flagged is not reachable: `intPow` is
 only called when the integer exponent is `>= 0`; a negative exponent takes the
-`std::pow` float path (`src/ops.cpp`). The chosen semantics (Jolt wraps silently
+`std::pow` float path (`src/ops.cpp`). The chosen semantics (Oskel wraps silently
 on `int` overflow; `const` folding warns) are documented.
 
 ### 2.4 Braceless single-statement bodies — **resolved**
 `if`, `while`, `for` and `for-in` accept a block or a single statement without
 braces (the brace-less body is wrapped in a block, so bytecode and scoping
 match). `switch` arms still require braces. See `docs/language.md` §6 and
-`tests/38_braceless_bodies.jolt`.
+`tests/38_braceless_bodies.oskl`.
 
 ### 2.5 Collection API consistency — **open (minor)**
 Maps expose `keys`/`values`/`entries`/`has`/`get`/`set`/`delete` and arrays
@@ -80,9 +80,9 @@ the asymmetry. Low priority.
 ## 3. Medium-priority improvements
 
 ### 3.1 Local/CI test parity — **resolved**
-`tests/run.sh` used to run only `tests/*.jolt` and `tests/errors/*.jolt`, so it
-skipped `examples/*.jolt` and the `tests/check/*.jolt` compile-only tests that
-CMake/CTest does run, and it failed `32_ffi_callback.jolt` when `libffi` was
+`tests/run.sh` used to run only `tests/*.oskl` and `tests/errors/*.oskl`, so it
+skipped `examples/*.oskl` and the `tests/check/*.oskl` compile-only tests that
+CMake/CTest does run, and it failed `32_ffi_callback.oskl` when `libffi` was
 absent while CTest skipped it. The runner now mirrors CTest: it executes the
 same four groups (run `tests/` and `examples/`, error tests under
 `tests/errors/`, and `-c` check tests under `tests/check/`, requiring an empty
@@ -121,7 +121,7 @@ one in the AOT string-constant pool), all fixed.
 ## 4. Low-priority / hygiene
 
 1. **Version metadata.** `kVersion` is a string literal in `src/main.cpp` and
-   `CMakeLists.txt` declares `project(jolt VERSION 0.1.0)`. Generating the
+   `CMakeLists.txt` declares `project(oskel VERSION 0.1.0)`. Generating the
    header from CMake avoids drift. Low priority.
 2. **Stack-trace flood — resolved.** `src/diagnostic.cpp` caps the trace to a
    head and a tail with an "… N more …" line.

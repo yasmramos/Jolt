@@ -1,13 +1,13 @@
-; Inno Setup script for the Jolt development engine on Windows.
+; Inno Setup script for the Oskel development engine on Windows.
 ;
 ; Build with:
-;   iscc /DAppVersion=0.1.0 /DStageDir=C:\path\to\stage packaging\windows\jolt.iss
+;   iscc /DAppVersion=0.1.0 /DStageDir=C:\path\to\stage packaging\windows\oskel.iss
 ;
 ; `StageDir` is the tree produced by `cmake --install --prefix stage`:
-;   stage\bin\jolt.exe
-;   stage\share\jolt\std\*.jolt
+;   stage\bin\oskel.exe
+;   stage\share\oskel\std\*.oskl
 ; The installer reproduces that layout under the install directory, so the
-; engine resolves `import std.math` through `..\share\jolt\std` relative to the
+; engine resolves `import std.math` through `..\share\oskel\std` relative to the
 ; executable, with no environment variable needed.
 
 #ifndef AppVersion
@@ -17,10 +17,10 @@
   #define StageDir "..\..\stage"
 #endif
 
-#define AppName "Jolt"
-#define AppPublisher "Jolt contributors"
-#define AppUrl "https://github.com/yasmramos/Jolt"
-#define AppExeName "jolt.exe"
+#define AppName "Oskel"
+#define AppPublisher "Oskel contributors"
+#define AppUrl "https://github.com/yasmramos/Oskel"
+#define AppExeName "oskel.exe"
 
 [Setup]
 ; A fixed AppId ties every version to one product: an upgrade replaces the
@@ -38,7 +38,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\..\LICENSE
 OutputDir=..\..\dist
-OutputBaseFilename=jolt-windows-x64-setup
+OutputBaseFilename=oskel-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -60,12 +60,12 @@ VersionInfoCopyright=MIT License
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "addtopath"; Description: "Add Jolt to the system PATH"; GroupDescription: "Integration:"; Flags: checkedonce
-Name: "associate"; Description: "Associate .jolt files with Jolt"; GroupDescription: "Integration:"; Flags: unchecked
+Name: "addtopath"; Description: "Add Oskel to the system PATH"; GroupDescription: "Integration:"; Flags: checkedonce
+Name: "associate"; Description: "Associate .oskl files with Oskel"; GroupDescription: "Integration:"; Flags: unchecked
 
 [Files]
 Source: "{#StageDir}\bin\{#AppExeName}"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "{#StageDir}\share\jolt\std\*"; DestDir: "{app}\share\jolt\std"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\share\oskel\std\*"; DestDir: "{app}\share\oskel\std"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -74,26 +74,26 @@ Name: "{group}\{#AppName}"; Filename: "{app}\bin\{#AppExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Registry]
-; `.jolt` file association. `HKA` resolves to `HKLM` in this administrative
+; `.oskl` file association. `HKA` resolves to `HKLM` in this administrative
 ; install, so the association is machine-wide and does not land in the
 ; elevated user's hive (which is what a plain `HKCU` would do here, and what
 ; Inno warns about). `Software\Classes` is the documented spelling of `HKCR`.
 ; `uninsdeletevalue`/`uninsdeletekey` remove it on uninstall.
-Root: HKA; Subkey: "Software\Classes\.jolt"; ValueType: string; ValueName: ""; ValueData: "Jolt.Source"; Flags: uninsdeletevalue; Tasks: associate
-Root: HKA; Subkey: "Software\Classes\Jolt.Source"; ValueType: string; ValueName: ""; ValueData: "Jolt source file"; Flags: uninsdeletekey; Tasks: associate
-Root: HKA; Subkey: "Software\Classes\Jolt.Source\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#AppExeName},0"; Tasks: associate
-Root: HKA; Subkey: "Software\Classes\Jolt.Source\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#AppExeName}"" ""%1"""; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\.oskl"; ValueType: string; ValueName: ""; ValueData: "Oskel.Source"; Flags: uninsdeletevalue; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Oskel.Source"; ValueType: string; ValueName: ""; ValueData: "Oskel source file"; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Oskel.Source\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#AppExeName},0"; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Oskel.Source\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#AppExeName}"" ""%1"""; Tasks: associate
 
 [Run]
-Filename: "{app}\bin\{#AppExeName}"; Parameters: "--version"; Description: "Check the Jolt installation"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\bin\{#AppExeName}"; Parameters: "--version"; Description: "Check the Oskel installation"; Flags: postinstall nowait skipifsilent
 
 [Code]
 const
   EnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
 
 { True when `Path` is not already a whole entry of the machine PATH. The
-  comparison wraps both sides in `;` so a partial match (C:\Jolt vs
-  C:\Jolt\bin) is not mistaken for a full one, and is case-insensitive
+  comparison wraps both sides in `;` so a partial match (C:\Oskel vs
+  C:\Oskel\bin) is not mistaken for a full one, and is case-insensitive
   because Windows paths are. }
 function NeedsAddPath(const Path: string): Boolean;
 var

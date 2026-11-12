@@ -13,8 +13,8 @@ try {
         New-Item -ItemType Directory -Path "build" | Out-Null
     }
 
-    # Link the whole runtime like CMake's `jolt_lib`: every src/**/*.cpp except
-    # the `jolt` entry point. The list is detected, never written by hand, so it
+    # Link the whole runtime like CMake's `oskel_lib`: every src/**/*.cpp except
+    # the `oskel` entry point. The list is detected, never written by hand, so it
     # cannot drift when a source is added or removed.
     $srcRoot = (Resolve-Path "src").Path
     $sources = Get-ChildItem -Path "src" -Recurse -Filter "*.cpp" |

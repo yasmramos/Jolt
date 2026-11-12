@@ -81,7 +81,7 @@ JitFunction* VM::jitFor(const std::shared_ptr<const Bytecode>& proto,
 Value VM::callNative(Function& fn, std::vector<Value> args, int line, int col) {
   int savedLine = currentLine;
   int savedCol = currentCol;
-  // A native that receives Jolt closures (map/filter/forEach/...) may invoke
+  // A native that receives Oskel closures (map/filter/forEach/...) may invoke
   // them through this very `callNative` entry point. Capturing the raw vector
   // slot in a `std::function` and re-entering here would invalidate it on
   // reallocation (PHASE 6b: nested callback support). Copy the arguments so
@@ -105,7 +105,7 @@ Value VM::callNative(Function& fn, std::vector<Value> args, int line, int col) {
   }
 }
 
-void VM::pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
+void VM::pushOskelFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
                        int col) {
   if (!function->proto) {
     // An AST function (or a bare `Function`) has no bytecode to run; the VM
@@ -199,7 +199,7 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
   // writes the returned value into this cell; `call` reads it back below.
   if (scratchCells_.size() <= stopDepth) scratchCells_.resize(stopDepth + 1);
   if (!scratchCells_[stopDepth]) scratchCells_[stopDepth] = makeRef<Cell>();
-  pushJoltFrame(std::move(function), std::move(args), kNoResult, line, col);
+  pushOskelFrame(std::move(function), std::move(args), kNoResult, line, col);
   // Tag the freshly pushed frame with its scratch destination.
   frames_.back().resultScratch = stopDepth;
   Value result;
@@ -574,7 +574,7 @@ Value VM::runFrames(std::size_t stopDepth) {
           // result into the caller's R[a].
           const std::size_t resultReg =
               frames_[frameIndex].regBase + static_cast<std::size_t>(instruction.a);
-          pushJoltFrame(std::move(function), std::move(args), resultReg, line, col);
+          pushOskelFrame(std::move(function), std::move(args), resultReg, line, col);
         }
         break;
       }

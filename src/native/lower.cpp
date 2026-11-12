@@ -238,7 +238,7 @@ void loadMemberName(CodeGen& cg, const Bytecode& proto, int c, X64Reg tag, X64Re
 // constant index (`instruction.b`), but the binary has no strings: each
 // distinct name gets an index into a flat `AotValue` array. The lowerer
 // derives the map from the code itself, in first-assignment order, so the
-// `Bytecode` structure and the `.jolc` format stay unchanged.
+// `Bytecode` structure and the `.oskc` format stay unchanged.
 //
 // A `GETGLOBAL` of a name the program never assigns is a lowering error naming
 // the variable, the compile-time counterpart of the hosted engine's run-time
@@ -509,7 +509,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
     case OpCode::JMP_IF_FALSE:
     case OpCode::JMP_IF_TRUE: {
       // The condition is the value's truthiness, not its raw payload: `0` is
-      // truthy in Jolt, so `jolt_truthy` decides. Branch on its 0/1 result.
+      // truthy in Oskel, so `oskel_truthy` decides. Branch on its 0/1 result.
       loadValue(cg, instr.a, X64Reg::Rdi, X64Reg::Rsi);
       cg.callLabel(rt.truthy);
       cg.testReg(X64Reg::Rax);
@@ -560,7 +560,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
       const std::int64_t off = localSlotOffset(fileRegisters, instr.b);
       if (frame.capturedSlots.count(instr.b) != 0) {
         if (instr.op == OpCode::DECLLOCAL) {
-          // jolt_cell_new(value) -> cell pointer; keep it in the slot. A fresh
+          // oskel_cell_new(value) -> cell pointer; keep it in the slot. A fresh
           // cell per declaration, so a closure created earlier keeps the cell
           // it captured (a loop body re-declaring a variable shadows it).
           cg.movReg(X64Reg::Rdi, X64Reg::Rax);
@@ -594,7 +594,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
     case OpCode::CALL: {
       // R[a] = callee, R[a+1 .. a+b] = arguments, contiguous in this frame.
       // Pass the callee (rdi:rsi), the count (rdx) and the argument window's
-      // address (rcx) to `jolt_call`, which checks the callee is a function and
+      // address (rcx) to `oskel_call`, which checks the callee is a function and
       // dispatches it. The result comes back in rax:rdx, straight into R[a].
       loadValue(cg, instr.a, X64Reg::Rdi, X64Reg::Rsi);
       cg.movImm(X64Reg::Rdx, instr.b);
@@ -616,7 +616,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
                             " is out of range");
       }
       const Bytecode* child = proto.children[static_cast<std::size_t>(instr.b)].get();
-      // jolt_closure(code, arity, upvalueCount) -> Func in rax:rdx.
+      // oskel_closure(code, arity, upvalueCount) -> Func in rax:rdx.
       cg.leaRipLabel(X64Reg::Rdi, protoEntry.at(child));
       cg.movImm(X64Reg::Rsi, child->numParams);
       cg.movImm(X64Reg::Rdx, static_cast<std::int64_t>(child->upvalues.size()));
@@ -716,7 +716,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
     case OpCode::ITER: {
       // R[a] = the next item; `instr.jump` holds the register that receives the
       // done flag (the compiler's private convention, see `compileForIn`). The
-      // iterable is R[b], the cursor R[c]; `jolt_iter_next` takes the cursor's
+      // iterable is R[b], the cursor R[c]; `oskel_iter_next` takes the cursor's
       // address (rdi) and the iterable by value (rsi:rdx, the second
       // `AotValue`), returns the item in rax:rdx and the flag in r8.
       loadValue(cg, instr.b, X64Reg::Rsi, X64Reg::Rdx);
@@ -759,7 +759,7 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
 
   // The builtins the AOT runtime provides, keyed by the global name the hosted
   // engine installs. The chunk seeds each one into its global slot as an
-  // `AotClosure`, so a `CALL` reaches it through the ordinary `jolt_call` path.
+  // `AotClosure`, so a `CALL` reaches it through the ordinary `oskel_call` path.
   const std::unordered_map<std::string, CodeGen::Label> builtins = {
       {"print", rt.printBuiltin},
       {"write", rt.writeBuiltin},
@@ -822,8 +822,8 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
     cg.callLabel(rt.closure);
     cg.movImm(X64Reg::Rdi, slot->second);
     cg.movReg(X64Reg::Rsi, X64Reg::Rax);
-    // `jolt_closure` returns the Func value in rax:rdx, so rdx already holds the
-    // payload that `jolt_global_set` expects.
+    // `oskel_closure` returns the Func value in rax:rdx, so rdx already holds the
+    // payload that `oskel_global_set` expects.
     cg.callLabel(rt.globalSet);
   }
   {

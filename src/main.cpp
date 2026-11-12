@@ -35,11 +35,11 @@ const char *kVersion = "0.1.0";
 
 const char *kUsage =
     "usage:\n"
-    "  jolt                      start the interactive REPL\n"
-    "  jolt <file.jolt> [args]   run a script\n"
-    "  jolt -e \"<code>\" [args]   run inline code\n"
-    "  jolt -c <file.jolt>       parse a script without running it\n"
-    "  jolt build <file.jolt>    compile to a native binary (AOT)\n"
+    "  oskel                      start the interactive REPL\n"
+    "  oskel <file.oskl> [args]   run a script\n"
+    "  oskel -e \"<code>\" [args]   run inline code\n"
+    "  oskel -c <file.oskl>       parse a script without running it\n"
+    "  oskel build <file.oskl>    compile to a native binary (AOT)\n"
     "\n"
     "options:\n"
     "  -h, --help                show this help\n"
@@ -58,7 +58,7 @@ std::string joinPath(const std::string &dir, const std::string &relative) {
 }
 
 // Absolute path of the running executable, so `standardLibraryDir` can locate
-// the shipped `std/` even when `jolt` was invoked through `PATH` and `argv[0]`
+// the shipped `std/` even when `oskel` was invoked through `PATH` and `argv[0]`
 // has no directory part. Falls back to `argv0` when it cannot be determined.
 std::string executablePath(const std::string &argv0) {
   if (argv0.find('/') != std::string::npos ||
@@ -98,19 +98,19 @@ std::string executablePath(const std::string &argv0) {
 // Directory of the standard library shipped with the toolchain. `std.*`
 // imports resolve here (see AGENT.md §18: `std.` is reserved).
 //
-// `$JOLT_STDLIB` overrides the search. Otherwise the standard library is
+// `$OSKEL_STDLIB` overrides the search. Otherwise the standard library is
 // looked for in the working directory and, walking up from the executable's
 // directory, in `<dir>/std`. The upward walk is what lets an import resolve
-// whether `jolt` sits in the source tree, in a single-config build
+// whether `oskel` sits in the source tree, in a single-config build
 // (`<root>/build`), in a multi-config build (`<root>/build/<config>`, MSVC) or
-// in an install prefix; the `share/jolt/std` location covers the install
+// in an install prefix; the `share/oskel/std` location covers the install
 // layout explicitly.
 std::string standardLibraryDir(const std::string &argv0) {
-  if (const char *env = std::getenv("JOLT_STDLIB")) return env;
+  if (const char *env = std::getenv("OSKEL_STDLIB")) return env;
 
   auto hasStd = [](const std::string &dir) {
     std::string ignored;
-    return readSourceFile(joinPath(dir, "math.jolt"), ignored);
+    return readSourceFile(joinPath(dir, "math.oskl"), ignored);
   };
 
   if (hasStd("std")) return "std";
@@ -122,29 +122,29 @@ std::string standardLibraryDir(const std::string &argv0) {
     dir = joinPath(dir, "..");
   }
 
-  std::string installed = joinPath(directoryOf(executablePath(argv0)), "../share/jolt/std");
+  std::string installed = joinPath(directoryOf(executablePath(argv0)), "../share/oskel/std");
   if (hasStd(installed)) return installed;
 
   return "std";  // Nothing found: imports report "module not found".
 }
 
-// Installed-packages root: `$JOLT_PACKAGES`, else `$HOME/.jolt/packages`.
+// Installed-packages root: `$OSKEL_PACKAGES`, else `$HOME/.oskel/packages`.
 // Empty when the home directory cannot be determined, which disables the
 // package lookup step.
 std::string packagesDir() {
-  if (const char *explicitDir = std::getenv("JOLT_PACKAGES")) return explicitDir;
+  if (const char *explicitDir = std::getenv("OSKEL_PACKAGES")) return explicitDir;
   const char *home = std::getenv("HOME");
 #ifdef _WIN32
   if (home == nullptr || *home == '\0') home = std::getenv("USERPROFILE");
 #endif
   if (home == nullptr || *home == '\0') return std::string();
-  return std::string(home) + "/.jolt/packages";
+  return std::string(home) + "/.oskel/packages";
 }
 
 // Resolver for a program named `name`. Imports resolve from the project root:
 // the directory of the file being compiled, or the current directory for
 // `-e`/stdin. A nested import resolves from the same root, so `modules.util`
-// names `<root>/modules/util.jolt` no matter which module declares it.
+// names `<root>/modules/util.oskl` no matter which module declares it.
 ModuleResolver resolverFor(const std::string &name, const std::string &argv0) {
   bool isFile = !name.empty() && name[0] != '<';
   std::string projectDir = isFile ? directoryOf(name) : std::string(".");
@@ -294,7 +294,7 @@ int buildBinary(const std::string &source, const std::string &name,
   }
 
   if (!writeBinaryFile(output, image)) {
-    std::string message = "jolt: cannot write '" + output + "'\n";
+    std::string message = "oskel: cannot write '" + output + "'\n";
     platformPosix().writeErr(message.data(), message.size());
     return 74;
   }
@@ -377,7 +377,7 @@ bool handleCommand(VM &vm, Compiler &compiler, const std::string &command,
   if (startsWith(command, ":load")) {
     std::string path = trim(command.substr(5));
     if (path.empty()) {
-      std::cout << "usage: :load <file.jolt>\n";
+      std::cout << "usage: :load <file.oskl>\n";
       return false;
     }
     std::string source;
@@ -431,13 +431,13 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0, 
   Compiler compiler;
   compiler.setImportLoader(makeImportLoader(resolverFor("<repl>", argv0)));
 
-  std::cout << "Jolt " << kVersion
+  std::cout << "Oskel " << kVersion
             << " - a small scripting language written in C++\n";
   std::cout << "Type :help for help, :quit to exit.\n";
 
   std::string buffer;
   while (true) {
-    std::cout << (buffer.empty() ? "jolt> " : "...> ") << std::flush;
+    std::cout << (buffer.empty() ? "oskel> " : "...> ") << std::flush;
 
     std::string line;
     if (!std::getline(std::cin, line)) {
@@ -573,7 +573,7 @@ int main(int argc, char **argv) {
 
   std::vector<std::string> arguments(argv + 1, argv + argc);
 
-  // `jolt build <file.jolt> [-o <out>]`: the AOT backend. It is a subcommand,
+  // `oskel build <file.oskl> [-o <out>]`: the AOT backend. It is a subcommand,
   // not a script, so it is intercepted before the ordinary argument parsing.
   // The default output is the script's base name without extension, like a
   // native compiler.
@@ -584,34 +584,34 @@ int main(int argc, char **argv) {
       const std::string &arg = arguments[i];
       if (arg == "-o" || arg == "--output") {
         if (i + 1 >= arguments.size()) {
-          std::cerr << "jolt: option '" << arg << "' needs an argument\n";
+          std::cerr << "oskel: option '" << arg << "' needs an argument\n";
           return 64;
         }
         buildOutput = arguments[++i];
         continue;
       }
       if (arg == "-h" || arg == "--help") {
-        std::cout << "Jolt " << kVersion << "\n\n" << kUsage;
+        std::cout << "Oskel " << kVersion << "\n\n" << kUsage;
         return 0;
       }
       if (!arg.empty() && arg[0] == '-') {
-        std::cerr << "jolt: unknown option '" << arg << "'\n";
+        std::cerr << "oskel: unknown option '" << arg << "'\n";
         return 64;
       }
       if (!buildFile.empty()) {
-        std::cerr << "jolt: build accepts a single file\n";
+        std::cerr << "oskel: build accepts a single file\n";
         return 64;
       }
       buildFile = arg;
     }
     if (buildFile.empty()) {
-      std::cerr << "jolt: build requires a file\n";
+      std::cerr << "oskel: build requires a file\n";
       return 64;
     }
     if (buildOutput.empty()) buildOutput = stripExtension(buildFile);
     std::string buildSource;
     if (!readSourceFile(buildFile, buildSource)) {
-      std::cerr << "jolt: cannot read file '" << buildFile << "'\n";
+      std::cerr << "oskel: cannot read file '" << buildFile << "'\n";
       return 66;
     }
     return buildBinary(buildSource, buildFile, buildOutput, argv[0]);
@@ -627,16 +627,16 @@ int main(int argc, char **argv) {
   for (size_t i = 0; i < arguments.size(); ++i) {
     const std::string &arg = arguments[i];
     if (arg == "-h" || arg == "--help") {
-      std::cout << "Jolt " << kVersion << "\n\n" << kUsage;
+      std::cout << "Oskel " << kVersion << "\n\n" << kUsage;
       return 0;
     }
     if (arg == "-v" || arg == "--version") {
-      std::cout << "Jolt " << kVersion << '\n';
+      std::cout << "Oskel " << kVersion << '\n';
       return 0;
     }
     if (arg == "-e" || arg == "--eval") {
       if (i + 1 >= arguments.size()) {
-        std::cerr << "jolt: option '" << arg << "' needs an argument\n";
+        std::cerr << "oskel: option '" << arg << "' needs an argument\n";
         return 64;
       }
       evalCode = arguments[++i];
@@ -663,7 +663,7 @@ int main(int argc, char **argv) {
       break;
     }
     if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "jolt: unknown option '" << arg << "'\n";
+      std::cerr << "oskel: unknown option '" << arg << "'\n";
       return 64;
     }
     file = arg;
@@ -678,14 +678,14 @@ int main(int argc, char **argv) {
   if (!file.empty()) {
     std::string source;
     if (!readSourceFile(file, source)) {
-      std::cerr << "jolt: cannot read file '" << file << "'\n";
+      std::cerr << "oskel: cannot read file '" << file << "'\n";
       return 66;
     }
     return runSource(source, file, scriptArgs, checkOnly, argv[0], useJit);
   }
 
   if (checkOnly) {
-    std::cerr << "jolt: --check requires a file\n";
+    std::cerr << "oskel: --check requires a file\n";
     return 64;
   }
 

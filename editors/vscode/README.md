@@ -1,6 +1,6 @@
-# Jolt for VS Code
+# Oskel for VS Code
 
-Syntax highlighting for the [Jolt](../..) programming language (`.jolt`).
+Syntax highlighting for the [Oskel](../..) programming language (`.oskl`).
 
 This is a small, dependency-free extension: it contributes a language id, a
 TextMate grammar and an editor configuration. It has no runtime code, so it
@@ -18,7 +18,7 @@ loads instantly and needs no build step.
   annotation (`let p: Point`).
 - Numbers: integers, doubles, `f`/`F` floats and `_` separators.
 - Strings with `\n`, `\t`, `\xNN`, `\uNNNN` escapes and `${ ... }`
-  interpolation (the embedded expression is highlighted as Jolt).
+  interpolation (the embedded expression is highlighted as Oskel).
 - Comments: `//` and nestable `/* ... */`.
 - Imports: `import std.math;`, `import a.b.*;`, `import a.b as m;` and
   `import { x, y } from a.b;`.
@@ -31,11 +31,11 @@ loads instantly and needs no build step.
 Copy or symlink this folder into your VS Code extensions directory:
 
 ```sh
-ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/jolt
+ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/oskel
 ```
 
-Then reload the window. Open any `.jolt` file and pick "Jolt" as the language
-mode if it is not detected automatically (the `.jolt` extension is registered).
+Then reload the window. Open any `.oskl` file and pick "Oskel" as the language
+mode if it is not detected automatically (the `.oskl` extension is registered).
 
 Alternatively, press `F5` in VS Code with this folder open to launch an
 Extension Development Host.
@@ -46,7 +46,7 @@ Extension Development Host.
 npm install -g @vscode/vsce
 cd editors/vscode
 vsce package
-code --install-extension jolt-0.1.0.vsix
+code --install-extension oskel-0.1.0.vsix
 ```
 
 ## Files
@@ -55,10 +55,10 @@ code --install-extension jolt-0.1.0.vsix
 | --- | --- |
 | `package.json` | Extension manifest: language id, file extension, grammar. |
 | `language-configuration.json` | Comments, brackets, auto-closing pairs, folding. |
-| `syntaxes/jolt.tmLanguage.json` | The TextMate grammar. |
+| `syntaxes/oskel.tmLanguage.json` | The TextMate grammar. |
 
 ## Notes
 
 The grammar is intentionally standalone: it keeps its own keyword/type/builtin
 lists rather than reading them from the compiler. When the language gains a
-keyword or a builtin, update `syntaxes/jolt.tmLanguage.json` in the same change.
+keyword or a builtin, update `syntaxes/oskel.tmLanguage.json` in the same change.
