@@ -41,6 +41,7 @@ enum class AotTag : std::uint64_t {
   Func = 6,    // payload is the address of an `AotClosure`
   Array = 7,   // payload is the address of an `AotArray`
   Map = 8,     // payload is the address of an `AotMap`
+  Range = 9,   // payload is the address of an `AotRange`
 };
 
 // On-image layout of a string: an 8-byte length followed by the bytes. The
@@ -110,6 +111,17 @@ struct AotMap {
 };
 
 constexpr std::size_t kAotMapHeaderSize = 3 * sizeof(std::uint64_t);
+
+// On-image layout of a range (PHASE 7c.4c): two int64 bounds and an inclusive
+// flag. A `Range` payload points at the header. `for-in` walks from `start`
+// towards `end` (ascending when `start <= end`), inclusive or exclusive.
+struct AotRange {
+  std::int64_t start;
+  std::int64_t end;
+  std::uint64_t inclusive;
+};
+
+constexpr std::size_t kAotRangeHeaderSize = 3 * sizeof(std::uint64_t);
 
 struct AotValue {
   std::uint64_t tag;

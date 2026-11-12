@@ -757,6 +757,7 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
       {"$isError", rt.isErrorBuiltin},
       {"$nonNull", rt.nonNullBuiltin},
       {"$str", rt.strBuiltin},
+      {"$range", rt.rangeBuiltin},
   };
 
   const GlobalSlots globals = collectGlobals(protos, builtins);

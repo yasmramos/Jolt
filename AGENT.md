@@ -840,8 +840,19 @@ Slices, each independently shippable:
       `tests/freestanding_test.cpp` and the `jolt build` fixture.
     - **7c.4b.2** — `$str` for collections and functions (recursive repr),
       reusing the printer's `jolt_print_repr` into an arena string.
-    - **7c.4c** — `$range` (`a..b` / `a..=b`): a `Range` value and its
-      `for-in` iteration.
+    - **7c.4c** (done) — the hidden `$range` helper for the range literals
+      `a..b` / `a..=b`. A new `AotTag::Range` names a three-word arena header
+      (start, end, inclusive). `jolt_builtin_range` builds it from two integer
+      bounds (a non-integer bound fails with the hosted message). The value is
+      wired through the runtime: `for-in` (`jolt_iter_next` walks the range up
+      or down, inclusive or exclusive, stepping with unsigned arithmetic so
+      INT64_MIN/MAX stay defined), `in` (`jolt_contains`, including the
+      "descending exclusive matches neither bound" rule), `.length`
+      (`jolt_member_get`, saturated at INT64_MAX) and printing/interpolation
+      (`jolt_print_repr`/`jolt_builtin_str` render `<start>..<end>` or
+      `<start>..=<end>`). Covered by `tests/freestanding_test.cpp` (print,
+      iterate both directions, `.length`, membership, interpolation and the
+      failing bound) and the `jolt build` fixture.
     - **7c.4d** — `$slice` (`obj[start:end:step]`) for strings and arrays.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
@@ -930,7 +941,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7c.4b, 7d done)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7c.4b, 7c.4c, 7d done)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
