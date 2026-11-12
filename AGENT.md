@@ -50,6 +50,7 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `module_resolver.cpp` | dotted module path | source file path | ✅ |
 | `vm.cpp` | `Bytecode*` | execution | ✅ |
 | `main.cpp` | CLI | full pipeline | ✅ (VM as dev engine, PHASE 4) |
+| `jit/jit.cpp` | integer leaf proto | native x86-64 (dev engine only) | 🔶 slice 1 |
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
 | `builtins.cpp` / `ops.cpp` | native builtins, shared operators | runtime library | ✅ |
 | `ffi.cpp` | `extern "C"` declarations | marshalling natives | ✅ PHASE 6.6 |
@@ -77,7 +78,7 @@ writes the ELF. Uses AsmJIT Assembler (no JIT). Links against musl static.
 - `jolt build` thin alias over `joltc`
 
 Boundary rule: src/compiler.* and src/native/* must not include
-vm.h. Enforced by tests/check_compiler_boundary.cmake.
+interpreter.h, vm.h or jit/jit.h. Enforced by tests/check_compiler_boundary.cmake.
 
 ---
 
@@ -818,52 +819,6 @@ Slices, each independently shippable:
       `for-in` and container printing under the real `_start`) and
       `tests/lower_test.cpp` (the collection opcodes now lower instead of
       raising).
-    - **7c.4a** (done) — the hidden `$nonNull` and `$isError` helpers. The
-      compiler emits `$nonNull` for the non-null assertion `a!!` and `$isError`
-      for `try` / `x catch y` (PHASE 6.5/6.7); the AOT backend had no binding
-      for them, so a program using either failed to build with
-      `lowering: global '$nonNull'/'$isError' is read but never assigned`. They
-      are now seeded builtins like `print` and `$mapValue`:
-      `jolt_builtin_non_null` returns its operand or calls `fail` with the
-      hosted helper's message, and `jolt_builtin_is_error` returns `false`
-      (the AOT runtime has no error values yet, so the success path of `try`/
-      `catch` runs; a real failure still exits 70). Covered by
-      `tests/freestanding_test.cpp` (both helpers under the real `_start`, plus
-      the failing `!!` exiting 70) and the `jolt build` fixture.
-    - **7c.4b** (done) — the hidden `$str` helper for string interpolation and
-      computed keys. It renders the operand to an `AotString` in the arena,
-      byte-identical to the hosted `Value::toString` for nil, booleans,
-      integers (with the sign), floats/doubles (through the embedded dtoa) and
-      strings (returned unchanged, so a string interpolates without quotes);
-      a collection or function operand fails with a clear message instead of
-      producing different text (deferred to 7c.4b.2). Covered by
-      `tests/freestanding_test.cpp` and the `jolt build` fixture.
-    - **7c.4b.2** (done) — `$str` for collections and functions (recursive
-      repr). The printer's traversal is factored into `jolt_repr_into`, which
-      appends the representation of a value to a string builder; `print` and
-      `$str` both go through it, so `"${[1, 2]}"` and `print([1, 2])` agree
-      byte for byte (nested strings quoted, maps as `{k: v}`, functions as
-      `<fn>`, depth capped at 8). `jolt_print_repr` renders into a stack
-      builder and writes once; `jolt_repr_to_string` renders into an arena
-      `AotString`. The string builder (`jolt_sb_*`, `AotStringBuilder`) grows
-      by doubling in the arena. A function's *name* is not part of the AOT
-      closure yet, so `$str`/`print` render `<fn>` where the VM renders
-      `<fn name>`; that is pre-existing and tracked separately. Covered by
-      `tests/freestanding_test.cpp` and the `jolt build` fixture.
-    - **7c.4c** (done) — the hidden `$range` helper for the range literals
-      `a..b` / `a..=b`. A new `AotTag::Range` names a three-word arena header
-      (start, end, inclusive). `jolt_builtin_range` builds it from two integer
-      bounds (a non-integer bound fails with the hosted message). The value is
-      wired through the runtime: `for-in` (`jolt_iter_next` walks the range up
-      or down, inclusive or exclusive, stepping with unsigned arithmetic so
-      INT64_MIN/MAX stay defined), `in` (`jolt_contains`, including the
-      "descending exclusive matches neither bound" rule), `.length`
-      (`jolt_member_get`, saturated at INT64_MAX) and printing/interpolation
-      (`jolt_print_repr`/`jolt_builtin_str` render `<start>..<end>` or
-      `<start>..=<end>`). Covered by `tests/freestanding_test.cpp` (print,
-      iterate both directions, `.length`, membership, interpolation and the
-      failing bound) and the `jolt build` fixture.
-    - **7c.4d** — `$slice` (`obj[start:end:step]`) for strings and arrays.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -877,7 +832,7 @@ Slices, each independently shippable:
   dispatch (bridge toward the speculative work in
   `docs/ARCHITECTURE_ANALYSIS.md`); other targets (macOS/Windows via libc or
   stubs).
-- Afterwards, LuaJIT's JIT as a reference.
+- Afterwards, LuaJIT's JIT as a reference (see PHASE 8 below).
 - **In the tree now**: the `Target` descriptor (`include/native/target.h`) and
   the x86-64 instruction emitter (`include/native/codegen.h`,
   `src/native/codegen.cpp`): labels with backpatching, `mov`/`lea`, integer
@@ -916,6 +871,38 @@ Slices, each independently shippable:
   the backend cannot produce, and the emitted binary embeds only the runtime,
   never the compiler (AGENT.md §3, the GraalVM pitfall).
 
+### PHASE 8 — JIT for the development VM 🔶 in progress
+
+A JIT for `jolt` only, never for `joltc` (§8: the product is AOT; the JIT is a
+development tool). It follows the Lua/LuaJIT model: the same bytecode the VM
+interprets is compiled to native x86-64 for the hot path, and the interpreter
+stays the fallback for everything else, so a program's result never depends on
+whether the JIT ran. There is **no** inline caching, **no** superinstruction and
+**no** runtime specialization (§8): the JIT lowers each opcode 1:1 with the
+`include/native/codegen.h` emitter (the project's own, so §5.1 keeps its
+zero-external-dependency rule; AsmJIT is not required).
+
+Slice 1 (done) is the smallest useful tier: a **leaf proto over the integer
+subset**. A proto is compiled when its body only touches `nil`, `bool` and
+`int` values, has no calls, no upvalues, no globals, no collections and no
+child protos; `Jit::get` verifies that by a small type propagation over the
+bytecode (`LOADK`, `MOVE`, `ADD`/`SUB`/`MUL`, the bitwise ops, `UNOP`,
+`EQ`–`GTE`, `JMP`, `JMP_IF_FALSE`/`JMP_IF_TRUE`, `DECLLOCAL`, `GETLOCAL`,
+`SETLOCAL`, `RETURN`, `HALT`) and rejects anything else, leaving it to the VM.
+The generated code keeps the same `Value` layout as the interpreter (a tag
+byte plus a 64-bit payload per slot), so the two engines share the value
+representation and the differential test is exact. The VM runs it through
+`VM::jitFor` at `CALL` and at `Runtime::call`, only when the JIT is enabled
+(the CLI turns it on; `--no-jit` turns it off; `joltc` never sees it) and only
+when every argument is an integer and the arity matches, because the compiled
+body reads integer slots only. A tight integer loop is about 25x faster.
+
+Later slices widen the subset (floats, then strings, then the boxed value
+runtime, then calls and guards) and add the tiering policy (compile after a
+call threshold instead of on the first call), following LuaJIT as the
+reference. Everything stays 1:1 with the bytecode; the moment a design needs
+inline caching or specialization, it is out of scope (§8).
+
 ### Post-1.0 — UI library
 
 - **Skia** as rendering backend.
@@ -951,7 +938,8 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7c.4b, 7c.4c, 7d done)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7d done)
+Phase 8: 🔶 in progress (JIT for the development VM, slice 1 done: integer leaf protos)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
@@ -1050,7 +1038,7 @@ Without this checklist complete and approved, **do not proceed to code**.
 |-----------|--------|
 | Stack-based VM | Jolt is register-based (Lua style) |
 | High-level bytecode (`OP_EVAL_EXPR`) | Breaks future native compilation |
-| **JIT in the VM** (JIT is for `jolt` only, not `joltc`) | The product is AOT; JIT is a dev tool |
+| **JIT in the AOT product** (the JIT is for `jolt` only, never for `joltc`) | The product is AOT; the JIT is a dev tool |
 | Migrating the core to pure C | The core stays in C++17 |
 | Adding features without testing the previous one | Breaks incremental development |
 | Skipping the 7-point checklist | Creates architectural debt |
