@@ -350,6 +350,134 @@ static void test_collections() {
   check(result.exitCode == 0, "a program using collections exits 0 through _start");
 }
 
+// The hidden helpers for PHASE 6.5 features that lower to a call (PHASE 7c.4a):
+// `$nonNull` (`a!!`) and `$isError` (`try` / `x catch y`). Before this slice the
+// backend rejected both with `global '$nonNull'/'$isError' is read but never
+// assigned`; now they are seeded builtins and a compiled program runs them.
+static void test_hidden_helpers() {
+  Bytecode proto = compileSource(
+      "var a = 7;\n"
+      "var b = a!!;\n"
+      "print(b);\n"
+      "var c = b catch 0;\n"
+      "print(c);\n"
+      "fn f() { var x = 9; return try x; }\n"
+      "print(f());\n");
+  RunResult result = buildAndRun("/tmp/jolt_hidden_helpers", proto);
+  check(result.output == "7\n7\n9\n",
+        "a compiled program runs the non-null and catch helpers");
+  check(result.exitCode == 0, "a program using the hidden helpers exits 0");
+}
+
+// `$nonNull` on nil must fail with the hosted helper's message and exit 70,
+// proving the AOT helper takes the same error path as the VM.
+static void test_hidden_helpers_non_null_failure() {
+  Bytecode proto = compileSource(
+      "var a = nil;\n"
+      "var b = a!!;\n"
+      "print(b);\n");
+  RunResult result = buildAndRun("/tmp/jolt_hidden_helpers_nil", proto);
+  check(result.exitCode == 70, "a failed '!!' exits 70");
+  check(result.output.find("non-null assertion") != std::string::npos,
+        "the failed '!!' names the non-null assertion");
+}
+
+// The `$str` helper (PHASE 7c.4b) renders the scalars a compiled program
+// interpolates: int, negative int, float, double, bool, nil and string must
+// match the hosted `Value::toString` byte for byte.
+static void test_str_helper() {
+  Bytecode proto = compileSource(
+      "var n = 3;\n"
+      "print(\"n=${n}\");\n"
+      "var f = 1.0 / 3.0;\n"
+      "print(\"f=${f}\");\n"
+      "var d = 0.1 + 0.2;\n"
+      "print(\"d=${d}\");\n"
+      "var b = true;\n"
+      "print(\"b=${b}\");\n"
+      "var s = \"hi\";\n"
+      "print(\"s=${s}\");\n"
+      "var z = nil;\n"
+      "print(\"z=${z}\");\n"
+      "var neg = -42;\n"
+      "print(\"neg=${neg}\");\n");
+  RunResult result = buildAndRun("/tmp/jolt_str_helper", proto);
+  std::string expected =
+      "n=3\n"
+      "f=0.3333333333333333\n"
+      "d=0.30000000000000004\n"
+      "b=true\n"
+      "s=hi\n"
+      "z=nil\n"
+      "neg=-42\n";
+  check(result.output == expected,
+        "a compiled program interpolates scalars like the VM");
+  check(result.exitCode == 0, "a program using interpolation exits 0");
+}
+
+// The `$range` helper (PHASE 7c.4c) builds a range value from two integer
+// bounds. A compiled program must print, iterate (ascending and descending,
+// inclusive and exclusive), take `.length`, test membership with `in` and
+// interpolate a range exactly like the VM.
+static void test_range_helper() {
+  Bytecode proto = compileSource(
+      "print(0..5);\n"
+      "print(0..=5);\n"
+      "print(5..0);\n"
+      "print(5..=0);\n"
+      "print((0..=5).length);\n"
+      "var r = 0..3;\n"
+      "print(r.length);\n"
+      "for i in 0..3 { print(i); }\n"
+      "for i in 3..0 { print(i); }\n"
+      "for i in 0..=2 { print(i); }\n"
+      "print(2 in 0..5);\n"
+      "print(5 in 0..5);\n"
+      "print(5 in 0..=5);\n"
+      "print(1 in 5..0);\n"
+      "print(5 in 5..0);\n"
+      "print(\"${0..=3}\");\n");
+  RunResult result = buildAndRun("/tmp/jolt_range_helper", proto);
+  std::string expected =
+      "0..5\n"
+      "0..=5\n"
+      "5..0\n"
+      "5..=0\n"
+      "6\n"
+      "3\n"
+      "0\n"
+      "1\n"
+      "2\n"
+      "3\n"
+      "2\n"
+      "1\n"
+      "0\n"
+      "1\n"
+      "2\n"
+      "true\n"
+      "false\n"
+      "true\n"
+      "true\n"
+      "false\n"
+      "0..=3\n";
+  check(result.output == expected,
+        "a compiled program handles ranges like the VM");
+  check(result.exitCode == 0, "a program using ranges exits 0");
+}
+
+// A range with a non-integer bound must fail with the hosted helper's message
+// and exit 70.
+static void test_range_helper_bad_bounds() {
+  Bytecode proto = compileSource(
+      "var s = \"x\";\n"
+      "var r = s..3;\n"
+      "print(r);\n");
+  RunResult result = buildAndRun("/tmp/jolt_range_bad", proto);
+  check(result.exitCode == 70, "a non-integer range bound exits 70");
+  check(result.output.find("range bounds must be integers") != std::string::npos,
+        "the failed range names the integer-bounds rule");
+}
+
 // A nested container prints with the recursive repr, and a self-referential one
 // stops at the depth cap instead of recursing forever.
 static void test_collection_repr() {
@@ -368,6 +496,41 @@ static void test_collection_repr() {
   check(result.output.find("...") != std::string::npos,
         "a self-referential map stops at the depth cap");
   check(result.exitCode == 0, "a self-referential program still exits 0");
+}
+
+// `$str` renders a collection or function with the recursive repr (PHASE
+// 7c.4b.2), so `"${[1, 2]}"` reads exactly like `print([1, 2])`: nested strings
+// quoted, maps as `{k: v}`, functions as `<fn>`, and a self-referential
+// structure stops at the depth cap instead of recursing forever.
+static void test_str_helper_collections() {
+  Bytecode proto = compileSource(
+      "print(\"${[1, 2, 3]}\");\n"
+      "print(\"${[\"a\", \"b\"]}\");\n"
+      "print(\"${[[1, 2], {\"k\": 3}]}\");\n"
+      "var m = {\"x\": 1, \"y\": [1, 2]};\n"
+      "print(\"${m}\");\n"
+      "fn f() {}\n"
+      "print(\"${f}\");\n"
+      "print(\"${0..=3}\");\n"
+      "let self = {};\n"
+      "self[\"me\"] = self;\n"
+      "print(\"${self}\");\n"
+      "print(\"sum=${[1, 2, 3].length}\");\n");
+  RunResult result = buildAndRun("/tmp/jolt_str_collections", proto);
+  check(result.output.find(
+            "[1, 2, 3]\n"
+            "[\"a\", \"b\"]\n"
+            "[[1, 2], {\"k\": 3}]\n"
+            "{\"x\": 1, \"y\": [1, 2]}\n"
+            "<fn>\n"
+            "0..=3\n") == 0,
+        "a compiled program interpolates collections and functions like print");
+  check(result.output.find("{\"me\":") != std::string::npos &&
+            result.output.find("...") != std::string::npos,
+        "interpolating a self-referential map stops at the depth cap");
+  check(result.output.find("sum=3\n") != std::string::npos,
+        "a collection expression interpolates with the recursive repr");
+  check(result.exitCode == 0, "a program interpolating a collection exits 0");
 }
 
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
@@ -752,7 +915,13 @@ int main() {
   test_boxed_runtime_float_mod();
   test_builtin_print();
   test_collections();
+  test_hidden_helpers();
+  test_hidden_helpers_non_null_failure();
+  test_str_helper();
+  test_range_helper();
+  test_range_helper_bad_bounds();
   test_collection_repr();
+  test_str_helper_collections();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

@@ -30,3 +30,38 @@ for name, age in ages {
   ageSum = ageSum + age;
 }
 print("age sum =", ageSum);
+
+// Hidden helpers (PHASE 6.5 features the AOT backend now lowers): the
+// non-null assertion `!!` and the catch operator. Both compile to a call to a
+// runtime helper, so they run identically on the VM and in the static binary.
+var maybe = 7;
+var sure = maybe!!;
+print("non-null =", sure);
+
+var fallback = sure catch 0;
+print("catch =", fallback);
+
+// String interpolation lowers to the hidden `$str` helper (PHASE 7c.4b).
+var ratio = 1.0 / 3.0;
+print("ratio = ${ratio}");
+print("sure = ${sure}, label = ${"x"}");
+
+// Ranges lower to the hidden `$range` helper (PHASE 7c.4c): printing,
+// iteration, `.length`, membership and interpolation.
+print("range =", 0..=5);
+var count = 0;
+for i in 0..4 {
+  count = count + i;
+}
+print("range sum =", count);
+print("range length =", (0..=5).length);
+print("3 in range =", 3 in 0..5);
+print("range text = ${2..=7}");
+
+// `$str` renders a collection with the recursive repr (PHASE 7c.4b.2), so
+// interpolation and `print` agree byte for byte.
+var pair = [1, "two"];
+print("pair = ${pair}");
+print("nested = ${[[1, 2], {"k": 3}]}");
+print("ages text = ${ages}");
+
