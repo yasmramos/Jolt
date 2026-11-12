@@ -77,13 +77,13 @@ cmake --build build-cmake
 ### Manual build
 
 ```sh
-g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp src/native/*.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp src/native/*.cpp src/jit/*.cpp
 ```
 
 On Windows, with `cmd.exe`:
 
 ```bat
-g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe src\*.cpp src\native\*.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe src\*.cpp src\native\*.cpp src\jit\*.cpp
 ```
 
 ## Usage
@@ -262,7 +262,7 @@ The positive tests use `assert` and `assertEq`; a script exits with a non-zero c
 
 Current limitations:
 
-- Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. There is no JIT.
+- Dynamic typing. The product model is Lua's: source code is always compiled to bytecode and run on the VM. The CLI and the REPL both compile to bytecode and run on the register-based VM; the AST is never executed. The development engine (`jolt`) also ships a **JIT** for the integer subset of the bytecode: a leaf function whose body only manipulates `nil`/`bool`/`int` is compiled to native x86-64 the first time it is called (about 25x faster on a tight integer loop), while everything else keeps running on the interpreter, so results never change. It is a development-engine feature only: `jolt build` and the generated binary never contain it (`jolt --no-jit` disables it).
 - There are no classes, interfaces or inheritance; maps and closures replace them. A `struct` (data only, no methods) is a named map shape checked at compile time, not a class.
 - There is no `try`/`catch` *statement* or catchable exceptions. Errors are values: `error(message, code?)` builds a first-class error value and `isError(value)` detects it. `pcall(fn, ...)` turns a raised runtime error into a `{ok, value, error}` map instead of aborting. Two operators work on error values: `try expr` propagates one to the caller (Rust's `?`) and `expr catch default` recovers locally (Zig's `catch`). `panic()` is for unrecoverable errors.
 - Modules use Java-style `import` (`import std.math;`, `import std.math.*;`, `import std.math as m;`, `import { sqrt } from std.math;`) with compile-time conflict detection for `.*` and a reserved `std.` prefix. There is no `require`; modules are loaded eagerly and a cyclic import is a compile error.
