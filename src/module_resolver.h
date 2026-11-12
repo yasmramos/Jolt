@@ -4,7 +4,7 @@
 
 // Resolves an import path to a source file on disk.
 //
-// Jolt's import grammar is Java-style (`import std.math;`, `import myapp.utils.*;`),
+// Oskel's import grammar is Java-style (`import std.math;`, `import myapp.utils.*;`),
 // so a module is named by a dotted path, not by a file path. The resolver maps
 // that path to a file:
 //

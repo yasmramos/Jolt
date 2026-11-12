@@ -202,7 +202,7 @@ static void writeFile(const std::string& path, const std::vector<std::uint8_t>& 
 static void test_end_to_end() {
   // The .rodata section is loaded at 0x600000 (see elf.cpp); the message sits
   // at its very start.
-  const char* message = "hello from a Jolt AOT binary\n";
+  const char* message = "hello from a Oskel AOT binary\n";
   std::vector<std::uint8_t> rodata(message, message + std::strlen(message));
   const std::int64_t messageAddress = 0x600000;
 
@@ -276,7 +276,7 @@ static Bytecode makeProto(const std::vector<Instruction>& code,
   return proto;
 }
 
-// Compiles a Jolt source string to bytecode, the way the dev engine does.
+// Compiles a Oskel source string to bytecode, the way the dev engine does.
 static Bytecode compileSource(const std::string& source) {
   auto tokens = lex(source);
   Parser parser(std::move(tokens), "<freestanding-test>");
@@ -707,25 +707,25 @@ static void test_public_builtin_errors() {
   Bytecode failedAssert = compileSource("assert(false);\n");
   RunResult assertion = buildAndRun("/tmp/oskel_builtin_assert", failedAssert);
   check(assertion.exitCode == 70, "a failed assert exits 70");
-  check(assertion.output.find("jolt: assertion failed") != std::string::npos,
+  check(assertion.output.find("oskel: assertion failed") != std::string::npos,
         "a failed assert reports the default message");
 
   Bytecode customAssert = compileSource("assert(false, \"custom message\");\n");
   RunResult custom = buildAndRun("/tmp/oskel_builtin_assert_msg", customAssert);
   check(custom.exitCode == 70, "a failed assert with a message exits 70");
-  check(custom.output.find("jolt: custom message") != std::string::npos,
+  check(custom.output.find("oskel: custom message") != std::string::npos,
         "a failed assert reports the caller's message");
 
   Bytecode panicked = compileSource("panic(\"boom\");\n");
   RunResult panic = buildAndRun("/tmp/oskel_builtin_panic", panicked);
   check(panic.exitCode == 70, "panic exits 70");
-  check(panic.output.find("jolt: boom") != std::string::npos,
+  check(panic.output.find("oskel: boom") != std::string::npos,
         "panic reports the caller's message");
 
   Bytecode barePanic = compileSource("panic();\n");
   RunResult bare = buildAndRun("/tmp/oskel_builtin_panic_bare", barePanic);
   check(bare.exitCode == 70, "a bare panic exits 70");
-  check(bare.output.find("jolt: panic") != std::string::npos,
+  check(bare.output.find("oskel: panic") != std::string::npos,
         "a bare panic reports the default message");
 }
 

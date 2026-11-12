@@ -3,4 +3,4 @@
 
 var name = "world";
 print("Hello, ${name}!");
-print("Jolt is written in C++.");
+print("Oskel is written in C++.");

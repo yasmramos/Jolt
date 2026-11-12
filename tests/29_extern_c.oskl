@@ -12,7 +12,7 @@ extern "C" {
   fn pow(base: double, exponent: double): double;
 }
 
-// A Jolt string is a valid `const char *` argument (it is NUL-terminated and
+// A Oskel string is a valid `const char *` argument (it is NUL-terminated and
 // stays alive for the whole call).
 assertEq(strlen("hello"), 5);
 assertEq(strlen(""), 0);

@@ -1,4 +1,4 @@
-# Runs one Jolt script under CTest with `-c` (compile only) and checks that the
+# Runs one Oskel script under CTest with `-c` (compile only) and checks that the
 # exit code matches and that nothing is printed. `-c` runs the full compiler
 # pipeline (lexer, parser, compiler, import resolution) but never starts the VM,
 # so a script that would print must produce no stdout at all.

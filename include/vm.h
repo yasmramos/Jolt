@@ -138,7 +138,7 @@ class VM : public Runtime {
 
   // Pushes the frame for a bytecode function, copying its arguments into the
   // new window. Throws on arity, depth or a function without a proto.
-  void pushJoltFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
+  void pushOskelFrame(FuncPtr function, std::vector<Value> args, std::size_t resultReg, int line,
                      int col);
 
   Value callNative(Function& fn, std::vector<Value> args, int line, int col);

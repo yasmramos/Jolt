@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds .deb and .rpm packages for the Jolt engine from a staged install tree.
+# Builds .deb and .rpm packages for the Oskel engine from a staged install tree.
 #
 # Usage: package-linux.sh <version> <stage-dir> <out-dir>
 #
@@ -78,11 +78,11 @@ Version: $deb_version
 Section: devel
 Priority: optional
 Architecture: amd64
-Maintainer: Jolt contributors <noreply@example.com>
+Maintainer: Oskel contributors <noreply@example.com>
 Installed-Size: $installed_size
-Homepage: https://github.com/yasmramos/Jolt
-Description: Jolt programming language engine
- The Jolt development engine and its standard library. Jolt is a dynamic,
+Homepage: https://github.com/yasmramos/Oskel
+Description: Oskel programming language engine
+ The Oskel development engine and its standard library. Oskel is a dynamic,
  general-purpose language with a Lua-style bytecode architecture.
 EOF
 
@@ -109,13 +109,13 @@ cat > "$rpm_top/SPECS/oskel.spec" <<EOF
 Name:           oskel
 Version:        $rpm_version
 Release:        $rpm_release
-Summary:        Jolt programming language engine
+Summary:        Oskel programming language engine
 License:        MIT
-URL:            https://github.com/yasmramos/Jolt
+URL:            https://github.com/yasmramos/Oskel
 BuildArch:      x86_64
 
 %description
-The Jolt development engine and its standard library. Jolt is a dynamic,
+The Oskel development engine and its standard library. Oskel is a dynamic,
 general-purpose language with a Lua-style bytecode architecture.
 
 %install
@@ -128,7 +128,7 @@ cp -a "$stage/share/oskel/std" %{buildroot}/usr/share/oskel/std
 /usr/share/oskel/std
 
 %changelog
-* Thu Jan 01 2026 Jolt contributors <noreply@example.com> - $rpm_version-$rpm_release
+* Thu Jan 01 2026 Oskel contributors <noreply@example.com> - $rpm_version-$rpm_release
 - Automated release build.
 EOF
 

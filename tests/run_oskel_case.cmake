@@ -1,4 +1,4 @@
-# Runs one Jolt script under CTest and checks its exit code.
+# Runs one Oskel script under CTest and checks its exit code.
 # Registered by CMakeLists.txt; expects:
 #   -DOSKEL_EXE=<path to the oskel executable>
 #   -DOSKEL_SCRIPT=<path to the .oskl file>

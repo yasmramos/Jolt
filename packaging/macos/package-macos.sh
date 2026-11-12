@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a .pkg installer and a .dmg disk image for the Jolt engine on macOS.
+# Builds a .pkg installer and a .dmg disk image for the Oskel engine on macOS.
 #
 # Usage: package-macos.sh <version> <stage-dir> <out-dir>
 #
@@ -66,7 +66,7 @@ pkgbuild \
 cat > "$work/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
-  <title>Jolt $version</title>
+  <title>Oskel $version</title>
   <organization>org.oskel-lang</organization>
   <domains enable_localSystem="true"/>
   <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
@@ -100,7 +100,7 @@ cp -a "$stage/share" "$dmg_src/share"
 ln -s /usr/local "$dmg_src/usr-local"
 
 hdiutil create \
-  -volname "Jolt $version" \
+  -volname "Oskel $version" \
   -srcfolder "$dmg_src" \
   -ov -format UDZO \
   "$out/oskel-${version}.dmg"

@@ -509,7 +509,7 @@ void lowerInstruction(const Instruction& instr, const Bytecode& proto, CodeGen& 
     case OpCode::JMP_IF_FALSE:
     case OpCode::JMP_IF_TRUE: {
       // The condition is the value's truthiness, not its raw payload: `0` is
-      // truthy in Jolt, so `oskel_truthy` decides. Branch on its 0/1 result.
+      // truthy in Oskel, so `oskel_truthy` decides. Branch on its 0/1 result.
       loadValue(cg, instr.a, X64Reg::Rdi, X64Reg::Rsi);
       cg.callLabel(rt.truthy);
       cg.testReg(X64Reg::Rax);

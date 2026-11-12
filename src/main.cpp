@@ -294,7 +294,7 @@ int buildBinary(const std::string &source, const std::string &name,
   }
 
   if (!writeBinaryFile(output, image)) {
-    std::string message = "jolt: cannot write '" + output + "'\n";
+    std::string message = "oskel: cannot write '" + output + "'\n";
     platformPosix().writeErr(message.data(), message.size());
     return 74;
   }
@@ -431,7 +431,7 @@ void repl(const std::vector<std::string> &scriptArgs, const std::string &argv0, 
   Compiler compiler;
   compiler.setImportLoader(makeImportLoader(resolverFor("<repl>", argv0)));
 
-  std::cout << "Jolt " << kVersion
+  std::cout << "Oskel " << kVersion
             << " - a small scripting language written in C++\n";
   std::cout << "Type :help for help, :quit to exit.\n";
 
@@ -584,34 +584,34 @@ int main(int argc, char **argv) {
       const std::string &arg = arguments[i];
       if (arg == "-o" || arg == "--output") {
         if (i + 1 >= arguments.size()) {
-          std::cerr << "jolt: option '" << arg << "' needs an argument\n";
+          std::cerr << "oskel: option '" << arg << "' needs an argument\n";
           return 64;
         }
         buildOutput = arguments[++i];
         continue;
       }
       if (arg == "-h" || arg == "--help") {
-        std::cout << "Jolt " << kVersion << "\n\n" << kUsage;
+        std::cout << "Oskel " << kVersion << "\n\n" << kUsage;
         return 0;
       }
       if (!arg.empty() && arg[0] == '-') {
-        std::cerr << "jolt: unknown option '" << arg << "'\n";
+        std::cerr << "oskel: unknown option '" << arg << "'\n";
         return 64;
       }
       if (!buildFile.empty()) {
-        std::cerr << "jolt: build accepts a single file\n";
+        std::cerr << "oskel: build accepts a single file\n";
         return 64;
       }
       buildFile = arg;
     }
     if (buildFile.empty()) {
-      std::cerr << "jolt: build requires a file\n";
+      std::cerr << "oskel: build requires a file\n";
       return 64;
     }
     if (buildOutput.empty()) buildOutput = stripExtension(buildFile);
     std::string buildSource;
     if (!readSourceFile(buildFile, buildSource)) {
-      std::cerr << "jolt: cannot read file '" << buildFile << "'\n";
+      std::cerr << "oskel: cannot read file '" << buildFile << "'\n";
       return 66;
     }
     return buildBinary(buildSource, buildFile, buildOutput, argv[0]);
@@ -627,16 +627,16 @@ int main(int argc, char **argv) {
   for (size_t i = 0; i < arguments.size(); ++i) {
     const std::string &arg = arguments[i];
     if (arg == "-h" || arg == "--help") {
-      std::cout << "Jolt " << kVersion << "\n\n" << kUsage;
+      std::cout << "Oskel " << kVersion << "\n\n" << kUsage;
       return 0;
     }
     if (arg == "-v" || arg == "--version") {
-      std::cout << "Jolt " << kVersion << '\n';
+      std::cout << "Oskel " << kVersion << '\n';
       return 0;
     }
     if (arg == "-e" || arg == "--eval") {
       if (i + 1 >= arguments.size()) {
-        std::cerr << "jolt: option '" << arg << "' needs an argument\n";
+        std::cerr << "oskel: option '" << arg << "' needs an argument\n";
         return 64;
       }
       evalCode = arguments[++i];
@@ -663,7 +663,7 @@ int main(int argc, char **argv) {
       break;
     }
     if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "jolt: unknown option '" << arg << "'\n";
+      std::cerr << "oskel: unknown option '" << arg << "'\n";
       return 64;
     }
     file = arg;
@@ -678,14 +678,14 @@ int main(int argc, char **argv) {
   if (!file.empty()) {
     std::string source;
     if (!readSourceFile(file, source)) {
-      std::cerr << "jolt: cannot read file '" << file << "'\n";
+      std::cerr << "oskel: cannot read file '" << file << "'\n";
       return 66;
     }
     return runSource(source, file, scriptArgs, checkOnly, argv[0], useJit);
   }
 
   if (checkOnly) {
-    std::cerr << "jolt: --check requires a file\n";
+    std::cerr << "oskel: --check requires a file\n";
     return 64;
   }
 

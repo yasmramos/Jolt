@@ -9,7 +9,7 @@ extern fn puts(s: string): int;
 extern fn sqrt(x: double): double;
 
 // A `string` parameter is a valid `const char *` (NUL-terminated and alive for
-// the whole call), so `strlen`/`puts` accept a Jolt string directly.
+// the whole call), so `strlen`/`puts` accept a Oskel string directly.
 assertEq(strlen("hello"), 5);
 assertEq(strlen(""), 0);
 

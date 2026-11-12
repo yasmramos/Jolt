@@ -7,7 +7,7 @@
 // Two-pass encoding: every control-flow instruction reserves a 4-byte rel32
 // displacement and records a fixup; `bind()` patches all pending references
 // when the label is reached. Encoding helpers follow the Intel SDM Vol. 2
-// tables for the AMD64 subset used by the Jolt backend.
+// tables for the AMD64 subset used by the Oskel backend.
 
 namespace {
 
@@ -449,7 +449,7 @@ void CodeGen::idiv(X64Reg divisor) {
 void CodeGen::cdq() {
   // 64-bit sign-extension (CQO, REX.W + 0x99): sign-extend rax into rdx:rax.
   // The bare 0x99 form (CDQ) only widens eax, so a dividend outside the 32-bit
-  // range would be divided with a wrong high half. Jolt's integers are 64-bit
+  // range would be divided with a wrong high half. Oskel's integers are 64-bit
   // (`Value` stores `int64_t`), so the widening must be 64-bit too.
   rex(true, 0, false, 0, 0);
   emitByte(0x99);

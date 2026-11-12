@@ -102,7 +102,7 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Packaging Jolt $version"
+          echo "Packaging Oskel $version"
 
       - name: Package the engine (Unix)
         if: runner.os != 'Windows'

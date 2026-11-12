@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Builds the Jolt interpreter into build/oskel.
+# Builds the Oskel interpreter into build/oskel.
 # Usage: ./build.sh
 #   CXX=clang++ ./build.sh
 #   CXXFLAGS="-O0 -g" ./build.sh

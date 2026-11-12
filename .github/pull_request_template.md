@@ -27,7 +27,7 @@ change. Explain the design choice, not the diff line by line.
 ## What NOT to do (and why)
 
 <!--
-Jolt-specific guardrails (AGENT.md §3, §8). Delete if not relevant.
+Oskel-specific guardrails (AGENT.md §3, §8). Delete if not relevant.
 - Do **not** add a high-level opcode (`OP_IF`, `OP_EVAL_EXPR`, ...).
 - Do **not** exceed the 40-opcode ceiling (`kOpcodeCount <= 40`).
 - Do **not** repeat Java's mistake: bytecode that cannot be lowered to native.

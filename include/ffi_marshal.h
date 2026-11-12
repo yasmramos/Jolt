@@ -12,7 +12,7 @@
 // A C function is declared in an `extern "C"` block, the compiler records the
 // declaration as `Bytecode::externs`, and the engine resolves the symbol
 // through `Platform::lookupSymbol` before the proto runs. This module turns the
-// resolved address plus the declared signature into a Jolt native, marshalling
+// resolved address plus the declared signature into a Oskel native, marshalling
 // the arguments and the result across the System V AMD64 ABI.
 //
 // No `libffi`: the call goes through a compile-time thunk selected by the

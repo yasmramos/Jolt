@@ -1,5 +1,5 @@
 // Tests for the register-based virtual machine (PHASE 3-6).
-// Compiles Jolt snippets and runs the resulting bytecode.
+// Compiles Oskel snippets and runs the resulting bytecode.
 
 // Release builds define NDEBUG, which would compile every assert() out and
 // leave the suite green without testing anything.
@@ -326,7 +326,7 @@ void testUnaryOperators() {
 
   assert(requireGlobal(vm, "c").isBool() && !requireGlobal(vm, "c").asBool());
   assert(requireGlobal(vm, "d").isBool() && requireGlobal(vm, "d").asBool());
-  // `0` is truthy in Jolt (only nil and false are falsy).
+  // `0` is truthy in Oskel (only nil and false are falsy).
   assert(requireGlobal(vm, "e").isBool() && !requireGlobal(vm, "e").asBool());
 
   const Value& f = requireGlobal(vm, "f");
@@ -1422,10 +1422,10 @@ void testFfiVoidTokenRoundTrip() {
 }
 
 // C-linkage host functions the `extern "C"` tests resolve by name.
-extern "C" int joltTestAdd(int a, int b) { return a + b; }
-extern "C" double joltTestScale(double x) { return x * 2.0; }
-extern "C" const char* joltTestGreeting() { return "hi"; }
-extern "C" int joltTestBump(int* p) {
+extern "C" int oskelTestAdd(int a, int b) { return a + b; }
+extern "C" double oskelTestScale(double x) { return x * 2.0; }
+extern "C" const char* oskelTestGreeting() { return "hi"; }
+extern "C" int oskelTestBump(int* p) {
   if (!p) return -1;
   int previous = *p;
   *p = previous + 1;
@@ -1435,37 +1435,37 @@ extern "C" int joltTestBump(int* p) {
 // Struct-by-value host functions (PHASE 6.6). Each returns or takes a small
 // struct so the marshalling is exercised across the six System V register
 // shapes: I, S, II, SS, IS and SI.
-extern "C" struct JoltPairInt { int a; int b; };
-extern "C" struct JoltPairDouble { double a; double b; };
-extern "C" struct JoltMixed { int a; double b; };
-extern "C" struct JoltMixedRev { double a; int b; };
-extern "C" struct JoltOneDouble { double a; };
+extern "C" struct OskelPairInt { int a; int b; };
+extern "C" struct OskelPairDouble { double a; double b; };
+extern "C" struct OskelMixed { int a; double b; };
+extern "C" struct OskelMixedRev { double a; int b; };
+extern "C" struct OskelOneDouble { double a; };
 
-extern "C" JoltPairInt joltTestMakePair(int a, int b) { return JoltPairInt{a, b}; }
-extern "C" JoltPairDouble joltTestMakePairDouble(double a, double b) {
-  return JoltPairDouble{a, b};
+extern "C" OskelPairInt oskelTestMakePair(int a, int b) { return OskelPairInt{a, b}; }
+extern "C" OskelPairDouble oskelTestMakePairDouble(double a, double b) {
+  return OskelPairDouble{a, b};
 }
-extern "C" JoltMixed joltTestMakeMixed(int a, double b) { return JoltMixed{a, b}; }
-extern "C" JoltMixedRev joltTestMakeMixedRev(double a, int b) { return JoltMixedRev{a, b}; }
-extern "C" JoltOneDouble joltTestMakeOneDouble(double a) { return JoltOneDouble{a}; }
+extern "C" OskelMixed oskelTestMakeMixed(int a, double b) { return OskelMixed{a, b}; }
+extern "C" OskelMixedRev oskelTestMakeMixedRev(double a, int b) { return OskelMixedRev{a, b}; }
+extern "C" OskelOneDouble oskelTestMakeOneDouble(double a) { return OskelOneDouble{a}; }
 // Takes a struct by value and returns an integer derived from it, so a struct
 // *argument* is proven to arrive with the right bytes in the right registers.
-extern "C" int joltTestSumPair(JoltPairInt p) { return p.a + p.b; }
-extern "C" double joltTestScalePair(JoltPairDouble p) { return p.a * 100.0 + p.b; }
-extern "C" double joltTestMixMagnitude(JoltMixed m) { return m.a + m.b; }
+extern "C" int oskelTestSumPair(OskelPairInt p) { return p.a + p.b; }
+extern "C" double oskelTestScalePair(OskelPairDouble p) { return p.a * 100.0 + p.b; }
+extern "C" double oskelTestMixMagnitude(OskelMixed m) { return m.a + m.b; }
 
 // A struct smaller than one eightbyte: `{char; char}` is 2 bytes, so the whole
 // struct travels in a single INTEGER register with the upper bytes unspecified.
 // Reading the return must touch only the two declared bytes.
-extern "C" struct JoltTwoBytes { char a; char b; };
-extern "C" JoltTwoBytes joltTestMakeTwoBytes(char a, char b) { return JoltTwoBytes{a, b}; }
+extern "C" struct OskelTwoBytes { char a; char b; };
+extern "C" OskelTwoBytes oskelTestMakeTwoBytes(char a, char b) { return OskelTwoBytes{a, b}; }
 
-// C functions that call a Jolt callback, one per ABI shape: a GPR argument and
+// C functions that call a Oskel callback, one per ABI shape: a GPR argument and
 // return, an SSE argument and return, and a `void` callback.
-extern "C" int joltTestApply(int (*f)(int), int x) { return f(x); }
-extern "C" double joltTestApplyDouble(double (*f)(double), double x) { return f(x); }
-extern "C" int joltTestApplyTwice(int (*f)(int), int x) { return f(x) + f(x); }
-extern "C" int joltTestApplyVoid(void (*f)(int), int x) {
+extern "C" int oskelTestApply(int (*f)(int), int x) { return f(x); }
+extern "C" double oskelTestApplyDouble(double (*f)(double), double x) { return f(x); }
+extern "C" int oskelTestApplyTwice(int (*f)(int), int x) { return f(x) + f(x); }
+extern "C" int oskelTestApplyVoid(void (*f)(int), int x) {
   f(x);
   return x;
 }
@@ -1489,25 +1489,25 @@ struct SymbolPlatform final : Platform {
   void dealloc(void*) override {}
   void* lookupSymbol(const char* name) override {
     const std::string symbol = name;
-    if (symbol == "joltTestAdd") return reinterpret_cast<void*>(&joltTestAdd);
-    if (symbol == "joltTestScale") return reinterpret_cast<void*>(&joltTestScale);
-    if (symbol == "joltTestGreeting") return reinterpret_cast<void*>(&joltTestGreeting);
-    if (symbol == "joltTestBump") return reinterpret_cast<void*>(&joltTestBump);
-    if (symbol == "joltTestMakePair") return reinterpret_cast<void*>(&joltTestMakePair);
-    if (symbol == "joltTestMakePairDouble")
-      return reinterpret_cast<void*>(&joltTestMakePairDouble);
-    if (symbol == "joltTestMakeMixed") return reinterpret_cast<void*>(&joltTestMakeMixed);
-    if (symbol == "joltTestMakeMixedRev") return reinterpret_cast<void*>(&joltTestMakeMixedRev);
-    if (symbol == "joltTestMakeOneDouble")
-      return reinterpret_cast<void*>(&joltTestMakeOneDouble);
-    if (symbol == "joltTestSumPair") return reinterpret_cast<void*>(&joltTestSumPair);
-    if (symbol == "joltTestScalePair") return reinterpret_cast<void*>(&joltTestScalePair);
-    if (symbol == "joltTestMixMagnitude") return reinterpret_cast<void*>(&joltTestMixMagnitude);
-    if (symbol == "joltTestMakeTwoBytes") return reinterpret_cast<void*>(&joltTestMakeTwoBytes);
-    if (symbol == "joltTestApply") return reinterpret_cast<void*>(&joltTestApply);
-    if (symbol == "joltTestApplyDouble") return reinterpret_cast<void*>(&joltTestApplyDouble);
-    if (symbol == "joltTestApplyTwice") return reinterpret_cast<void*>(&joltTestApplyTwice);
-    if (symbol == "joltTestApplyVoid") return reinterpret_cast<void*>(&joltTestApplyVoid);
+    if (symbol == "oskelTestAdd") return reinterpret_cast<void*>(&oskelTestAdd);
+    if (symbol == "oskelTestScale") return reinterpret_cast<void*>(&oskelTestScale);
+    if (symbol == "oskelTestGreeting") return reinterpret_cast<void*>(&oskelTestGreeting);
+    if (symbol == "oskelTestBump") return reinterpret_cast<void*>(&oskelTestBump);
+    if (symbol == "oskelTestMakePair") return reinterpret_cast<void*>(&oskelTestMakePair);
+    if (symbol == "oskelTestMakePairDouble")
+      return reinterpret_cast<void*>(&oskelTestMakePairDouble);
+    if (symbol == "oskelTestMakeMixed") return reinterpret_cast<void*>(&oskelTestMakeMixed);
+    if (symbol == "oskelTestMakeMixedRev") return reinterpret_cast<void*>(&oskelTestMakeMixedRev);
+    if (symbol == "oskelTestMakeOneDouble")
+      return reinterpret_cast<void*>(&oskelTestMakeOneDouble);
+    if (symbol == "oskelTestSumPair") return reinterpret_cast<void*>(&oskelTestSumPair);
+    if (symbol == "oskelTestScalePair") return reinterpret_cast<void*>(&oskelTestScalePair);
+    if (symbol == "oskelTestMixMagnitude") return reinterpret_cast<void*>(&oskelTestMixMagnitude);
+    if (symbol == "oskelTestMakeTwoBytes") return reinterpret_cast<void*>(&oskelTestMakeTwoBytes);
+    if (symbol == "oskelTestApply") return reinterpret_cast<void*>(&oskelTestApply);
+    if (symbol == "oskelTestApplyDouble") return reinterpret_cast<void*>(&oskelTestApplyDouble);
+    if (symbol == "oskelTestApplyTwice") return reinterpret_cast<void*>(&oskelTestApplyTwice);
+    if (symbol == "oskelTestApplyVoid") return reinterpret_cast<void*>(&oskelTestApplyVoid);
     return nullptr;
   }
 };
@@ -1532,20 +1532,20 @@ std::string runWithSymbols(const std::string& source) {
 void testExternResolvesAndMarshalsIntegers() {
   TEST_SCOPE();
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestAdd(a: int, b: int): int; }\n"
-      "print(joltTestAdd(2, 40));\n");
+      "extern \"C\" { fn oskelTestAdd(a: int, b: int): int; }\n"
+      "print(oskelTestAdd(2, 40));\n");
   assert(out == "42\n");
 }
 
 void testExternTruncatesNarrowReturnToDeclaredWidth() {
   TEST_SCOPE();
-  // `joltTestAdd` returns a 32-bit `int`; the upper half of `rax` is undefined
+  // `oskelTestAdd` returns a 32-bit `int`; the upper half of `rax` is undefined
   // after the call. Reading it as a 64-bit value would surface garbage here,
   // so a correct `int` (not `int64`) result proves the truncation.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestAdd(a: int, b: int): int; }\n"
+      "extern \"C\" { fn oskelTestAdd(a: int, b: int): int; }\n"
       "var total = 0;\n"
-      "for (var i = 0; i < 100; i = i + 1) { total = total + joltTestAdd(i, i); }\n"
+      "for (var i = 0; i < 100; i = i + 1) { total = total + oskelTestAdd(i, i); }\n"
       "print(total);\n");
   assert(out == "9900\n");
 }
@@ -1553,16 +1553,16 @@ void testExternTruncatesNarrowReturnToDeclaredWidth() {
 void testExternMarshalsDoubleReturnAndArgument() {
   TEST_SCOPE();
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestScale(x: double): double; }\n"
-      "print(joltTestScale(21.0));\n");
+      "extern \"C\" { fn oskelTestScale(x: double): double; }\n"
+      "print(oskelTestScale(21.0));\n");
   assert(out == "42\n");
 }
 
 void testExternMarshalsStringReturnAsCString() {
   TEST_SCOPE();
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestGreeting(): cstring; }\n"
-      "print(cstr(joltTestGreeting()));\n");
+      "extern \"C\" { fn oskelTestGreeting(): cstring; }\n"
+      "print(cstr(oskelTestGreeting()));\n");
   assert(out == "hi\n");
 }
 
@@ -1570,10 +1570,10 @@ void testExternMarshalsPointerArgument() {
   TEST_SCOPE();
   // The buffer's bytes are passed as the address the callee writes through.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestBump(p: ptr): int; }\n"
+      "extern \"C\" { fn oskelTestBump(p: ptr): int; }\n"
       "let b = buffer(4);\n"
       "storeByte(b, 0, 7);\n"
-      "let before = joltTestBump(b);\n"
+      "let before = oskelTestBump(b);\n"
       "print(before);\n"
       "print(loadByte(b, 0));\n");
   assert(out == "7\n8\n");
@@ -1585,8 +1585,8 @@ void testExternMarshalsStructReturnTwoIntegers() {
   // A two-`int` struct is 8 bytes, class INTEGER: it comes back wholly in `rax`.
   const std::string out = runWithSymbols(
       "struct PairInt { a: int; b: int; }\n"
-      "extern \"C\" { fn joltTestMakePair(a: int, b: int): PairInt; }\n"
-      "let p = joltTestMakePair(3, 4);\n"
+      "extern \"C\" { fn oskelTestMakePair(a: int, b: int): PairInt; }\n"
+      "let p = oskelTestMakePair(3, 4);\n"
       "print(p.a);\n"
       "print(p.b);\n");
   assert(out == "3\n4\n");
@@ -1598,8 +1598,8 @@ void testExternMarshalsStructReturnTwoDoubles() {
   // `xmm0`/`xmm1`.
   const std::string out = runWithSymbols(
       "struct PairDouble { a: double; b: double; }\n"
-      "extern \"C\" { fn joltTestMakePairDouble(a: double, b: double): PairDouble; }\n"
-      "let p = joltTestMakePairDouble(1.5, 2.5);\n"
+      "extern \"C\" { fn oskelTestMakePairDouble(a: double, b: double): PairDouble; }\n"
+      "let p = oskelTestMakePairDouble(1.5, 2.5);\n"
       "print(p.a);\n"
       "print(p.b);\n");
   assert(out == "1.5\n2.5\n");
@@ -1613,13 +1613,13 @@ void testExternMarshalsStructReturnMixedClasses() {
       "struct Mixed { a: int; b: double; }\n"
       "struct MixedRev { a: double; b: int; }\n"
       "extern \"C\" {\n"
-      "  fn joltTestMakeMixed(a: int, b: double): Mixed;\n"
-      "  fn joltTestMakeMixedRev(a: double, b: int): MixedRev;\n"
+      "  fn oskelTestMakeMixed(a: int, b: double): Mixed;\n"
+      "  fn oskelTestMakeMixedRev(a: double, b: int): MixedRev;\n"
       "}\n"
-      "let m = joltTestMakeMixed(7, 8.5);\n"
+      "let m = oskelTestMakeMixed(7, 8.5);\n"
       "print(m.a);\n"
       "print(m.b);\n"
-      "let r = joltTestMakeMixedRev(1.25, 9);\n"
+      "let r = oskelTestMakeMixedRev(1.25, 9);\n"
       "print(r.a);\n"
       "print(r.b);\n");
   assert(out == "7\n8.5\n1.25\n9\n");
@@ -1631,8 +1631,8 @@ void testExternMarshalsStructArgument() {
   // registers; the callee reads them back as the struct it declared.
   const std::string out = runWithSymbols(
       "struct PairInt { a: int; b: int; }\n"
-      "extern \"C\" { fn joltTestSumPair(p: PairInt): int; }\n"
-      "print(joltTestSumPair(PairInt { a: 20, b: 22 }));\n");
+      "extern \"C\" { fn oskelTestSumPair(p: PairInt): int; }\n"
+      "print(oskelTestSumPair(PairInt { a: 20, b: 22 }));\n");
   assert(out == "42\n");
 }
 
@@ -1642,8 +1642,8 @@ void testExternMarshalsMixedStructArgument() {
   // eightbyte in an xmm register, in that order.
   const std::string out = runWithSymbols(
       "struct Mixed { a: int; b: double; }\n"
-      "extern \"C\" { fn joltTestMixMagnitude(m: Mixed): double; }\n"
-      "print(joltTestMixMagnitude(Mixed { a: 2, b: 0.5 }));\n");
+      "extern \"C\" { fn oskelTestMixMagnitude(m: Mixed): double; }\n"
+      "print(oskelTestMixMagnitude(Mixed { a: 2, b: 0.5 }));\n");
   assert(out == "2.5\n");
 }
 
@@ -1653,8 +1653,8 @@ void testExternMarshalsStructArgumentAndReturnTogether() {
   // `xmm0`: the full round trip for the SSE shape.
   const std::string out = runWithSymbols(
       "struct PairDouble { a: double; b: double; }\n"
-      "extern \"C\" { fn joltTestScalePair(p: PairDouble): double; }\n"
-      "print(joltTestScalePair(PairDouble { a: 1.5, b: 0.25 }));\n");
+      "extern \"C\" { fn oskelTestScalePair(p: PairDouble): double; }\n"
+      "print(oskelTestScalePair(PairDouble { a: 1.5, b: 0.25 }));\n");
   assert(out == "150.25\n");
 }
 
@@ -1664,8 +1664,8 @@ void testExternMarshalsSubEightbyteStruct() {
   // the two declared bytes are read (the rest of the register is unspecified).
   const std::string out = runWithSymbols(
       "struct TwoBytes { a: int8; b: int8; }\n"
-      "extern \"C\" { fn joltTestMakeTwoBytes(a: int8, b: int8): TwoBytes; }\n"
-      "let t = joltTestMakeTwoBytes(65, 66);\n"
+      "extern \"C\" { fn oskelTestMakeTwoBytes(a: int8, b: int8): TwoBytes; }\n"
+      "let t = oskelTestMakeTwoBytes(65, 66);\n"
       "print(t.a);\n"
       "print(t.b);\n");
   assert(out == "65\n66\n");
@@ -1675,12 +1675,12 @@ void testExternMarshalsSubEightbyteStruct() {
 #ifdef OSKEL_HAVE_LIBFFI
 void testExternCallbackGprShape() {
   TEST_SCOPE();
-  // The callback is a Jolt function; C calls it through a libffi trampoline that
-  // re-enters the VM with the C argument boxed as a Jolt value.
+  // The callback is a Oskel function; C calls it through a libffi trampoline that
+  // re-enters the VM with the C argument boxed as a Oskel value.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestApply(f: fn(int): int, x: int): int; }\n"
+      "extern \"C\" { fn oskelTestApply(f: fn(int): int, x: int): int; }\n"
       "fn inc(v: int): int { return v + 1; }\n"
-      "print(joltTestApply(inc, 41));\n");
+      "print(oskelTestApply(inc, 41));\n");
   assert(out == "42\n");
 }
 
@@ -1689,9 +1689,9 @@ void testExternCallbackSseShape() {
   // A `double` callback argument and return travel through SSE registers; the
   // trampoline boxes and writes them as `double`, not as a general-purpose word.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestApplyDouble(f: fn(double): double, x: double): double; }\n"
+      "extern \"C\" { fn oskelTestApplyDouble(f: fn(double): double, x: double): double; }\n"
       "fn twice(v: double): double { return v * 2.0; }\n"
-      "print(joltTestApplyDouble(twice, 21.0));\n");
+      "print(oskelTestApplyDouble(twice, 21.0));\n");
   assert(out == "42\n");
 }
 
@@ -1700,10 +1700,10 @@ void testExternCallbackVoidReturnAndClosure() {
   // A `void` callback writes no return value, and a closure works: the
   // trampoline re-enters the VM, so the callback sees its captured variable.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestApplyVoid(f: fn(int): void, x: int): int; }\n"
+      "extern \"C\" { fn oskelTestApplyVoid(f: fn(int): void, x: int): int; }\n"
       "var seen = 0;\n"
       "let record = (v) => { seen = v; };\n"
-      "print(joltTestApplyVoid(record, 7));\n"
+      "print(oskelTestApplyVoid(record, 7));\n"
       "print(seen);\n");
   assert(out == "7\n7\n");
 }
@@ -1713,20 +1713,20 @@ void testExternCallbackInvokedRepeatedly() {
   // C calls the same trampoline twice within one extern call: the closure must
   // stay valid for the whole call, not just the first entry.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestApplyTwice(f: fn(int): int, x: int): int; }\n"
+      "extern \"C\" { fn oskelTestApplyTwice(f: fn(int): int, x: int): int; }\n"
       "fn inc(v: int): int { return v + 1; }\n"
-      "print(joltTestApplyTwice(inc, 10));\n");
+      "print(oskelTestApplyTwice(inc, 10));\n");
   assert(out == "22\n");
 }
 
 void testExternCallbackErrorIsReraisedAfterCReturns() {
   TEST_SCOPE();
-  // A Jolt error inside the callback cannot unwind through the C frame, so the
+  // A Oskel error inside the callback cannot unwind through the C frame, so the
   // extern call captures it and re-raises it once C returns; `pcall` catches it.
   const std::string out = runWithSymbols(
-      "extern \"C\" { fn joltTestApply(f: fn(int): int, x: int): int; }\n"
+      "extern \"C\" { fn oskelTestApply(f: fn(int): int, x: int): int; }\n"
       "fn boom(v: int): int { panic(\"callback failed\"); }\n"
-      "let r = pcall(() => joltTestApply(boom, 1));\n"
+      "let r = pcall(() => oskelTestApply(boom, 1));\n"
       "print(r.ok);\n"
       "print(r.error.message);\n");
   assert(out == "false\ncallback failed\n");

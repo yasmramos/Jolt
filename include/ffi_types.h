@@ -26,11 +26,11 @@ enum class ParamClass {
   Pointer,   // `ptr`/`cstring` (GPR, but marshalled from a handle)
   Float,     // C `float` (SSE)
   Double,    // C `double` (SSE)
-  Callback,  // `fn(...): R` (GPR, the trampoline address of a Jolt function)
+  Callback,  // `fn(...): R` (GPR, the trampoline address of a Oskel function)
 };
 
 // The class of a declared return type. `Void` produces no value; `Ptr` and
-// `CString` produce a Jolt pointer handle; `Struct` produces a map rebuilt from
+// `CString` produce a Oskel pointer handle; `Struct` produces a map rebuilt from
 // the returned registers.
 enum class ReturnClass {
   Void,
@@ -113,7 +113,7 @@ struct TypeSpec {
   std::string callbackReturn;  // "void" for a callback that returns nothing
 };
 
-// A Jolt `string` and a `cstring` are both a NUL-terminated `const char *` at
+// A Oskel `string` and a `cstring` are both a NUL-terminated `const char *` at
 // the C boundary, so a declaration may spell a parameter either way. A `string`
 // argument is a valid `const char *` (it is NUL-terminated and stays alive for
 // the whole call), and `cstring` remains the spelling for a returned pointer,
@@ -205,7 +205,7 @@ inline bool buildStructLayout(const std::vector<FfiField>& fields, StructLayout&
   return true;
 }
 
-// Maps a declared Jolt parameter type to its FFI class. An empty name or `any`
+// Maps a declared Oskel parameter type to its FFI class. An empty name or `any`
 // is treated as C's implicit `int` (the GPR class). Returns false when the type
 // cannot cross the C boundary.
 inline bool classifyParam(const std::string& typeName, ParamClass& out) {

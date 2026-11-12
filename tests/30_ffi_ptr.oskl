@@ -4,7 +4,7 @@
 // development engine owns the storage; the AOT backend lowers the same handles
 // to real C pointers.
 
-// A `cstring` is built from a Jolt string and reads back the same text.
+// A `cstring` is built from a Oskel string and reads back the same text.
 let s = cstring("hello");
 assertEq(type(s), "cstring");
 assertEq(cstr(s), "hello");

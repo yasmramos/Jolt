@@ -86,7 +86,7 @@ struct AotRuntimeHandles {
   CodeGen::Label cellNew;        // AotValue* oskel_cell_new(AotValue v)
   // Fatal "wrong number of arguments" report. A function's prologue calls it
   // when the argument count does not match its declared arity, the runtime
-  // counterpart of the hosted engine's arity check in `pushJoltFrame`.
+  // counterpart of the hosted engine's arity check in `pushOskelFrame`.
   CodeGen::Label arityError;     // void oskel_arity_error(void)
   // The `print`/`write`/`eprint` builtins, as machine-code functions with the
   // same convention as a bytecode proto (`AotValue entry(AotValue* args, long
@@ -201,7 +201,7 @@ enum class AotArithOp : std::int64_t {
   Mod = 5,
 };
 
-// The selector `oskel_shift` accepts. `>>` is arithmetic in Jolt (it preserves
+// The selector `oskel_shift` accepts. `>>` is arithmetic in Oskel (it preserves
 // the sign), so the two directions are distinct helpers.
 enum class AotShiftOp : std::int64_t {
   Shl = 1,

@@ -1,4 +1,4 @@
-; Inno Setup script for the Jolt development engine on Windows.
+; Inno Setup script for the Oskel development engine on Windows.
 ;
 ; Build with:
 ;   iscc /DAppVersion=0.1.0 /DStageDir=C:\path\to\stage packaging\windows\oskel.iss
@@ -17,9 +17,9 @@
   #define StageDir "..\..\stage"
 #endif
 
-#define AppName "Jolt"
-#define AppPublisher "Jolt contributors"
-#define AppUrl "https://github.com/yasmramos/Jolt"
+#define AppName "Oskel"
+#define AppPublisher "Oskel contributors"
+#define AppUrl "https://github.com/yasmramos/Oskel"
 #define AppExeName "oskel.exe"
 
 [Setup]
@@ -60,8 +60,8 @@ VersionInfoCopyright=MIT License
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "addtopath"; Description: "Add Jolt to the system PATH"; GroupDescription: "Integration:"; Flags: checkedonce
-Name: "associate"; Description: "Associate .oskl files with Jolt"; GroupDescription: "Integration:"; Flags: unchecked
+Name: "addtopath"; Description: "Add Oskel to the system PATH"; GroupDescription: "Integration:"; Flags: checkedonce
+Name: "associate"; Description: "Associate .oskl files with Oskel"; GroupDescription: "Integration:"; Flags: unchecked
 
 [Files]
 Source: "{#StageDir}\bin\{#AppExeName}"; DestDir: "{app}\bin"; Flags: ignoreversion
@@ -79,21 +79,21 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 ; elevated user's hive (which is what a plain `HKCU` would do here, and what
 ; Inno warns about). `Software\Classes` is the documented spelling of `HKCR`.
 ; `uninsdeletevalue`/`uninsdeletekey` remove it on uninstall.
-Root: HKA; Subkey: "Software\Classes\.oskl"; ValueType: string; ValueName: ""; ValueData: "Jolt.Source"; Flags: uninsdeletevalue; Tasks: associate
-Root: HKA; Subkey: "Software\Classes\Jolt.Source"; ValueType: string; ValueName: ""; ValueData: "Jolt source file"; Flags: uninsdeletekey; Tasks: associate
-Root: HKA; Subkey: "Software\Classes\Jolt.Source\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#AppExeName},0"; Tasks: associate
-Root: HKA; Subkey: "Software\Classes\Jolt.Source\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#AppExeName}"" ""%1"""; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\.oskl"; ValueType: string; ValueName: ""; ValueData: "Oskel.Source"; Flags: uninsdeletevalue; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Oskel.Source"; ValueType: string; ValueName: ""; ValueData: "Oskel source file"; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Oskel.Source\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#AppExeName},0"; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\Oskel.Source\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#AppExeName}"" ""%1"""; Tasks: associate
 
 [Run]
-Filename: "{app}\bin\{#AppExeName}"; Parameters: "--version"; Description: "Check the Jolt installation"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\bin\{#AppExeName}"; Parameters: "--version"; Description: "Check the Oskel installation"; Flags: postinstall nowait skipifsilent
 
 [Code]
 const
   EnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
 
 { True when `Path` is not already a whole entry of the machine PATH. The
-  comparison wraps both sides in `;` so a partial match (C:\Jolt vs
-  C:\Jolt\bin) is not mistaken for a full one, and is case-insensitive
+  comparison wraps both sides in `;` so a partial match (C:\Oskel vs
+  C:\Oskel\bin) is not mistaken for a full one, and is case-insensitive
   because Windows paths are. }
 function NeedsAddPath(const Path: string): Boolean;
 var

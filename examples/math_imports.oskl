@@ -2,7 +2,7 @@
 //
 // `std.math` mixes two kinds of binding: the primitives that need C++
 // (`sqrt`, `pow`, `sin`, ...) are `native fn` re-exports of host builtins,
-// while `abs`, `min`, `max` (variadic) and `clamp` are plain Jolt.
+// while `abs`, `min`, `max` (variadic) and `clamp` are plain Oskel.
 
 // 1. Qualified: the module is bound under its path.
 import std.math;
@@ -30,7 +30,7 @@ import { sin, cos, log } from std.math;
 print("sin(0) = ${sin(0)}");
 print("cos(0) = ${cos(0)}");
 
-// A small computation that mixes the primitives and the Jolt helpers: the
+// A small computation that mixes the primitives and the Oskel helpers: the
 // distance between two points, and the cosine of the angle between a vector
 // and the x-axis.
 fn distance(x1, y1, x2, y2) {

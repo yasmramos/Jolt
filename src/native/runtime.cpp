@@ -3841,7 +3841,7 @@ void emitChrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   emitFailCall(cg, fail, msgOom);
 }
 
-// `void oskel_fail_dynamic(char* text, long length)`: writes "jolt: " + the
+// `void oskel_fail_dynamic(char* text, long length)`: writes "oskel: " + the
 // message + a newline to stderr and exits with the runtime-error code, never
 // returning. It is the dynamic counterpart of `oskel_fail`, which takes a
 // constant blob, and lets `assert`/`panic` report the caller's own message.
@@ -4746,30 +4746,30 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   };
   // Copy the blobs out so later `data.push_back` reallocations cannot
   // invalidate a reference held by an emit helper below.
-  DataBlob msgTypes = addText("jolt: unsupported operand types\n");
-  DataBlob msgPow = addText("jolt: unsupported operand types for '**'\n");
-  DataBlob msgDivZero = addText("jolt: division by zero\n");
-  DataBlob msgShift = addText("jolt: shift count must be between 0 and 63\n");
-  DataBlob msgBit = addText("jolt: unsupported operand types for a bitwise operator\n");
-  DataBlob msgNeg = addText("jolt: unsupported operand type for unary '-'\n");
-  DataBlob msgBitNot = addText("jolt: unsupported operand type for unary '~'\n");
-  DataBlob msgCompare = addText("jolt: cannot compare these values\n");
-  DataBlob msgPrint = addText("jolt: cannot print this value\n");
-  DataBlob msgOom = addText("jolt: out of memory\n");
-  DataBlob msgCallNonFunc = addText("jolt: cannot call a non-function value\n");
-  DataBlob msgArity = addText("jolt: wrong number of arguments\n");
-  DataBlob msgArrayIndexType = addText("jolt: array index must be an integer\n");
-  DataBlob msgIndexRange = addText("jolt: index out of range\n");
-  DataBlob msgMapKeyType = addText("jolt: map key must be a string\n");
-  DataBlob msgBadIndex = addText("jolt: value is not indexable\n");
-  DataBlob msgNoMember = addText("jolt: value has no such member\n");
-  DataBlob msgImmutable = addText("jolt: strings are immutable\n");
-  DataBlob msgBadAssign = addText("jolt: cannot assign to this value\n");
-  DataBlob msgBadField = addText("jolt: cannot assign a field on this value\n");
-  DataBlob msgBadIn = addText("jolt: unsupported operands for 'in'\n");
-  DataBlob msgMapValue = addText("jolt: key/value iteration ('for k, v in ...') requires a map\n");
-  DataBlob msgNonNull = addText("jolt: unexpected nil (non-null assertion '!!' failed)\n");
-  DataBlob msgStrBad = addText("jolt: cannot render this value to a string\n");
+  DataBlob msgTypes = addText("oskel: unsupported operand types\n");
+  DataBlob msgPow = addText("oskel: unsupported operand types for '**'\n");
+  DataBlob msgDivZero = addText("oskel: division by zero\n");
+  DataBlob msgShift = addText("oskel: shift count must be between 0 and 63\n");
+  DataBlob msgBit = addText("oskel: unsupported operand types for a bitwise operator\n");
+  DataBlob msgNeg = addText("oskel: unsupported operand type for unary '-'\n");
+  DataBlob msgBitNot = addText("oskel: unsupported operand type for unary '~'\n");
+  DataBlob msgCompare = addText("oskel: cannot compare these values\n");
+  DataBlob msgPrint = addText("oskel: cannot print this value\n");
+  DataBlob msgOom = addText("oskel: out of memory\n");
+  DataBlob msgCallNonFunc = addText("oskel: cannot call a non-function value\n");
+  DataBlob msgArity = addText("oskel: wrong number of arguments\n");
+  DataBlob msgArrayIndexType = addText("oskel: array index must be an integer\n");
+  DataBlob msgIndexRange = addText("oskel: index out of range\n");
+  DataBlob msgMapKeyType = addText("oskel: map key must be a string\n");
+  DataBlob msgBadIndex = addText("oskel: value is not indexable\n");
+  DataBlob msgNoMember = addText("oskel: value has no such member\n");
+  DataBlob msgImmutable = addText("oskel: strings are immutable\n");
+  DataBlob msgBadAssign = addText("oskel: cannot assign to this value\n");
+  DataBlob msgBadField = addText("oskel: cannot assign a field on this value\n");
+  DataBlob msgBadIn = addText("oskel: unsupported operands for 'in'\n");
+  DataBlob msgMapValue = addText("oskel: key/value iteration ('for k, v in ...') requires a map\n");
+  DataBlob msgNonNull = addText("oskel: unexpected nil (non-null assertion '!!' failed)\n");
+  DataBlob msgStrBad = addText("oskel: cannot render this value to a string\n");
   DataBlob textTrue = addText("true");
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
@@ -4783,11 +4783,11 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob textOpenBrace = addText("{");
   DataBlob textCloseBrace = addText("}");
   DataBlob textEllipsis = addText("...");
-  DataBlob msgRangeBounds = addText("jolt: range bounds must be integers\n");
-  DataBlob msgSliceStart = addText("jolt: slice start must be an integer\n");
-  DataBlob msgSliceEnd = addText("jolt: slice end must be an integer\n");
-  DataBlob msgSliceStep = addText("jolt: slice step must not be zero\n");
-  DataBlob msgSliceType = addText("jolt: value is not sliceable\n");
+  DataBlob msgRangeBounds = addText("oskel: range bounds must be integers\n");
+  DataBlob msgSliceStart = addText("oskel: slice start must be an integer\n");
+  DataBlob msgSliceEnd = addText("oskel: slice end must be an integer\n");
+  DataBlob msgSliceStep = addText("oskel: slice step must not be zero\n");
+  DataBlob msgSliceType = addText("oskel: value is not sliceable\n");
   DataBlob textQuote = addText("\"");
   DataBlob textEscQuote = addText("\\\"");
   DataBlob textEscBackslash = addText("\\\\");
@@ -4807,14 +4807,14 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob typeNameMap = addText("map");
   DataBlob typeNameFunc = addText("function");
   DataBlob typeNameRange = addText("range");
-  DataBlob textJoltPrefix = addText("jolt: ");
-  DataBlob msgLenType = addText("jolt: len() is not defined for this type\n");
-  DataBlob msgOrdType = addText("jolt: ord() expects a string argument\n");
-  DataBlob msgOrdChar = addText("jolt: ord() expects a single character\n");
-  DataBlob msgChrInt = addText("jolt: chr() expects an integer argument\n");
-  DataBlob msgChrRange = addText("jolt: chr() code point out of range\n");
-  DataBlob msgAssert = addText("jolt: assertion failed\n");
-  DataBlob msgPanic = addText("jolt: panic\n");
+  DataBlob textOskelPrefix = addText("oskel: ");
+  DataBlob msgLenType = addText("oskel: len() is not defined for this type\n");
+  DataBlob msgOrdType = addText("oskel: ord() expects a string argument\n");
+  DataBlob msgOrdChar = addText("oskel: ord() expects a single character\n");
+  DataBlob msgChrInt = addText("oskel: chr() expects an integer argument\n");
+  DataBlob msgChrRange = addText("oskel: chr() code point out of range\n");
+  DataBlob msgAssert = addText("oskel: assertion failed\n");
+  DataBlob msgPanic = addText("oskel: panic\n");
 
   CodeGen::Label fail = cg.newLabel();
   CodeGen::Label failDynamic = cg.newLabel();
@@ -4958,7 +4958,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
                    msgSliceStep, msgSliceType);
   // The public builtins (PHASE 7c.5a). `str` and `isError` reuse the `$str` and
   // `$isError` code: the public names are just two more seeds of the same entry.
-  emitFailDynamic(cg, failDynamic, entry.write, entry.exit, textJoltPrefix, textNewline);
+  emitFailDynamic(cg, failDynamic, entry.write, entry.exit, textOskelPrefix, textNewline);
   emitLenBuiltin(cg, handles.lenBuiltin, env, msgLenType);
   emitTypeBuiltin(cg, handles.typeBuiltin, handles.alloc, fail, msgOom, typeNameNil,
                   typeNameBool, typeNameInt, typeNameFloat, typeNameDouble, typeNameStr,

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Host interface for the embeddable Jolt runtime.
+// Host interface for the embeddable Oskel runtime.
 //
 // The runtime core (values, ops, the bytecode VM and, later, the AOT runtime)
 // must not call libc directly. Everything that touches the outside world goes

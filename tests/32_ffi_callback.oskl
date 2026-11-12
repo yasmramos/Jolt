@@ -1,5 +1,5 @@
 // requires: libffi
-// FFI callbacks (PHASE 6.6, slice C). A Jolt function is passed to C as a
+// FFI callbacks (PHASE 6.6, slice C). A Oskel function is passed to C as a
 // function pointer; the development engine builds a trampoline (libffi) that C
 // calls back into the VM. The callback runs while the C function is on the
 // stack, so the trampoline is alive for the whole call.
@@ -26,7 +26,7 @@ for i in 0..6 {
   storeByte(data, i, values[i]);
 }
 
-// The comparator is a Jolt function; qsort calls it through the trampoline.
+// The comparator is a Oskel function; qsort calls it through the trampoline.
 qsort(data, 6, 1, ascending);
 
 assertEq(loadByte(data, 0), 10);
