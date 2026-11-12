@@ -9,7 +9,7 @@ rem plus the AOT backend, which PHASE 7d wires into `jolt build`). build.sh and
 rem CMake use the same rule, so no source is ever listed by hand and the list
 rem cannot drift.
 set "SOURCES="
-for %%f in (src\*.cpp src\native\*.cpp) do set "SOURCES=!SOURCES! %%f"
+for %%f in (src\*.cpp src\native\*.cpp src\jit\*.cpp) do set "SOURCES=!SOURCES! %%f"
 
 g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe !SOURCES!
 

@@ -65,6 +65,19 @@ void VM::defineGlobal(const std::string& name, Value value, bool /*isImmutable*/
   globals_[name] = std::move(value);
 }
 
+JitFunction* VM::jitFor(const std::shared_ptr<const Bytecode>& proto,
+                        const std::vector<Value>& args) {
+  if (!jitEnabled_ || !proto) return nullptr;
+  // The compiled body only reads integer slots, so it is only a valid drop-in
+  // when every argument is an integer and the count matches exactly. Anything
+  // else (float, string, variadic extras, arity mismatch) stays interpreted.
+  if (proto->variadic || proto->numParams != static_cast<int>(args.size())) return nullptr;
+  for (const Value& arg : args) {
+    if (!arg.isInt()) return nullptr;
+  }
+  return jit_.get(proto);
+}
+
 Value VM::callNative(Function& fn, std::vector<Value> args, int line, int col) {
   int savedLine = currentLine;
   int savedCol = currentCol;
@@ -159,6 +172,11 @@ Value VM::call(const Value& callee, std::vector<Value> args, int line, int col) 
   FuncPtr function = callee.funcPtr();
 
   if (function->isNative()) return callNative(*function, std::move(args), line, col);
+
+  // The JIT, when enabled, runs an accepted proto natively. The arguments were
+  // already validated by `jitFor`, so the compiled code is a drop-in for the
+  // interpreted body: same arity, same integer-only inputs.
+  if (JitFunction* jitted = jitFor(function->proto, args)) return jitted->call(args);
 
   const int savedLine = currentLine;
   const int savedCol = currentCol;
@@ -546,6 +564,11 @@ Value VM::runFrames(std::size_t stopDepth) {
 
         if (function->isNative()) {
           setReg(instruction.a, callNative(*function, std::move(args), line, col));
+        } else if (JitFunction* jitted = jitFor(function->proto, args)) {
+          // The JIT, when enabled and the proto is accepted, runs the call
+          // natively; the arguments are all integers and the arity matches, so
+          // the compiled body is a drop-in for the interpreted one.
+          setReg(instruction.a, jitted->call(args));
         } else {
           // A bytecode function gets a new frame; its RETURN publishes the
           // result into the caller's R[a].
