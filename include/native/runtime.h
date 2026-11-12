@@ -98,6 +98,26 @@ struct AotRuntimeHandles {
   CodeGen::Label printBuiltin;   // AotValue jolt_builtin_print(AotValue* args, long argc, AotClosure* self)
   CodeGen::Label writeBuiltin;   // AotValue jolt_builtin_write(...)
   CodeGen::Label eprintBuiltin;  // AotValue jolt_builtin_eprint(...)
+  // Collections (PHASE 7c.3). `tableNew` allocates an empty array (kind 0) or
+  // map (kind 1); `tableSet`/`tableGet` are the dynamic-index forms
+  // (`R[b][R[c]]`), `memberSet`/`memberGet` the constant-name forms
+  // (`R[b].name`); `contains` implements `in`; `iterNext` advances a `for-in`
+  // cursor, taking a pointer to the cursor slot (rdi) and the iterable
+  // (rdx:rcx) and returning the item (rax:rdx) with the done flag in r8;
+  // `strEq` compares two `AotString`s by content (map keys are compared by
+  // value, not pointer).
+  CodeGen::Label tableNew;   // AotValue jolt_table_new(long kind)
+  CodeGen::Label tableGet;   // AotValue jolt_table_get(AotValue obj, AotValue index)
+  CodeGen::Label memberGet;  // AotValue jolt_member_get(AotValue obj, AotValue name)
+  CodeGen::Label tableSet;   // void jolt_table_set(AotValue obj, AotValue index, AotValue value)
+  CodeGen::Label memberSet;  // void jolt_member_set(AotValue obj, AotValue name, AotValue value)
+  CodeGen::Label contains;   // AotValue jolt_contains(AotValue needle, AotValue haystack)
+  CodeGen::Label iterNext;   // AotValue jolt_iter_next(AotValue* cursor, AotValue iterable)
+  CodeGen::Label strEq;      // long jolt_str_eq(AotString* a, AotString* b)
+  // The hidden `$mapValue` helper (`for k, v in map`), with the proto
+  // convention. It returns the value paired with a key, so the key/value loop
+  // form lowers to an ordinary call.
+  CodeGen::Label mapValueBuiltin;  // AotValue jolt_builtin_map_value(AotValue* args, long argc, AotClosure* self)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
@@ -108,6 +128,9 @@ inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(),
   };
 }
 

@@ -93,12 +93,12 @@ static void testImageIsSelfContained() {
 
 // --- Error tests: the deferred opcodes must be rejected, not miscompiled ---
 
-static void testDeferredOpcodesThrow() {
-  // 7c.2c lowers CALL/RETURN/CLOSURE and upvalues, so only collections are
-  // still deferred (7c.3).
-  check(loweringThrows(makeProto({instr(OpCode::NEWTABLE, 0, 0), instr(OpCode::HALT)}, {}, 2),
-                       "NEWTABLE"),
-        "NEWTABLE raises a LoweringError");
+static void testCollectionsLower() {
+  // 7c.3 lowers the collection opcodes, so NEWTABLE/GETTABLE/SETTABLE/IN/ITER
+  // now compile instead of raising. A fresh array lowers and yields an image.
+  LoweredChunk chunk =
+      lower(makeProto({instr(OpCode::NEWTABLE, 0, 0, 0), instr(OpCode::HALT)}, {}, 1));
+  check(!chunk.code.empty(), "NEWTABLE lowers to an image");
 }
 
 static void testBadJumpTargetThrows() {
@@ -792,7 +792,7 @@ static void testExecCompiledCapture() {
 
 int main() {
   testImageIsSelfContained();
-  testDeferredOpcodesThrow();
+  testCollectionsLower();
   testBadJumpTargetThrows();
   testUnassignedGlobalThrows();
   testInvalidUnopSelectorThrows();

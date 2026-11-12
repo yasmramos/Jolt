@@ -57,8 +57,8 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `platform_posix.cpp` | `Platform` ops (dev engine) | libc-backed I/O | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | ✅ PHASE 7a/7b |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
-| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1b |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.3 |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.3 |
 | `native/dtoa.cpp` | float/double | shortest round-trip text | ✅ PHASE 7c.1b |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
@@ -796,6 +796,28 @@ Slices, each independently shippable:
       `tests/lower_test.cpp` (a `print` call lowers and returns nil) and
       `tests/freestanding_test.cpp` (a compiled program prints through `print`
       and `write` under the real `_start`).
+    - **7c.3** (done) — collections and `for-in`. `NEWTABLE` allocates an array
+      (`c == 0`) or a map (`c == 1`) header in the arena; `GETTABLE`/`SETTABLE`
+      cover both the dynamic-index form (`R[b][R[c]]`) and the constant-member
+      form (`R[b].name`, the name encoded as `-c - 1`) through `jolt_table_get`/
+      `jolt_member_get` and their setters, mirroring `ops::indexGet`/
+      `ops::memberGet` (negative array indices from the end, appending at the
+      length, maps keyed by string with content comparison via `jolt_str_eq`).
+      `IN` lowers to `jolt_contains` (array value equality through
+      `jolt_compare`, map keys, string substrings) and `ITER` to
+      `jolt_iter_next`, which advances a `for-in` cursor over an array, a map's
+      keys or a string's UTF-8 code points; the key/value form (`for k, v in
+      map`) lowers to a call to the hidden `$mapValue` builtin, which the chunk
+      seeds like `print`. Growth goes through a shared
+      `jolt_block_ensure` (next power-of-two capacity, arena copy). Printing a
+      container uses a recursive `jolt_print_repr` (`[1, 2]`, `{"k": 1}`,
+      quoted strings, `<fn>`), depth-capped at 8 so a self-referential
+      structure prints `...` instead of recursing forever; nested strings reuse
+      the interpreter's escapes through `jolt_print_str_escaped`. Covered by
+      `tests/freestanding_test.cpp` (arrays, maps, indexing, `.length`, `in`,
+      `for-in` and container printing under the real `_start`) and
+      `tests/lower_test.cpp` (the collection opcodes now lower instead of
+      raising). Still missing: `jolt build` (7d).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -834,7 +856,9 @@ Slices, each independently shippable:
   `GETUPVAL`/`SETUPVAL` and nested `CLOSURE`s resolve through the frame's saved
   `self`, and `jolt_closure` reserves the capture slots the lowering fills.
   7c.2d seeds the `print`/`write`/`eprint` builtins as globals, so a compiled
-  program can print. Still missing: collections (7c.3) and `jolt build` (7d).
+  program can print. 7c.3 lowers collections: arrays and maps over arena
+  headers, indexing/membership/`for-in` through the collection helpers and a
+  recursive container printer. Still missing: `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -871,7 +895,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d done; 7c.3, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3 done; 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

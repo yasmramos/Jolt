@@ -298,6 +298,78 @@ static void test_builtin_print() {
   check(result.exitCode == 0, "a program using print exits 0 through _start");
 }
 
+// Collections, end to end (PHASE 7c.3): arrays, maps, indexing, `.length`,
+// `in`, `for-in` and container printing all lower and run in a compiled binary.
+static void test_collections() {
+  Bytecode proto = compileSource(
+      "let a = [1, 2, 3];\n"
+      "a[1] = 20;\n"
+      "a[3] = 4;\n"
+      "print(a);\n"
+      "print(a.length);\n"
+      "print(a[0], a[1], a[-1]);\n"
+      "let m = {\"x\": 1, \"y\": 2};\n"
+      "m[\"z\"] = 3;\n"
+      "m.x = 10;\n"
+      "print(m);\n"
+      "print(m[\"x\"], m.y, m[\"z\"]);\n"
+      "print(2 in a, 99 in a, \"x\" in m, \"q\" in m);\n"
+      "a[-1] = 9;\n"
+      "a[1] = 20;\n"
+      "m[\"x\"] = 5;\n"
+      "m[\"new\"] = 7;\n"
+      "print(a, m);\n"
+      "let s = \"hello\";\n"
+      "print(s.length, s[1], \"ell\" in s);\n"
+      "print(\"\" in s, \"z\" in s, \"hello\" in s, \"helloo\" in s);\n"
+      "var total = 0;\n"
+      "for v in a { total = total + v; }\n"
+      "print(total);\n"
+      "var keys = \"\";\n"
+      "for k in m { keys = keys + k; }\n"
+      "print(keys);\n"
+      "var pairKeys = \"\";\n"
+      "var pairTotal = 0;\n"
+      "for k, v in m { pairKeys = pairKeys + k; pairTotal = pairTotal + v; }\n"
+      "print(pairKeys, pairTotal);\n");
+  RunResult result = buildAndRun("/tmp/jolt_collections", proto);
+  std::string expected =
+      "[1, 20, 3, 4]\n"
+      "4\n"
+      "1 20 4\n"
+      "{\"x\": 10, \"y\": 2, \"z\": 3}\n"
+      "10 2 3\n"
+      "false false true false\n"
+      "[1, 20, 3, 9] {\"x\": 5, \"y\": 2, \"z\": 3, \"new\": 7}\n"
+      "5 e true\n"
+      "true false true false\n"
+      "33\n"
+      "xyznew\n"
+      "xyznew 17\n";
+  check(result.output == expected, "a compiled program runs collections and prints them");
+  check(result.exitCode == 0, "a program using collections exits 0 through _start");
+}
+
+// A nested container prints with the recursive repr, and a self-referential one
+// stops at the depth cap instead of recursing forever.
+static void test_collection_repr() {
+  Bytecode proto = compileSource(
+      "print([[1, 2], {\"a\": [3]}]);\n"
+      "print([\"a\", \"b\\\"c\", \"d\\ne\", \"tab\\tx\", \"\\x01\"]);\n"
+      "let m = {};\n"
+      "m[\"self\"] = m;\n"
+      "print(m);\n");
+  RunResult result = buildAndRun("/tmp/jolt_collection_repr", proto);
+  check(result.output.find("[[1, 2], {\"a\": [3]}]\n") == 0,
+        "a nested array/map prints with the recursive repr");
+  check(result.output.find("[\"a\", \"b\\\"c\", \"d\\ne\", \"tab\\tx\", \"\\x01\"]\n") !=
+            std::string::npos,
+        "nested strings print with the interpreter's escapes");
+  check(result.output.find("...") != std::string::npos,
+        "a self-referential map stops at the depth cap");
+  check(result.exitCode == 0, "a self-referential program still exits 0");
+}
+
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
 // the `print` builtin will call once `CALL` lands (7c.2), so this checks the
 // integer-to-text routine (including the negative case) and the boolean/nil
@@ -679,6 +751,8 @@ int main() {
   test_boxed_runtime_string();
   test_boxed_runtime_float_mod();
   test_builtin_print();
+  test_collections();
+  test_collection_repr();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif
