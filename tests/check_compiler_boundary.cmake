@@ -23,7 +23,7 @@ file(GLOB boundary_files
 )
 
 # `[.]` keeps the regex readable: no escaping of the dot inside CMake strings.
-set(forbidden "interpreter[.]h|vm[.]h")
+set(forbidden "interpreter[.]h|vm[.]h|jit/jit[.]h")
 # The compiler and the native backend must also stay clear of the FFI *runtime*
 # half. `ffi_types.h` is the shared, dependency-free source of truth and is
 # allowed; `ffi_marshal.h` pulls in `runtime.h`/`value.h`, and `ffi.cpp` is the
@@ -58,8 +58,8 @@ if(violations)
   endforeach()
   message(FATAL_ERROR
     "${count} forbidden include(s): the compiler and the native backend must not "
-    "include interpreter.h, vm.h, the FFI runtime (ffi_marshal.h) or libffi "
-    "(see AGENT.md, toolchain boundary).")
+    "include interpreter.h, vm.h, the JIT (jit/jit.h), the FFI runtime "
+    "(ffi_marshal.h) or libffi (see AGENT.md, toolchain boundary).")
 endif()
 
 list(LENGTH boundary_files checked)
