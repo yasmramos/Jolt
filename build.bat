@@ -4,11 +4,12 @@ cd /d "%~dp0"
 
 if not exist build mkdir build
 
-rem Auto-detect every .cpp under src\ (the development engine). src\native\ is
-rem the AOT backend and is not part of this binary; build.sh and CMake use the
-rem same rule, so no source is ever listed by hand and the list cannot drift.
+rem Auto-detect every .cpp under src\ and src\native\ (the development engine
+rem plus the AOT backend, which PHASE 7d wires into `jolt build`). build.sh and
+rem CMake use the same rule, so no source is ever listed by hand and the list
+rem cannot drift.
 set "SOURCES="
-for %%f in (src\*.cpp) do set "SOURCES=!SOURCES! %%f"
+for %%f in (src\*.cpp src\native\*.cpp) do set "SOURCES=!SOURCES! %%f"
 
 g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe !SOURCES!
 

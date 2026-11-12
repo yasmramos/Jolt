@@ -77,13 +77,13 @@ cmake --build build-cmake
 ### Manual build
 
 ```sh
-g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp src/native/*.cpp
 ```
 
 On Windows, with `cmd.exe`:
 
 ```bat
-g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe src\*.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc -o build\jolt.exe src\*.cpp src\native\*.cpp
 ```
 
 ## Usage

@@ -22,6 +22,9 @@ fi
 CXXFLAGS=${CXXFLAGS:--O2}
 
 mkdir -p build
+# The development engine includes the AOT backend (PHASE 7d wires `jolt build`
+# into the CLI), so `src/native/*.cpp` is compiled in too, the way CMake's
+# GLOB_RECURSE over src/ picks it up.
 # shellcheck disable=SC2086
-"$CXX" -std=c++17 $CXXFLAGS -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp
+"$CXX" -std=c++17 $CXXFLAGS -Wall -Wextra -Iinclude -Isrc -o build/jolt src/*.cpp src/native/*.cpp
 echo "Built build/jolt"
