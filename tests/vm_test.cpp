@@ -407,6 +407,54 @@ void testUndefinedGlobal() {
          std::string::npos);
 }
 
+// Runs `source` against a VM whose `std` global is the map
+// `{math: {sqrt: 0, hidden: 0}}`, mimicking `import std.math;` (which binds the
+// namespace `std.math`, not a bare `math`). Two more tables (`aaa`, `zzz`) share
+// a `dup` member to exercise the deterministic tie-break. Returns the
+// RuntimeError message.
+std::string runtimeErrorWithNamespace(const std::string& source) {
+  Bytecode bytecode = compileSource(source);
+  VM vm;
+  MapPtr math = makeMap();
+  math->set("sqrt", Value(int64_t{0}));
+  math->set("hidden", Value(int64_t{0}));
+  MapPtr std = makeMap();
+  std->set("math", Value(math));
+  vm.defineGlobal("std", Value(std), false);
+  MapPtr aaa = makeMap();
+  aaa->set("dup", Value(int64_t{0}));
+  vm.defineGlobal("aaa", Value(aaa), false);
+  MapPtr zzz = makeMap();
+  zzz->set("dup", Value(int64_t{0}));
+  vm.defineGlobal("zzz", Value(zzz), false);
+  try {
+    vm.run(bytecode);
+  } catch (const RuntimeError& error) {
+    return error.message;
+  } catch (const CompileError& error) {
+    return error.message;
+  }
+  return "";
+}
+
+void testUndefinedGlobalSuggestsNamespace() {
+  TEST_SCOPE();
+  // A forgotten namespace root is the common mistake: the hint names the full
+  // path so the fix is obvious.
+  assert(runtimeErrorWithNamespace("let x = math.sqrt(4);\n") ==
+         "undefined variable 'math' (did you mean 'std.math'?)");
+  // The hint walks nested maps too, reporting the dotted path. `hidden` exists
+  // only inside `std.math`, so it is not shadowed by a builtin of the same name.
+  assert(runtimeErrorWithNamespace("let x = hidden;\n") ==
+         "undefined variable 'hidden' (did you mean 'std.math.hidden'?)");
+  // A name that is nowhere in the tables gets no misleading hint.
+  assert(runtimeErrorWithNamespace("let x = nope;\n") == "undefined variable 'nope'");
+  // Two tables holding the same member must not make the message depend on the
+  // unordered_map's iteration order: the alphabetically first root wins.
+  assert(runtimeErrorWithNamespace("let x = dup;\n") ==
+         "undefined variable 'dup' (did you mean 'aaa.dup'?)");
+}
+
 void testInvalidComparison() {
   TEST_SCOPE();
   assert(runtimeError("let x = 1 < \"a\";\n").find("cannot compare") != std::string::npos);
@@ -1787,6 +1835,7 @@ int main() {
   testDivisionByZero();
   testModuloByZero();
   testUndefinedGlobal();
+  testUndefinedGlobalSuggestsNamespace();
   testInvalidComparison();
   testGlobalsPersistBetweenRuns();
   testRegisterCount();

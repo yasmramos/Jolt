@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "ops.h"
@@ -496,7 +497,13 @@ Value VM::runFrames(std::size_t stopDepth) {
       case OpCode::GETGLOBAL: {
         const std::string& name = nameAt(chunk, instruction.b);
         auto it = globals_.find(name);
-        if (it == globals_.end()) fail("undefined variable '" + name + "'", line, col);
+        if (it == globals_.end()) {
+          std::string hint = namespaceHint(name);
+          if (!hint.empty()) {
+            fail("undefined variable '" + name + "' (did you mean '" + hint + "'?)", line, col);
+          }
+          fail("undefined variable '" + name + "'", line, col);
+        }
         setReg(instruction.a, it->second);
         break;
       }
@@ -761,4 +768,48 @@ Value VM::runFrames(std::size_t stopDepth) {
 const Value* VM::findGlobal(const std::string& name) const {
   auto it = globals_.find(name);
   return it == globals_.end() ? nullptr : &it->second;
+}
+
+std::string VM::namespaceHint(const std::string& name) const {
+  // Breadth-first over the visible global tables, so the shortest path to
+  // `name` wins and the shallowest namespace is suggested first. Only maps are
+  // descended into, `visited` makes a table that contains itself (or a cycle of
+  // tables) terminate, and the depth cap keeps a deeply nested user map from
+  // turning the diagnostic into a long walk.
+  struct Frame {
+    const Map* map;
+    std::string path;
+    int depth;
+  };
+  constexpr int kMaxDepth = 8;
+  std::vector<Frame> queue;
+  std::unordered_set<const Map*> visited;
+  // Seeds are visited in sorted order so the suggestion is deterministic: the
+  // globals table is an unordered_map, and two tables holding the same member
+  // must not make the message depend on hash order.
+  std::vector<std::string> roots;
+  for (const auto& entry : globals_) {
+    // Hidden globals (`$module$...`, `$imp$...` and the `$`-helpers) are not
+    // reachable from source, so they are never a useful suggestion.
+    if (!entry.first.empty() && entry.first[0] == '$') continue;
+    if (entry.second.isMap()) roots.push_back(entry.first);
+  }
+  std::sort(roots.begin(), roots.end());
+  for (const std::string& root : roots) {
+    const Map* map = &globals_.at(root).map();
+    if (visited.insert(map).second) queue.push_back({map, root, 1});
+  }
+  for (std::size_t i = 0; i < queue.size(); ++i) {
+    const Frame frame = queue[i];
+    if (frame.map->get(name) != nullptr) return frame.path + "." + name;
+    if (frame.depth >= kMaxDepth) continue;
+    for (const auto& entry : frame.map->entries) {
+      if (!entry.second.isMap()) continue;
+      const Map* child = &entry.second.map();
+      if (visited.insert(child).second) {
+        queue.push_back({child, frame.path + "." + entry.first, frame.depth + 1});
+      }
+    }
+  }
+  return "";
 }

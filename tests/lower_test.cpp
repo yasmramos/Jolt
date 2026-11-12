@@ -17,10 +17,13 @@
 #include <vector>
 
 #include "bytecode.h"
+#include "compiler.h"
+#include "lexer.h"
 #include "native/codegen.h"
 #include "native/lower.h"
 #include "native/target.h"
 #include "native/value.h"
+#include "parser.h"
 
 #if defined(__linux__) && defined(__x86_64__)
 #define LOWER_EXEC_TESTS 1
@@ -40,12 +43,14 @@ static void check(bool condition, const char* what) {
 }
 
 static Bytecode makeProto(const std::vector<Instruction>& code,
-                          const std::vector<Value>& constants, int numRegisters) {
+                          const std::vector<Value>& constants, int numRegisters,
+                          int numLocals = 0) {
   Bytecode proto;
   proto.name = "<test>";
   proto.code = code;
   proto.constants = constants;
   proto.numRegisters = numRegisters;
+  proto.numLocals = numLocals;
   return proto;
 }
 
@@ -88,18 +93,27 @@ static void testImageIsSelfContained() {
 
 // --- Error tests: the deferred opcodes must be rejected, not miscompiled ---
 
-static void testDeferredOpcodesThrow() {
-  check(loweringThrows(makeProto({instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)}, {}, 2),
-                       "CALL/RETURN"),
-        "CALL raises a LoweringError");
-  check(loweringThrows(makeProto({instr(OpCode::NEWTABLE, 0, 0), instr(OpCode::HALT)}, {}, 2),
-                       "NEWTABLE"),
-        "NEWTABLE raises a LoweringError");
+static void testCollectionsLower() {
+  // 7c.3 lowers the collection opcodes, so NEWTABLE/GETTABLE/SETTABLE/IN/ITER
+  // now compile instead of raising. A fresh array lowers and yields an image.
+  LoweredChunk chunk =
+      lower(makeProto({instr(OpCode::NEWTABLE, 0, 0, 0), instr(OpCode::HALT)}, {}, 1));
+  check(!chunk.code.empty(), "NEWTABLE lowers to an image");
 }
 
 static void testBadJumpTargetThrows() {
   auto proto = makeProto({instr(OpCode::JMP, 0, 0, 0, 99), instr(OpCode::HALT)}, {}, 1);
   check(loweringThrows(proto, "outside the code"), "an out-of-range jump target throws");
+}
+
+static void testUnassignedGlobalThrows() {
+  // A GETGLOBAL whose name is never SETGLOBAL is a lowering error naming the
+  // variable, the compile-time counterpart of the hosted engine's run-time
+  // "undefined variable".
+  auto proto = makeProto({instr(OpCode::GETGLOBAL, 0, 0), instr(OpCode::HALT)},
+                         {Value(std::string("missing"))}, 1);
+  check(loweringThrows(proto, "global 'missing' is read but never assigned"),
+        "reading an unassigned global throws");
 }
 
 static void testInvalidUnopSelectorThrows() {
@@ -159,6 +173,28 @@ static void checkBool(const Bytecode& proto, bool expected, const char* what) {
   bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Bool) &&
             (value.payload != 0) == expected;
   check(ok, what);
+}
+
+// Compiles a source string with the real compiler, lowers it and runs the
+// chunk. The compiled tests below drive the whole front end this way, so they
+// lock the compiler/lowerer contract rather than a hand-built proto.
+static AotValue compileAndRun(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<lower-test>");
+  Bytecode proto = compileProgram(parser.parseProgram());
+  return run(proto);
+}
+
+static void checkIntValue(AotValue value, std::int64_t expected, const char* what) {
+  bool ok = value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == expected;
+  check(ok, what);
+  if (!ok) {
+    std::printf("      got tag=%llu payload=%lld, expected Int %lld\n",
+                static_cast<unsigned long long>(value.tag),
+                static_cast<long long>(static_cast<std::int64_t>(value.payload)),
+                static_cast<long long>(expected));
+  }
 }
 
 static void testExecLoads() {
@@ -531,12 +567,234 @@ static void testExecStringCompare() {
   checkBool(mk(OpCode::LT, "Z", "a"), true, "exec: \"Z\" < \"a\" (unsigned byte order)");
 }
 
+// Global variables (PHASE 7c.2a). The compiler names a global by a string
+// constant; the lowerer assigns each a slot in a flat table the chunk
+// allocates at entry. A program assigns a global and reads it back; a second
+// assignment overwrites it; two globals keep separate slots; and a read of an
+// unassigned global is rejected at lowering time.
+static void testExecGlobals() {
+  // let x = 5; (R0) then return x (R1): R0 <- 5, SETGLOBAL x, GETGLOBAL x, HALT.
+  // The global's name is the string constant at index 1.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5)), Value(std::string("x"))}, 2),
+           5, "exec: a global assigned 5 reads back 5");
+
+  // Reassignment: x = 5; x = 7; return x -> 7. Name at index 2.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 2),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETGLOBAL, 1, 2),
+                      instr(OpCode::GETGLOBAL, 2, 2), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7)),
+                      Value(std::string("x"))}, 3),
+           7, "exec: reassigning a global keeps the last value");
+
+  // Two distinct globals do not share a slot: a = 3; b = 4; return a -> 3.
+  // Names "a" and "b" are at indices 1 and 3.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::LOADK, 1, 2), instr(OpCode::SETGLOBAL, 1, 3),
+                      instr(OpCode::GETGLOBAL, 2, 1), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(3)), Value(std::string("a")),
+                      Value(static_cast<int64_t>(4)), Value(std::string("b"))}, 3),
+           3, "exec: distinct globals keep separate slots");
+
+  // A global holding a string: s = "hi"; return s.
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(std::string("hi")), Value(std::string("s"))}, 2),
+           "hi", "exec: a global holds a string");
+}
+
+// Locals (PHASE 7c.2b). A local is a 16-byte slot in the second region of the
+// chunk frame. A program declares a local and reads it back; `SETLOCAL`
+// overwrites it; two locals keep separate slots; and a local coexists with a
+// global. Unlike a global, a `GETLOCAL` of a slot the chunk never declares is
+// not rejected: a stack slot cannot hold a null cell, so a well-formed chunk
+// (the compiler always emits `DECLLOCAL` first) is assumed.
+static void testExecLocals() {
+  // { var x = 5; } then read it back: R0 <- 5, DECLLOCAL 0, GETLOCAL 0, HALT.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::GETLOCAL, 1, 0), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5))}, 2, 1),
+           5, "exec: a local declared 5 reads back 5");
+
+  // Overwrite through SETLOCAL: x = 5; x = 7; return x -> 7.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::SETLOCAL, 1, 0),
+                      instr(OpCode::GETLOCAL, 2, 0), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))}, 3, 1),
+           7, "exec: overwriting a local keeps the last value");
+
+  // Two distinct locals do not share a slot: a = 3; b = 4; return a -> 3.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::LOADK, 1, 1), instr(OpCode::DECLLOCAL, 1, 1),
+                      instr(OpCode::GETLOCAL, 2, 0), instr(OpCode::MOVE, 0, 2),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(3)), Value(static_cast<int64_t>(4))}, 3, 2),
+           3, "exec: distinct locals keep separate slots");
+
+  // A local and a global coexist: g = 10; { var x = 4; g = g + x; } return g.
+  checkInt(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::LOADK, 1, 2), instr(OpCode::DECLLOCAL, 1, 0),
+                      instr(OpCode::GETGLOBAL, 0, 1), instr(OpCode::GETLOCAL, 1, 0),
+                      instr(OpCode::ADD, 0, 0, 1), instr(OpCode::SETGLOBAL, 0, 1),
+                      instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(static_cast<int64_t>(10)), Value(std::string("g")),
+                      Value(static_cast<int64_t>(4))}, 2, 1),
+           14, "exec: a local and a global do not collide");
+
+  // A local holding a string survives the slot round trip.
+  checkStr(makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                      instr(OpCode::GETLOCAL, 1, 0), instr(OpCode::MOVE, 0, 1),
+                      instr(OpCode::HALT)},
+                     {Value(std::string("hi"))}, 2, 1),
+           "hi", "exec: a local holds a string");
+}
+
+// The real compiler drives the lowering: compile source, then lower it and run
+// the chunk. This locks the compiler/lowerer contract for globals -- in
+// particular that a `let` and its later reads share one string constant, so the
+// lowerer's name-to-slot map finds them.
+static void testExecCompiledGlobals() {
+  AotValue value = compileAndRun("let x = 5; let y = x + 2;");
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 7,
+        "compiled: let x = 5; let y = x + 2; yields 7 in R0");
+}
+
+// `print` is a builtin the chunk seeds, not a user global: before 7c.2d a call
+// to it was a lowering error ("global 'print' is read but never assigned"). The
+// call now lowers and returns nil; the printed bytes are checked end to end in
+// `freestanding_test.cpp`.
+static void testExecCompiledPrint() {
+  AotValue value = compileAndRun("print(1);");
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Nil),
+        "compiled: print(1) lowers and returns nil");
+}
+
+// Same, for locals: the compiler emits DECLLOCAL/GETLOCAL/SETLOCAL for a nested
+// block, and the chunk runs it. A nested block is a local scope even at the top
+// level, so this exercises the local region without a call frame.
+static void testExecCompiledLocals() {
+  AotValue value = compileAndRun("{ var x = 5; x = x + 2; }");
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 7,
+        "compiled: a nested block with a local yields 7 in R0");
+
+  // A classic `for` keeps its induction variable in a local slot and loops.
+  // The trailing `var r = s;` reads the sum back into R0, since the loop's last
+  // value (its exit condition) is what would otherwise sit there.
+  AotValue sum =
+      compileAndRun("var s = 0; for (var i = 0; i < 4; i = i + 1) { s = s + i; } var r = s;");
+  check(sum.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(sum.payload) == 6,
+        "compiled: a classic for over a local induction variable sums 0..3");
+}
+
+// Compiled functions: the compiler emits CLOSURE (to bind the `fn` global),
+// CALL and RETURN; the lowerer emits each proto as its own machine function and
+// dispatches through `jolt_call`. `var r = ...;` reads the result back into R0.
+static void testExecCompiledCalls() {
+  checkIntValue(compileAndRun("fn add(a, b) { return a + b; } var r = add(2, 3);"), 5,
+                "compiled: add(2, 3) == 5 through a real call");
+
+  // Recursion: `fact` calls itself through the global name.
+  checkIntValue(compileAndRun("fn fact(n) { if (n <= 1) { return 1; }"
+                              " return n * fact(n - 1); } var r = fact(5);"),
+                120, "compiled: fact(5) == 120 (recursion)");
+
+  // Mutual recursion: two globals calling each other.
+  checkIntValue(compileAndRun("fn isEven(n) { if (n == 0) { return 1; }"
+                              " return isOdd(n - 1); }"
+                              " fn isOdd(n) { if (n == 0) { return 0; }"
+                              " return isEven(n - 1); } var r = isEven(10);"),
+                1, "compiled: isEven(10) == 1 (mutual recursion)");
+
+  // A function called twice with different arguments (each call gets a fresh
+  // frame, so no state leaks between them).
+  checkIntValue(compileAndRun("fn double(x) { return x + x; }"
+                              " var a = double(3); var r = double(7);"),
+                14, "compiled: double(7) == 14 after an earlier double(3)");
+}
+
+// A capture-free lambda: `() => 42` is a child proto with no upvalues, so
+// CLOSURE lowers it and CALL dispatches it.
+static void testExecCompiledClosure() {
+  checkIntValue(compileAndRun("var f = () => 42; var r = f();"), 42,
+                "compiled: a capture-free lambda returns 42");
+}
+
+// Captured locals (PHASE 7c.2c.2): a lambda that reads a local of its defining
+// function captures the *cell*, so it still sees the variable after the
+// defining frame is gone. The captured slot lives in a shared cell, not a
+// copy.
+static void testExecCompiledCapture() {
+  // A closure that reads a captured local after the defining function returned.
+  checkIntValue(compileAndRun("fn make() { let x = 7; return () => x; }"
+                              " var f = make(); var r = f();"),
+                7, "compiled: a closure reads a captured local (7)");
+
+  // Shared mutation: the closure writes the captured local and the caller
+  // observes the new value (one cell, not two copies).
+  checkIntValue(compileAndRun("fn make() { var x = 0;"
+                              " return () => { x = x + 1; return x; }; }"
+                              " var c = make(); var a = c(); var r = c();"),
+                2, "compiled: a counter closure increments a shared captured cell");
+
+  // Two closures over the same variable share one cell: the second sees the
+  // first's write.
+  checkIntValue(compileAndRun("fn make() { var x = 0;"
+                              " var inc = () => { x = x + 1; };"
+                              " var get = () => x;"
+                              " inc(); inc(); return get(); }"
+                              " var r = make();"),
+                2, "compiled: two closures share one captured cell");
+
+  // Nested capture: the inner lambda captures through the outer function, so
+  // the middle frame re-exports its own upvalue.
+  checkIntValue(compileAndRun("fn outer() { let x = 41;"
+                              " fn mid() { return () => x + 1; }"
+                              " return mid(); }"
+                              " var f = outer(); var r = f();"),
+                42, "compiled: a nested closure captures through two frames");
+
+  // A captured parameter is a cell too: `let` parameters are locals.
+  checkIntValue(compileAndRun("fn adder(n) { return (m) => n + m; }"
+                              " var add5 = adder(5); var r = add5(37);"),
+                42, "compiled: a closure captures a parameter");
+
+  // Two closures created at different points capture the same variable, so both
+  // read the value it holds when they are *called* (a shared cell), not a
+  // snapshot taken at creation time.
+  checkIntValue(compileAndRun("fn make() { var a = 1;"
+                              " var f1 = () => a; a = 2; var f2 = () => a;"
+                              " return f1() + f2(); }"
+                              " var r = make();"),
+                4, "compiled: closures created at different times share one cell");
+
+  // A local function that recurses: `g` captures its own slot (predeclared as a
+  // nil cell before the closure is built), so the cell must exist and be the
+  // one the declaration fills in.
+  checkIntValue(compileAndRun("fn outer() {"
+                              " fn g(n) { if (n <= 0) { return 0; } return n + g(n - 1); }"
+                              " return g(4); }"
+                              " var r = outer();"),
+                10, "compiled: a local recursive function captures its own cell");
+}
+
 #endif  // LOWER_EXEC_TESTS
 
 int main() {
   testImageIsSelfContained();
-  testDeferredOpcodesThrow();
+  testCollectionsLower();
   testBadJumpTargetThrows();
+  testUnassignedGlobalThrows();
   testInvalidUnopSelectorThrows();
 
 #ifdef LOWER_EXEC_TESTS
@@ -559,6 +817,14 @@ int main() {
   testExecStringLoad();
   testExecStringConcat();
   testExecStringCompare();
+  testExecGlobals();
+  testExecLocals();
+  testExecCompiledGlobals();
+  testExecCompiledPrint();
+  testExecCompiledLocals();
+  testExecCompiledCalls();
+  testExecCompiledClosure();
+  testExecCompiledCapture();
 #else
   std::printf("skipped: execution tests require Linux x86-64\n");
 #endif

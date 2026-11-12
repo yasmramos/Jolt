@@ -29,6 +29,12 @@
 // second) and returned in rax:rdx.
 struct AotRuntimeHandles {
   CodeGen::Label printValue;     // void  jolt_print_value(AotValue v)
+  // The same printer without the trailing newline, for the `print`/`write`/
+  // `eprint` builtins, which join their arguments with single spaces and add
+  // one newline themselves. `printValueRaw` writes to stdout, `printValueErrRaw`
+  // to stderr (PHASE 7c.2d).
+  CodeGen::Label printValueRaw;     // void jolt_print_value_raw(AotValue v)
+  CodeGen::Label printValueErrRaw;  // void jolt_print_value_err_raw(AotValue v)
   // Numeric binary arithmetic with the int/float/double promotion of the
   // hosted engine. The selector (AotArithOp) is the third argument.
   CodeGen::Label arithValues;    // AotValue jolt_arith(AotValue a, AotValue b, long op)
@@ -52,6 +58,66 @@ struct AotRuntimeHandles {
   // combined length and bytes, and returns an `AotValue` (tag Str). Used by
   // `jolt_arith` for `Add` when both operands are strings.
   CodeGen::Label concat;         // AotValue jolt_concat(AotValue a, AotValue b)
+  // The global table (PHASE 7c.2a). It is a contiguous array of `AotValue`
+  // slots in the arena; the chunk allocates it once at entry and keeps its
+  // base in r15. `initGlobals` takes the slot count in rdi. `globalSet` takes
+  // the slot index in rdi and the value in rsi:rdx; `globalGet` takes the slot
+  // index in rdi and returns the value in rax:rdx. Global names never reach
+  // the binary: the compiler assigns each one an index, exactly like a local.
+  CodeGen::Label initGlobals;    // void jolt_init_globals(long count)
+  CodeGen::Label globalSet;      // void jolt_global_set(long slot, AotValue v)
+  CodeGen::Label globalGet;      // AotValue jolt_global_get(long slot)
+  // Closures and calls (PHASE 7c.2c.1). `closure` allocates an `AotClosure` in
+  // the arena for a proto's code address (rdi), arity (rsi) and captured-cell
+  // count (rdx), and returns it as a `Func` value in rax:rdx. The lowering
+  // writes the captured cell pointers into the header itself (each is a plain
+  // 8-byte store), so `closure` only zero-fills the slot area. `call`
+  // dispatches a callee (rdi:rsi) with `argc` arguments (rdx) whose window
+  // starts at `args` (rcx): it checks the callee is a function, then calls its
+  // code with the lowering's own function convention (`AotValue entry(AotValue*
+  // args, long argc, AotClosure* self)`), returning the result in rax:rdx. A
+  // non-function callee is a fatal error.
+  CodeGen::Label closure;        // AotValue jolt_closure(void* code, long arity, long upvalueCount)
+  CodeGen::Label call;           // AotValue jolt_call(AotValue callee, long argc, AotValue* args)
+  // `AotValue* jolt_cell_new(AotValue v)`: allocate a 16-byte cell in the arena
+  // holding `v` (rdi:rsi) and return its address (rax). A captured local lives
+  // in a cell shared with the closures that capture it, so a write through the
+  // closure and a read in the frame see the same value (PHASE 7c.2c.2).
+  CodeGen::Label cellNew;        // AotValue* jolt_cell_new(AotValue v)
+  // Fatal "wrong number of arguments" report. A function's prologue calls it
+  // when the argument count does not match its declared arity, the runtime
+  // counterpart of the hosted engine's arity check in `pushJoltFrame`.
+  CodeGen::Label arityError;     // void jolt_arity_error(void)
+  // The `print`/`write`/`eprint` builtins, as machine-code functions with the
+  // same convention as a bytecode proto (`AotValue entry(AotValue* args, long
+  // argc, AotClosure* self)`). The chunk seeds each into its global slot as an
+  // `AotClosure`, so a `CALL` reaches them through the ordinary `jolt_call`
+  // path. `print` and `eprint` add a trailing newline, `write` does not;
+  // `eprint` writes to stderr. Arguments are joined with single spaces
+  // (PHASE 7c.2d).
+  CodeGen::Label printBuiltin;   // AotValue jolt_builtin_print(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label writeBuiltin;   // AotValue jolt_builtin_write(...)
+  CodeGen::Label eprintBuiltin;  // AotValue jolt_builtin_eprint(...)
+  // Collections (PHASE 7c.3). `tableNew` allocates an empty array (kind 0) or
+  // map (kind 1); `tableSet`/`tableGet` are the dynamic-index forms
+  // (`R[b][R[c]]`), `memberSet`/`memberGet` the constant-name forms
+  // (`R[b].name`); `contains` implements `in`; `iterNext` advances a `for-in`
+  // cursor, taking a pointer to the cursor slot (rdi) and the iterable
+  // (rdx:rcx) and returning the item (rax:rdx) with the done flag in r8;
+  // `strEq` compares two `AotString`s by content (map keys are compared by
+  // value, not pointer).
+  CodeGen::Label tableNew;   // AotValue jolt_table_new(long kind)
+  CodeGen::Label tableGet;   // AotValue jolt_table_get(AotValue obj, AotValue index)
+  CodeGen::Label memberGet;  // AotValue jolt_member_get(AotValue obj, AotValue name)
+  CodeGen::Label tableSet;   // void jolt_table_set(AotValue obj, AotValue index, AotValue value)
+  CodeGen::Label memberSet;  // void jolt_member_set(AotValue obj, AotValue name, AotValue value)
+  CodeGen::Label contains;   // AotValue jolt_contains(AotValue needle, AotValue haystack)
+  CodeGen::Label iterNext;   // AotValue jolt_iter_next(AotValue* cursor, AotValue iterable)
+  CodeGen::Label strEq;      // long jolt_str_eq(AotString* a, AotString* b)
+  // The hidden `$mapValue` helper (`for k, v in map`), with the proto
+  // convention. It returns the value paired with a key, so the key/value loop
+  // form lowers to an ordinary call.
+  CodeGen::Label mapValueBuiltin;  // AotValue jolt_builtin_map_value(AotValue* args, long argc, AotClosure* self)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
@@ -59,6 +125,12 @@ inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(),
   };
 }
 

@@ -50,7 +50,24 @@ struct RefCounted {
   friend Ref<T> makeRef(Args&&... args);
 
   DestroyFn destroy = nullptr;
+
+  // Intrusive link into the deferred-destruction list drained by
+  // `destroyRefCounted`. An object is only ever on it while it is being
+  // destroyed, and it is removed before its `destroy` runs, so no allocation
+  // and no `noexcept`-unsafe operation is needed to tear a chain down.
+  RefCounted* destroyNext = nullptr;
+
+  friend void destroyRefCounted(RefCounted* object) noexcept;
 };
+
+// Destroys `object`, whose last strong reference just dropped, and every object
+// whose last reference drops as a consequence, draining an explicit list
+// instead of recursing. A chain of objects (nested containers, closures, the
+// cells they capture) is therefore freed with a constant C++ stack depth, so a
+// structure built at run time cannot overflow the stack while being torn down.
+// The outermost call does the draining; a nested one only enqueues. Defined in
+// value.cpp.
+void destroyRefCounted(RefCounted* object) noexcept;
 
 template <typename T>
 class Ref {
@@ -124,8 +141,9 @@ class Ref {
       // `makeRef`. `delete` through a base (`RefCounted*`) pointer would be
       // undefined behavior without a vtable, and objects reachable only as
       // `RefCounted` (such as the inner Value of a self-referencing
-      // container) must still die correctly.
-      ptr_->destroy(ptr_);
+      // container) must still die correctly. Destruction is deferred so a
+      // chain of objects is freed iteratively (see `destroyRefCounted`).
+      destroyRefCounted(ptr_);
     }
   }
 
@@ -516,10 +534,6 @@ struct Array : RefCounted, GcNode {
 
   Array() : GcNode(arrayGcOps) {}
   explicit Array(std::vector<Value> init) : GcNode(arrayGcOps), items(std::move(init)) {}
-  // Frees a chain of nested containers iteratively, so a structure built at run
-  // time (for example `a = [a]` in a loop) does not overflow the stack while
-  // being torn down. See `teardownContainers` in value.cpp.
-  ~Array();
 };
 
 // Insertion-ordered string-keyed map.
@@ -537,9 +551,6 @@ struct Map : RefCounted, GcNode {
   void clear();
   void rebuildIndex();
   size_t size() const { return entries.size(); }
-
-  // Iterative teardown, same rationale as `Array::~Array`.
-  ~Map();
 };
 
 struct Function : RefCounted, GcNode {

@@ -17,6 +17,9 @@
 #include <string>
 #include <vector>
 
+#include "bytecode.h"
+#include "compiler.h"
+#include "lexer.h"
 #include "native/arena.h"
 #include "native/entry.h"
 #include "native/elf.h"
@@ -24,6 +27,7 @@
 #include "native/platform_freestanding.h"
 #include "native/runtime.h"
 #include "native/value.h"
+#include "parser.h"
 
 static int g_failures = 0;
 
@@ -81,6 +85,7 @@ static void test_arena() {
 #if defined(__linux__) && defined(__x86_64__)
 #define FREESTANDING_EXEC_TESTS 1
 #include <cstdlib>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -260,13 +265,109 @@ static Instruction instr(OpCode op, int a = 0, int b = 0, int c = 0, int jump = 
 }
 
 static Bytecode makeProto(const std::vector<Instruction>& code,
-                          const std::vector<Value>& constants, int numRegisters) {
+                          const std::vector<Value>& constants, int numRegisters,
+                          int numLocals = 0) {
   Bytecode proto;
   proto.name = "<freestanding-test>";
   proto.code = code;
   proto.constants = constants;
   proto.numRegisters = numRegisters;
+  proto.numLocals = numLocals;
   return proto;
+}
+
+// Compiles a Jolt source string to bytecode, the way the dev engine does.
+static Bytecode compileSource(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<freestanding-test>");
+  return compileProgram(parser.parseProgram());
+}
+
+// The `print` builtin, end to end: compile a real program that calls `print`,
+// lower it, build a static ELF and run it. Before 7c.2d the backend had no
+// builtins, so `print` was a lowering error and a compiled binary could not
+// print anything (PHASE 7c.2d).
+static void test_builtin_print() {
+  Bytecode proto = compileSource(
+      "print(\"hello\", 42, 3.5, true);"
+      "write(\"no\", \"newline\");"
+      "print();");
+  RunResult result = buildAndRun("/tmp/jolt_builtin_print", proto);
+  check(result.output == "hello 42 3.5 true\nno newline\n",
+        "a compiled program prints through the print/write builtins");
+  check(result.exitCode == 0, "a program using print exits 0 through _start");
+}
+
+// Collections, end to end (PHASE 7c.3): arrays, maps, indexing, `.length`,
+// `in`, `for-in` and container printing all lower and run in a compiled binary.
+static void test_collections() {
+  Bytecode proto = compileSource(
+      "let a = [1, 2, 3];\n"
+      "a[1] = 20;\n"
+      "a[3] = 4;\n"
+      "print(a);\n"
+      "print(a.length);\n"
+      "print(a[0], a[1], a[-1]);\n"
+      "let m = {\"x\": 1, \"y\": 2};\n"
+      "m[\"z\"] = 3;\n"
+      "m.x = 10;\n"
+      "print(m);\n"
+      "print(m[\"x\"], m.y, m[\"z\"]);\n"
+      "print(2 in a, 99 in a, \"x\" in m, \"q\" in m);\n"
+      "a[-1] = 9;\n"
+      "a[1] = 20;\n"
+      "m[\"x\"] = 5;\n"
+      "m[\"new\"] = 7;\n"
+      "print(a, m);\n"
+      "let s = \"hello\";\n"
+      "print(s.length, s[1], \"ell\" in s);\n"
+      "print(\"\" in s, \"z\" in s, \"hello\" in s, \"helloo\" in s);\n"
+      "var total = 0;\n"
+      "for v in a { total = total + v; }\n"
+      "print(total);\n"
+      "var keys = \"\";\n"
+      "for k in m { keys = keys + k; }\n"
+      "print(keys);\n"
+      "var pairKeys = \"\";\n"
+      "var pairTotal = 0;\n"
+      "for k, v in m { pairKeys = pairKeys + k; pairTotal = pairTotal + v; }\n"
+      "print(pairKeys, pairTotal);\n");
+  RunResult result = buildAndRun("/tmp/jolt_collections", proto);
+  std::string expected =
+      "[1, 20, 3, 4]\n"
+      "4\n"
+      "1 20 4\n"
+      "{\"x\": 10, \"y\": 2, \"z\": 3}\n"
+      "10 2 3\n"
+      "false false true false\n"
+      "[1, 20, 3, 9] {\"x\": 5, \"y\": 2, \"z\": 3, \"new\": 7}\n"
+      "5 e true\n"
+      "true false true false\n"
+      "33\n"
+      "xyznew\n"
+      "xyznew 17\n";
+  check(result.output == expected, "a compiled program runs collections and prints them");
+  check(result.exitCode == 0, "a program using collections exits 0 through _start");
+}
+
+// A nested container prints with the recursive repr, and a self-referential one
+// stops at the depth cap instead of recursing forever.
+static void test_collection_repr() {
+  Bytecode proto = compileSource(
+      "print([[1, 2], {\"a\": [3]}]);\n"
+      "print([\"a\", \"b\\\"c\", \"d\\ne\", \"tab\\tx\", \"\\x01\"]);\n"
+      "let m = {};\n"
+      "m[\"self\"] = m;\n"
+      "print(m);\n");
+  RunResult result = buildAndRun("/tmp/jolt_collection_repr", proto);
+  check(result.output.find("[[1, 2], {\"a\": [3]}]\n") == 0,
+        "a nested array/map prints with the recursive repr");
+  check(result.output.find("[\"a\", \"b\\\"c\", \"d\\ne\", \"tab\\tx\", \"\\x01\"]\n") !=
+            std::string::npos,
+        "nested strings print with the interpreter's escapes");
+  check(result.output.find("...") != std::string::npos,
+        "a self-referential map stops at the depth cap");
+  check(result.exitCode == 0, "a self-referential program still exits 0");
 }
 
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
@@ -321,6 +422,59 @@ static void test_boxed_runtime_print() {
   check(result.exitCode == 0, "the printing program exits 0");
 }
 
+// The global table (PHASE 7c.2a) inside a real static ELF: the chunk allocates
+// it from the arena at entry, every slot starts nil, and set/get round-trip
+// through r15. The helpers are driven directly, like the printer above.
+static void test_boxed_runtime_globals() {
+  CodeGen cg(Target::linuxX64());
+  RuntimeHandles entry = newRuntimeHandles(cg);
+  AotRuntimeHandles rt = newAotRuntimeHandles(cg);
+  CodeGen::Label mainLabel = cg.newLabel();
+
+  auto printSlot = [&](int slot) {
+    cg.movImm(X64Reg::Rdi, slot);
+    cg.callLabel(rt.globalGet);
+    cg.movReg(X64Reg::Rdi, X64Reg::Rax);
+    cg.movReg(X64Reg::Rsi, X64Reg::Rdx);
+    cg.callLabel(rt.printValue);
+  };
+  auto setInt = [&](int slot, std::int64_t value) {
+    cg.movImm(X64Reg::Rdi, slot);
+    cg.movImm(X64Reg::Rsi, static_cast<std::int64_t>(AotTag::Int));
+    cg.movImm(X64Reg::Rdx, value);
+    cg.callLabel(rt.globalSet);
+  };
+
+  cg.bind(mainLabel);
+  cg.push(X64Reg::Rbp);
+  cg.movReg(X64Reg::Rbp, X64Reg::Rsp);
+  cg.callLabel(entry.initArena);
+  cg.movImm(X64Reg::Rdi, 3);
+  cg.callLabel(rt.initGlobals);
+  setInt(0, 7);
+  setInt(2, -9);
+  printSlot(0);  // 7
+  printSlot(2);  // -9
+  printSlot(1);  // nil: never assigned
+  cg.xorReg(X64Reg::Rax, X64Reg::Rax);
+  cg.movReg(X64Reg::Rsp, X64Reg::Rbp);
+  cg.pop(X64Reg::Rbp);
+  cg.retInsn();
+
+  std::uint64_t start = emitFreestandingRuntime(cg, entry, mainLabel);
+  emitAotRuntime(cg, rt, entry);
+  cg.finalize();
+
+  std::vector<std::uint8_t> elf =
+      buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
+  const std::string path = "/tmp/jolt_boxed_globals";
+  writeFile(path, elf);
+  RunResult result = runProgram(path);
+  check(result.output == "7\n-9\nnil\n",
+        "the boxed runtime keeps globals in distinct slots and starts them nil");
+  check(result.exitCode == 0, "the global program exits 0");
+}
+
 // A type mismatch in a lowered operation must report an error and exit 70,
 // matching the development engine's runtime-error exit code.
 static void test_boxed_runtime_error() {
@@ -345,6 +499,126 @@ static void test_boxed_runtime_div_zero() {
   check(result.exitCode == 70, "a division by zero exits 70");
   check(result.output.find("division by zero") != std::string::npos,
         "the runtime error names the division by zero");
+}
+
+// Calls (PHASE 7c.2c.1) through the real process entry: a hand-built chunk with
+// a child proto, a CLOSURE, a CALL and a RETURN must build, run under `_start`
+// and return the callee's value in R0. The exact value is checked by printing
+// it, so this also exercises the runtime dispatch path end to end.
+static void test_boxed_runtime_call() {
+  // Root: R0 = closure(add); R1 = 20; R2 = 22; R0 = R0(R1, R2); print R0; HALT.
+  Bytecode root = makeProto({instr(OpCode::CLOSURE, 0, 0), instr(OpCode::LOADK, 1, 0),
+                             instr(OpCode::LOADK, 2, 1), instr(OpCode::CALL, 0, 2),
+                             instr(OpCode::HALT)},
+                            {Value(static_cast<int64_t>(20)), Value(static_cast<int64_t>(22))}, 3);
+  root.name = "<call-root>";
+  auto child = std::make_shared<Bytecode>();
+  child->name = "add";
+  child->numParams = 2;
+  child->numRegisters = 2;
+  child->numLocals = 2;
+  child->code = {instr(OpCode::DECLLOCAL, 0, 0), instr(OpCode::DECLLOCAL, 1, 1),
+                 instr(OpCode::GETLOCAL, 0, 0), instr(OpCode::GETLOCAL, 1, 1),
+                 instr(OpCode::ADD, 0, 0, 1), instr(OpCode::RETURN, 0)};
+  root.children.push_back(child);
+
+  // Run the chunk directly and read the AotValue it leaves in R0. Printing the
+  // result needs the `print` builtin, which lands with the library (7c.2c.2), so
+  // this test reads R0 through the program entry like `lower_test` does.
+  LoweredChunk chunk = lowerToX64(Target::linuxX64(), root, CodeGen{});
+  long pageSize = sysconf(_SC_PAGESIZE);
+  std::size_t span = static_cast<std::size_t>(pageSize);
+  while (span < chunk.code.size()) span += static_cast<std::size_t>(pageSize);
+  void* mem = mmap(nullptr, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem == MAP_FAILED) {
+    check(false, "mmap for the call test");
+    return;
+  }
+  std::memcpy(mem, chunk.code.data(), chunk.code.size());
+  mprotect(mem, span, PROT_READ | PROT_EXEC);
+  auto fn = reinterpret_cast<AotValue (*)()>(
+      static_cast<std::uint8_t*>(mem) + chunk.programEntry);
+  AotValue value = fn();
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 42,
+        "a lowered CALL returns the callee's result (20 + 22 == 42)");
+
+  // The same chunk through `_start` must exit 0 (R0 is discarded by `main`).
+  RunResult result = buildAndRun("/tmp/jolt_boxed_call", root);
+  check(result.exitCode == 0, "a chunk with a call exits 0 through _start");
+}
+
+// Calling a non-function value is a fatal runtime error: build a chunk that
+// calls an integer and check the error message and exit code 70.
+static void test_boxed_runtime_call_non_function() {
+  // R0 = 5; R1 = 7; R0 = R0(R1) -> R0 is not a function.
+  Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
+                              instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)},
+                             {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))}, 2);
+  RunResult result = buildAndRun("/tmp/jolt_boxed_call_nonfunc", proto);
+  check(result.exitCode == 70, "calling a non-function exits 70");
+  check(result.output.find("non-function") != std::string::npos,
+        "the runtime error names the non-function call");
+}
+
+// Captured locals through the real process entry (PHASE 7c.2c.2): a child
+// proto that captures a local of its parent. The closure escapes its defining
+// frame and is called afterwards, so the captured cell must outlive the frame.
+// The root reads the result back into R0 (checked by direct execution) and the
+// same chunk runs cleanly under `_start`.
+static void test_boxed_runtime_closure_capture() {
+  // Root: R0 = closure(inner)  -- `inner` captures the root's local slot 0.
+  //       R1 = 40; R0 = R0(); R0 = R0 + R1; HALT.  -> 40 + 40 = 80 in R0.
+  Bytecode root = makeProto({instr(OpCode::LOADK, 1, 0), instr(OpCode::DECLLOCAL, 1, 0),
+                             instr(OpCode::CLOSURE, 0, 0), instr(OpCode::CALL, 0, 0),
+                             instr(OpCode::ADD, 0, 0, 1), instr(OpCode::HALT)},
+                            {Value(static_cast<int64_t>(40))}, 3, 1);
+  root.name = "<capture-root>";
+  auto inner = std::make_shared<Bytecode>();
+  inner->name = "inner";
+  inner->numParams = 0;
+  inner->numRegisters = 1;
+  inner->numLocals = 0;
+  inner->upvalues.push_back(UpvalDesc{true, 0});  // capture the parent's slot 0
+  inner->code = {instr(OpCode::GETUPVAL, 0, 0), instr(OpCode::RETURN, 0)};
+  root.children.push_back(inner);
+
+  LoweredChunk chunk = lowerToX64(Target::linuxX64(), root, CodeGen{});
+  long pageSize = sysconf(_SC_PAGESIZE);
+  std::size_t span = static_cast<std::size_t>(pageSize);
+  while (span < chunk.code.size()) span += static_cast<std::size_t>(pageSize);
+  void* mem = mmap(nullptr, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem == MAP_FAILED) {
+    check(false, "mmap for the closure capture test");
+    return;
+  }
+  std::memcpy(mem, chunk.code.data(), chunk.code.size());
+  mprotect(mem, span, PROT_READ | PROT_EXEC);
+  auto fn = reinterpret_cast<AotValue (*)()>(
+      static_cast<std::uint8_t*>(mem) + chunk.programEntry);
+  AotValue value = fn();
+  check(value.tag == static_cast<std::uint64_t>(AotTag::Int) &&
+            static_cast<std::int64_t>(value.payload) == 80,
+        "a lowered closure reads a captured local (40 + 40 == 80)");
+
+  RunResult result = buildAndRun("/tmp/jolt_boxed_capture", root);
+  check(result.exitCode == 0, "a chunk with a captured local exits 0 through _start");
+}
+
+// Locals (PHASE 7c.2b) through the real process entry: a chunk with a local
+// region must build, allocate its larger frame and run cleanly under `_start`.
+// The value itself is covered by direct execution in `lower_test.cpp`; here the
+// subject is the frame-size math on the freestanding path, so a clean exit and
+// no output is the assertion.
+static void test_boxed_runtime_locals() {
+  Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::DECLLOCAL, 0, 0),
+                              instr(OpCode::LOADK, 1, 1), instr(OpCode::SETLOCAL, 1, 0),
+                              instr(OpCode::GETLOCAL, 0, 0), instr(OpCode::HALT)},
+                             {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))},
+                             2, 1);
+  RunResult result = buildAndRun("/tmp/jolt_boxed_locals", proto);
+  check(result.output.empty(), "a locals-only chunk prints nothing");
+  check(result.exitCode == 0, "a chunk with a local region exits 0 through _start");
 }
 
 // Strings over the arena, end to end: lay out two `AotString`s in the image,
@@ -467,10 +741,18 @@ int main() {
   test_platform_roundtrip();
   test_end_to_end();
   test_boxed_runtime_print();
+  test_boxed_runtime_globals();
   test_boxed_runtime_error();
   test_boxed_runtime_div_zero();
+  test_boxed_runtime_locals();
+  test_boxed_runtime_call();
+  test_boxed_runtime_call_non_function();
+  test_boxed_runtime_closure_capture();
   test_boxed_runtime_string();
   test_boxed_runtime_float_mod();
+  test_builtin_print();
+  test_collections();
+  test_collection_repr();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

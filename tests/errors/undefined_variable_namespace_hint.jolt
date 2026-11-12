@@ -1,0 +1,6 @@
+// expect-exit: 70
+// `import std.math;` binds the namespace `std.math`, not a bare `math`, so the
+// read below fails and the runtime error suggests the full path:
+// "undefined variable 'math' (did you mean 'std.math'?)".
+import std.math;
+print(math.sqrt(4));

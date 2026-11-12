@@ -38,6 +38,9 @@ enum class AotTag : std::uint64_t {
   Float = 3,   // payload is the IEEE-754 binary64 bit pattern of a binary32 value
   Double = 4,  // payload is the IEEE-754 binary64 bit pattern
   Str = 5,     // payload is the address of an `AotString`
+  Func = 6,    // payload is the address of an `AotClosure`
+  Array = 7,   // payload is the address of an `AotArray`
+  Map = 8,     // payload is the address of an `AotMap`
 };
 
 // On-image layout of a string: an 8-byte length followed by the bytes. The
@@ -55,10 +58,65 @@ struct AotString {
 
 constexpr std::size_t kAotStringHeaderSize = sizeof(std::uint64_t);
 
+// On-image layout of a closure (PHASE 7c.2c.1): the code address of the
+// function's entry, the number of arguments it expects, then the captured
+// cells. A `Func` value's payload points at `code`. From 7c.2c.2 a proto with
+// upvalues captures its defining frame's cells: `upvalueCount` says how many
+// pointers follow the header, each pointing at a 16-byte `AotValue` cell
+// shared with the defining frame (so a write through the closure is visible
+// to the frame and to every other closure that captured the same cell).
+//
+// A bytecode function's machine-code entry follows the *lowering's own*
+// convention, not the C ABI: `AotValue entry(AotValue* args, long argc,
+// AotClosure* self)`. `args` points at the caller's argument window (the
+// caller's R[a+1 .. a+argc]); the callee copies the arguments into its own
+// register file, so the caller's window is never aliased. `self` is the
+// closure being entered, so `GETUPVAL`/`SETUPVAL` and a nested `CLOSURE` read
+// the captured cells through it. This differs from a runtime helper (which
+// takes two `AotValue`s in rdi:rsi/rdx:rcx) on purpose: a function has a
+// variable argument count, which does not fit the two-register value ABI.
+struct AotClosure {
+  std::uint64_t code;          // address of the function's machine code
+  std::uint64_t arity;         // number of declared parameters
+  std::uint64_t upvalueCount;  // number of captured cells that follow
+  // The captured cells (pointers to 16-byte `AotValue` slots) follow.
+};
+
+constexpr std::size_t kAotClosureHeaderSize = 3 * sizeof(std::uint64_t);
+
+// On-image layout of an array (PHASE 7c.3): a live length, a capacity and the
+// address of the items block (an array of 16-byte `AotValue`s). The arena never
+// frees, so growth allocates a fresh, larger block and copies the items; the
+// old block is abandoned. An `Array` payload points at the header, so a helper
+// reads the length from `[ptr]` and the first item from `[items]`.
+struct AotArray {
+  std::uint64_t length;
+  std::uint64_t capacity;
+  std::uint64_t items;  // address of the items block
+};
+
+constexpr std::size_t kAotArrayHeaderSize = 3 * sizeof(std::uint64_t);
+
+// On-image layout of a map (PHASE 7c.3): an insertion-ordered array of entries
+// with string keys, matching the hosted `Map` (which keeps insertion order too).
+// A linear scan is enough for the sizes a compiled desktop program builds at
+// start-up; a hash index can come later without changing the layout's contract.
+// Each entry is a 24-byte record: the key's `AotString` address, then the
+// 16-byte value.
+struct AotMap {
+  std::uint64_t length;
+  std::uint64_t capacity;
+  std::uint64_t entries;  // address of the entries block
+};
+
+constexpr std::size_t kAotMapHeaderSize = 3 * sizeof(std::uint64_t);
+
 struct AotValue {
   std::uint64_t tag;
   std::uint64_t payload;
 };
+
+constexpr std::size_t kAotMapEntrySize = 8 + sizeof(AotValue);
 
 static_assert(sizeof(AotValue) == 16,
               "AotValue must be 16 bytes to be passed and returned in two registers");

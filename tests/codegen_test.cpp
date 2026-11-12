@@ -218,6 +218,34 @@ static void test_memory_operands() {
   // lea sits at offset 1, its next instruction at offset 8, so the distance to
   // offset 0 is -8 = FFFFFFF8.
   checkBytes("lea rax, [rip+label] (backward fixup)", g14, "C3488D05F8FFFFFFC3");
+
+  // lea dst, [base+disp] -> REX.W 8D /r. rax, [rbp-16]: mod=01 disp8.
+  CodeGen g15;
+  g15.leaMem(X64Reg::Rax, X64Reg::Rbp, -16);
+  checkBytes("lea rax, [rbp-16]", g15, "488D45F0");
+
+  // lea rdi, [rsp] -> SIB required (rsp base), mod=00, no displacement.
+  CodeGen g16;
+  g16.leaMem(X64Reg::Rdi, X64Reg::Rsp, 0);
+  checkBytes("lea rdi, [rsp] (SIB)", g16, "488D3C24");
+
+  // lea rsi, [rbp+0x1234]: disp32, and rbp forces the displacement form.
+  CodeGen g17;
+  g17.leaMem(X64Reg::Rsi, X64Reg::Rbp, 0x1234);
+  checkBytes("lea rsi, [rbp+0x1234]", g17, "488DB534120000");
+
+  // A destination above r7 sets REX.R: lea r8, [rbp] -> 4C 8D 45 00.
+  CodeGen g18;
+  g18.leaMem(X64Reg::R8, X64Reg::Rbp, 0);
+  checkBytes("lea r8, [rbp] (REX.R)", g18, "4C8D4500");
+
+  // call r/m64 (FF /2): call rax -> FF D0; call r11 -> 41 FF D3.
+  CodeGen g19;
+  g19.callReg(X64Reg::Rax);
+  checkBytes("call rax", g19, "FFD0");
+  CodeGen g20;
+  g20.callReg(X64Reg::R11);
+  checkBytes("call r11 (REX.B)", g20, "41FFD3");
 }
 
 static void test_alu() {

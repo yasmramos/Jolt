@@ -49,32 +49,35 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `compiler.cpp` | `Node*` | `Bytecode*` | ✅ |
 | `module_resolver.cpp` | dotted module path | source file path | ✅ |
 | `vm.cpp` | `Bytecode*` | execution | ✅ |
-| `main.cpp` | CLI | full pipeline | ⬜ (VM as dev engine, PHASE 4) |
-| `interpreter.cpp` | `Node*` | reference execution | ⚠️ test oracle only |
+| `main.cpp` | CLI | full pipeline | ✅ (VM as dev engine, PHASE 4) |
 | `value.cpp` / `env.cpp` | `Value`, scope chain | shared runtime | ✅ |
+| `builtins.cpp` / `ops.cpp` | native builtins, shared operators | runtime library | ✅ |
+| `ffi.cpp` | `extern "C"` declarations | marshalling natives | ✅ PHASE 6.6 |
+| `diagnostic.cpp` | `CompileError`, `Warning`, `RuntimeError` | stderr output | ✅ |
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
-| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | 🔶 PHASE 7a |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
+| `platform_posix.cpp` | `Platform` ops (dev engine) | libc-backed I/O | ✅ |
+| `native/codegen.cpp` | x86-64 instructions | machine-code bytes | ✅ PHASE 7a/7b |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.3 |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.3 |
+| `native/dtoa.cpp` | float/double | shortest round-trip text | ✅ PHASE 7c.1b |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
 | `native/arena.cpp` | block + size | aligned allocations | ✅ PHASE 7c.0 |
 | `native/platform_freestanding.cpp` | `Platform` ops | direct Linux syscalls | ✅ PHASE 7c.0 |
 | `native/entry.cpp` | program entry label | `_start` + runtime prelude | ✅ PHASE 7c.0 |
-| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.1b |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.1b |
 
 ### Toolchain binaries and the compiler boundary
 
 `jolt` ships as a single binary until PHASE 7d. After the split:
 
-- `jolt` development engine (run, REPL, -c). Includes VM, interpreter
-(test oracle), and JIT (AsmJIT).
+- `jolt` development engine (run, REPL, -c). Includes the VM and the JIT
+(AsmJIT).
 - `joltc` host compiler (joltc file.jolt -o app). Reads sources and
 writes the ELF. Uses AsmJIT Assembler (no JIT). Links against musl static.
 - `jolt build` thin alias over `joltc`
 
 Boundary rule: src/compiler.* and src/native/* must not include
-interpreter.h or vm.h. Enforced by tests/check_compiler_boundary.cmake.
+vm.h. Enforced by tests/check_compiler_boundary.cmake.
 
 ---
 
@@ -151,25 +154,6 @@ compiler.
 
 Removing `PRINT` freed one slot (39/40). The next opcode request (if any) starts
 at rung 1 of the §3.3 ladder.
-
-### Explicit anti-goal
-
-> **Do NOT repeat Java's mistake**: high-level bytecode that later turns out
-> to be impossible to compile to native code efficiently. Jolt's bytecode
-> must be born with future native compilation in mind.
-
-### Design rules for the AOT backend
-
-1. **No VM-only features.** Every language feature must be compilable by the
-   AOT backend. Runtime `eval`/`load` of bytecode is forbidden unless the
-   produced binary embeds the compiler itself (GraalVM pitfall).
-2. **The bytecode must carry enough information for AOT.** Instructions stay
-   annotatable with provable types so the backend can emit typed fast paths.
-3. **The embeddable runtime cannot call libc.** The runtime that ships inside
-   AOT binaries may only reach the outside world through the `Platform`
-   interface. **Unless the user explicitly requests musl static** (the
-   default), in which case libc is statically linked and the binary is still
-   self-contained.
 
 ### Explicit anti-goal
 
@@ -260,7 +244,7 @@ previous one.
   constant; then `SETGLOBAL`
 - Compile-time immutability tracking (`isImmutable` on locals and globals):
   assigning to a `let` binding throws a
-  `CompileError` with the same message as the interpreter
+  `CompileError` with the same message as the retired AST oracle
 - `print(expr)` → compile the expression, emit `PRINT` (temporary; see §3.6;
   every arity becomes a `CALL` to the builtin at 6c/6e); in the current AST
   `print` is a call, so it is detected as a `CallExpr`
@@ -278,10 +262,10 @@ previous one.
 - `ADD` also concatenates strings; `DIV` and `MOD` detect division by zero
 - `POW` replicates `intPow` for `int ** int` with a non-negative exponent and
   uses `std::pow` in every other case
-- `UNOP` respects the interpreter's semantics (`0` is truthy) for negate, not
+- `UNOP` respects the retired oracle's semantics (`0` is truthy) for negate, not
   and bit-not
 - Comparisons with `EQ`/`NEQ`/`LT`/`LTE`/`GT`/`GTE` and the same ordering
-  relation as `Interpreter::lessThan`
+  relation the oracle used (`lessThan`)
 - `PRINT` uses `Value::toString()` (temporary; removed at the 6f gate, see
   §3.6)
 - Runtime errors through `RuntimeError`
@@ -324,9 +308,8 @@ previous one.
 - Call stack in the VM and registers per frame
 - `Bytecode` evolves into **per-function protos** with child protos (Lua style)
 - Closures with upvalues over `Cell` (locals are already cells)
-- Shared `Runtime` interface for the VM and the AST interpreter so that the
-  builtins (`map`, `filter`, `sort`) can invoke VM functions without
-  re-entering the AST
+- Shared `Runtime` interface so that the builtins (`map`, `filter`, `sort`) can
+  invoke VM functions without re-entering a separate engine
 - Arrays, maps, indexing, members, ranges, interpolation and `for-in`
 - `in` for arrays, maps, strings and ranges
 - Retire the temporary `PRINT` opcode: from 6c/6e every `print` arity compiles
@@ -727,6 +710,114 @@ Slices, each independently shippable:
       (`fyl2x`/`f2xm1`/`fscale`) does *not* reproduce it in the last digit, so
       matching `std::pow` needs a correctly rounded implementation (large).
       Deferred pending a fidelity decision.
+    - **7c.2a** (done) — globals. `GETGLOBAL`/`SETGLOBAL` lower to a flat
+      `AotValue` table the chunk allocates from the arena once at entry (its
+      base lives in r15, a callee-saved register no helper touches, so no
+      writable data segment is needed). The compiler names a global by a string
+      constant; the lowerer derives the name-to-slot map from the code in
+      first-assignment order, so the `Bytecode` structure and the `.jolc` format
+      are unchanged and the binary carries no global names. `jolt_init_globals`
+      clears every slot to nil (the hosted engine's "unset" state),
+      `jolt_global_set`/`jolt_global_get` are one shift and a store/load. A
+      `GETGLOBAL` of a name the chunk never assigns is a `LoweringError` naming
+      the variable -- the compile-time counterpart of the hosted engine's
+      run-time "undefined variable". `tests/lower_test.cpp` runs globals
+      (assign, reassign, distinct slots, a string global) and drives the real
+      compiler into the lowerer; `tests/freestanding_test.cpp` exercises the
+      table inside a real static ELF. Locals and calls stay for 7c.2b/7c.2c.
+    - **7c.2b** (done) — locals. `DECLLOCAL`/`GETLOCAL`/`SETLOCAL` lower to a
+      second region of the chunk frame, right below the register file: a local
+      is a plain 16-byte `AotValue` slot at `[rbp - 16*(numRegisters + b + 1)]`,
+      so `DECLLOCAL`/`SETLOCAL` are a tagged store and `GETLOCAL` a tagged load,
+      with no `Cell`, no arena and no helper. This is sound while closures are
+      absent: a local is only captured through `CLOSURE`, which is still a
+      `LoweringError` (7c.2c), so a captured local cannot reach the backend. The
+      hosted engine's "undefined local variable" check needs a null cell, which
+      a stack slot cannot express; a well-formed chunk (the compiler always
+      emits `DECLLOCAL` first) is assumed, and that is the one semantic
+      difference. The frame grows to `16*(numRegisters + numLocals)` bytes, still
+      a multiple of 16. Locals appear even without a call: a nested block or a
+      classic `for` header at the top level is a local scope, so `lower_test.cpp`
+      runs them directly and drives the real compiler into the lowerer (a nested
+      block, a `for` loop), and `freestanding_test.cpp` runs a locals chunk
+      through the real `_start`. Calls and closures stay for 7c.2c.
+    - **7c.2c.1** (done) — calls to bytecode functions. Every proto in the tree
+      is emitted as its own machine function with the lowering's own convention
+      `AotValue entry(AotValue* args, long argc, AotClosure* self)`, which the
+      `CALL` opcode dispatches through `jolt_call`. `CALL` passes the callee
+      (rdi:rsi), the argument count (rdx) and the address of its argument window
+      (rcx, a `lea` of `R[a+1]`); `jolt_call` checks the callee is a `Func` and
+      indirect-calls its code with (args, argc, self). The callee copies its
+      arguments into its own register file -- consecutive registers sit 16 bytes
+      *below* each other, so `args[i]` is at `args - 16*i` -- and checks `argc`
+      against its declared arity at run time (the compiler does not), reporting a
+      mismatch through `jolt_arity_error`. A non-function callee is
+      `jolt: cannot call a non-function value` (exit 70). `CLOSURE` allocates an
+      `AotClosure` (`code`, `arity`, `upvalueCount = 0`) with `jolt_closure`;
+      `RETURN` publishes `R[a]` and drops the frame. Globals are keyed by *name*,
+      not constant index, because each proto has its own constant pool: a
+      recursion (`fact` reading `fact`) resolves to one slot across protos. The
+      root frame saves rbx/r12-r15 and maps the arena; a function frame saves only
+      rbp, because the arena cursor/end (r13/r14) and the global base (r15) are
+      the program's state, not the call's -- an allocation inside a function must
+      advance the shared cursor. Covered by `tests/lower_test.cpp` (add, `fact`
+      recursion, mutual recursion, a capture-free lambda) and
+      `tests/freestanding_test.cpp` (a call through the real `_start` and the
+      non-function error).
+    - **7c.2c.2** (done) — closures with upvalues. A local a child proto
+      captures lives in a shared *cell* (a 16-byte `AotValue` in the arena)
+      instead of an inline frame slot, so the closure and the defining frame
+      mutate the same variable, exactly like the hosted engine's `Cell`. A slot
+      no child captures stays inline, so an ordinary local still costs no
+      allocation. `jolt_cell_new` allocates the cell; `DECLLOCAL` allocates a
+      fresh cell and stores the value, `SETLOCAL`/`GETLOCAL` store/load through
+      it, and a plain slot keeps the direct 16-byte store/load. `jolt_closure`
+      now takes `(code, arity, upvalueCount)` and reserves the capture slots;
+      the lowering writes each captured cell pointer with a plain store, reading
+      it from a local slot of this frame or, for a re-exported capture, from this
+      frame's own `self`. The frame reserves one extra slot below the locals for
+      the `AotClosure*` (`self`, passed in rdx) that `GETUPVAL`/`SETUPVAL` and a
+      nested `CLOSURE` resolve through. A frame no longer saves the arena state:
+      the root owns rbx/r12-r15, a function frame saves only rbp. Covered by
+      `tests/lower_test.cpp` (escaping closure, a shared-cell counter, two
+      closures over one variable, nested capture through two frames, a captured
+      parameter, creation-time independence) and `tests/freestanding_test.cpp`
+      (a captured local read through the real `_start`).
+    - **7c.2d** (done) — the `print`/`write`/`eprint` builtins. The backend had
+      no builtins, so a call to `print` was a lowering error ("global 'print'
+      is read but never assigned") and a compiled binary could not print. The
+      lowering now seeds each builtin the program reads as an `AotClosure` in
+      its global slot, so a `CALL` reaches it through the ordinary `jolt_call`
+      path. A builtin is a machine-code function with the proto convention
+      `AotValue entry(AotValue* args, long argc, AotClosure* self)`; it joins
+      its arguments with single spaces, `print`/`eprint` add a trailing newline
+      (`write` does not) and `eprint` writes to stderr. The printer is factored
+      into one core parameterised by fd and newline. Covered by
+      `tests/lower_test.cpp` (a `print` call lowers and returns nil) and
+      `tests/freestanding_test.cpp` (a compiled program prints through `print`
+      and `write` under the real `_start`).
+    - **7c.3** (done) — collections and `for-in`. `NEWTABLE` allocates an array
+      (`c == 0`) or a map (`c == 1`) header in the arena; `GETTABLE`/`SETTABLE`
+      cover both the dynamic-index form (`R[b][R[c]]`) and the constant-member
+      form (`R[b].name`, the name encoded as `-c - 1`) through `jolt_table_get`/
+      `jolt_member_get` and their setters, mirroring `ops::indexGet`/
+      `ops::memberGet` (negative array indices from the end, appending at the
+      length, maps keyed by string with content comparison via `jolt_str_eq`).
+      `IN` lowers to `jolt_contains` (array value equality through
+      `jolt_compare`, map keys, string substrings) and `ITER` to
+      `jolt_iter_next`, which advances a `for-in` cursor over an array, a map's
+      keys or a string's UTF-8 code points; the key/value form (`for k, v in
+      map`) lowers to a call to the hidden `$mapValue` builtin, which the chunk
+      seeds like `print`. Growth goes through a shared
+      `jolt_block_ensure` (next power-of-two capacity, arena copy). Printing a
+      container uses a recursive `jolt_print_repr` (`[1, 2]`, `{"k": 1}`,
+      quoted strings, `<fn>`), depth-capped at 8 so a self-referential
+      structure prints `...` instead of recursing forever; nested strings reuse
+      the interpreter's escapes through `jolt_print_str_escaped`. Covered by
+      `tests/freestanding_test.cpp` (arrays, maps, indexing, `.length`, `in`,
+      `for-in` and container printing under the real `_start`) and
+      `tests/lower_test.cpp` (the collection opcodes now lower instead of
+      raising). Still missing: `jolt build` (7d).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -758,8 +849,16 @@ Slices, each independently shippable:
   comparison and truthiness helpers plus the int/bool/nil printer are emitted
   as machine code into the program's own buffer. 7c.1b adds floats and doubles
   (`Double` tag, `jolt_arith`/`jolt_shift`/`jolt_pow`), with the int/float/double
-  promotion of the hosted engine. Still missing: strings (7c.1c), the
-  embedded runtime calls (7c.2/7c.3) and `jolt build` (7d).
+  promotion of the hosted engine. 7c.2c.1 lowers calls: each proto becomes a
+  machine function, `CALL` dispatches it through `jolt_call` and `CLOSURE`
+  allocates an `AotClosure` with `jolt_closure`. 7c.2c.2 adds captured cells:
+  a captured local lives in a shared arena cell, `jolt_cell_new` allocates it,
+  `GETUPVAL`/`SETUPVAL` and nested `CLOSURE`s resolve through the frame's saved
+  `self`, and `jolt_closure` reserves the capture slots the lowering fills.
+  7c.2d seeds the `print`/`write`/`eprint` builtins as globals, so a compiled
+  program can print. 7c.3 lowers collections: arrays and maps over arena
+  headers, indexing/membership/`for-in` through the collection helpers and a
+  recursive container printer. Still missing: `jolt build` (7d).
 
 ### Post-1.0 — UI library
 
@@ -796,17 +895,18 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a and 7c.1b done; 7c.1c+, 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3 done; 7d pending)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
-**12 bugs fixed** (see `docs/BUGS.md` for the full list).
+Bugs are tracked in the git history and the regression tests; there is no
+separate bug log file.
 
 Distribution model: musl static by default (self-contained, no runtime).
 Optional: newlib (bare-metal), freestanding (no libc).
 
-VM = dev engine only. The AST interpreter leaves the product path at the 6f
-parity gate and is deleted in PHASE 4.
+VM = dev engine only. The AST interpreter was retired at the 6f parity gate
+and is no longer in the tree.
 
 
 ---
@@ -926,15 +1026,15 @@ end-user binary (`hello.exe`) contains none of them.**
 
 ## 10. Historical context
 
-- There is a **previous AST interpreter** (MiniLang, renamed Jolt) that is
-  kept only as a **differential test oracle** while parity with the VM is
-  being reached.
+- There was a **previous AST interpreter** (MiniLang, renamed Jolt) used as a
+  **differential test oracle** while parity with the VM was being reached. It
+  has been **retired**: the tree no longer contains `interpreter.cpp`/`.h`.
 - The product model is Lua/LuaJIT's: source → lexer → parser → AST → compiler
   → bytecode → VM. The AST is **not executed** in production.
-- The "dual" approach (AST interpreter as an alternative engine) is **NOT**
-  preserved. Once the VM covers the language (PHASE 4), the AST interpreter
-  leaves the binary and stays only in tests, and is retired afterwards.
-- The phases run in order: 5 ✅, 6, then 4 (VM as the dev engine) and 7 (AOT
+- The "dual" approach (AST interpreter as an alternative engine) was **NOT**
+  preserved. Once the VM covered the language (PHASE 4), the AST interpreter
+  left the binary and was retired.
+- The phases ran in order: 5 ✅, 6, then 4 (VM as the dev engine) and 7 (AOT
   native backend).
 
 ---

@@ -2,7 +2,7 @@
 
 Language version: **0.1.0**
 
-This guide describes the syntax and semantics of Jolt as implemented by the interpreter included in this repository.
+This guide describes the syntax and semantics of Jolt as implemented by the compiler and the register-based VM included in this repository.
 
 ## Table of contents
 
@@ -99,7 +99,12 @@ The convention is `camelCase` for variables, functions and methods, and the stan
 | Scientific notation | `1.5e3`, `2E-2` | `1500.0`, `0.02` |
 
 - Integers are 64-bit signed. An out-of-range literal is a compile error.
-- The `-` sign is a unary operator, not part of the literal.
+- The `-` sign is a unary operator, not part of the literal. `-9223372036854775808`
+  is therefore the one literal whose magnitude (2^63) does not fit a positive
+  `int`: the lexer reads the digits as unsigned, and the parser accepts the value
+  only directly under a unary minus. Written bare, in any base
+  (`9223372036854775808`, `0x8000000000000000`), it is the usual out-of-range
+  error.
 - A dot is only part of a float when followed by a digit: `1.` is not a valid float; write `1.0`.
 - Underscores are ignored inside digits: `1_0` is equivalent to `10`.
 - A fractional literal with no suffix is a `double` (binary64); a trailing
@@ -259,9 +264,11 @@ const MAX = 10 * 2;    // immutable binding folded at compile time
 An optional **type annotation** may follow the name: `let x: int = 5`. See
 [Type annotations](#46-type-annotations) below.
 
-`var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected (at runtime in the interpreter, at compile time in the bytecode compiler). Use `let` by default for values that never change, and `var` only when reassignment is needed.
+`var` declares a mutable variable. `let` declares an immutable binding: assigning another value to it later is rejected at compile time by the bytecode compiler. Use `let` by default for values that never change, and `var` only when reassignment is needed.
 
 `const` is also immutable, but its value must be a compile-time constant expression: literals, arithmetic (`+ - * / %`), unary minus, comparisons and boolean operators over other constants, and references to other top-level `const` names (including forward references, which the parser resolves to a fixed point). The parser folds each `const` initializer to a literal before the program runs, so uses of the name cost nothing at runtime. If an initializer cannot be folded (for example it calls a function or reads a `var`), the parser reports an error instead of silently falling back to runtime evaluation. Nested blocks fold their `const`s eagerly as well.
+
+An integer `const` initializer whose folded value does not fit an `int` (`+ - *` or `**`) still wraps around — the same result the expression would produce at run time — but the parser prints a **warning** naming the operator, so a value that is almost always a mistake does not pass unnoticed. It is a warning and not an error because the program is valid and would run. A shift that drops high bits (`1 << 63`) is not an arithmetic overflow and does not warn.
 
 ### 4.2 Block scope
 
@@ -1365,7 +1372,7 @@ print(example()()); // 2
 
 ### 7.5 Recursion and depth
 
-Recursion works both in declared functions and in named lambdas. The interpreter limits the call depth to **2000**; exceeding it produces a runtime error.
+Recursion works both in declared functions and in named lambdas. The runtime limits the call depth to **2000**; exceeding it produces a runtime error.
 
 ```jolt
 fn factorial(n) {
@@ -1905,7 +1912,7 @@ are never a machine address the program can dereference.
 Jolt distinguishes two kinds of errors:
 
 - **Compile error**: detected by the lexer or the parser (for example, a missing `;` or a malformed literal).
-- **Runtime error**: detected by the interpreter (for example, an undefined variable, a division by zero or an out-of-range index).
+- **Runtime error**: detected while the program runs (for example, an undefined variable, a division by zero or an out-of-range index).
 
 Both are shown with the location and a code snippet:
 
@@ -1920,6 +1927,18 @@ Runtime errors also include a stack trace with the active functions. A deep
 call chain (for example an accidental infinite recursion) builds thousands of
 frames, so the trace prints the outermost ten and the innermost ten and elides
 the middle with a `... N more ...` line; a short trace is printed in full.
+
+A read of an undefined name suggests the full path when the name exists as a
+member of a visible global table. `import std.math;` binds the namespace
+`std.math`, not a bare `math` (see §18), so the common mistake of dropping the
+root is caught with the fix spelled out:
+
+```text
+script.jolt:2:7: runtime error: undefined variable 'math' (did you mean 'std.math'?)
+  |
+2 | print(math.sqrt(4));
+  |       ^
+```
 
 A third kind of diagnostic is non-fatal: a **warning**. A warning is reported
 with the same snippet form but does not stop the program, which still compiles
@@ -2175,7 +2194,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 - `upper` and `lower` only work with ASCII.
 - Maximum call depth: 2000.
 - Source nesting is bounded: deeply nested expressions and statements (nested parentheses, arrays, blocks, string interpolation, or a very long operator chain) are rejected at compile time with `expression nesting is too deep` instead of overflowing the stack. The limit is far above any nesting a real program reaches.
-- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed. Tearing down a deeply nested container (for example `a = [a]` in a loop) is iterative, so a deep structure is freed without overflowing the stack.
+- Memory is managed with reference counting plus a cycle collector. Unreachable cycles (a function stored in the scope it closes over, an array that contains itself, **a bound method stored in its own receiver such as `a.f = a.push`**) are reclaimed. Destruction is deferred to an explicit work list, so a deeply nested structure — a container chain (`a = [a]` in a loop), a closure chain (each closure capturing the previous one) or any mix — is freed with a constant C++ stack depth instead of overflowing the stack.
 - Sorting with custom comparators relies on the comparator defining a strict order.
 
 ---

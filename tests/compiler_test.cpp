@@ -8,6 +8,7 @@
 #endif
 
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -58,6 +59,14 @@ std::vector<Warning> compileWarnings(const std::string& source) {
   Compiler compiler;
   compiler.compile(program);
   return compiler.warnings();
+}
+
+// Parses `source` and returns the parser's fold-time warnings (const overflow).
+std::vector<Warning> parseWarnings(const std::string& source) {
+  auto tokens = lex(source);
+  Parser parser(std::move(tokens), "<compiler-test>");
+  parser.parseProgram();
+  return parser.warnings();
 }
 
 void testArithmeticAndPrint() {
@@ -1078,6 +1087,69 @@ void testFloatLiteralRange() {
   expectCompileError("let a = 1e-320f;\n", "float literal underflow to zero");
 }
 
+void testIntegerLiteralAtInt64Min() {
+  // `-9223372036854775808` is the smallest `int`, but its magnitude (2^63) has
+  // no positive 64-bit representation. The lexer flags such a literal and the
+  // parser accepts it only directly under a unary minus.
+  expectCompiles("let a = -9223372036854775808;\n");
+  expectCompiles("let a = -0x8000000000000000;\n");
+  expectCompiles("let a = - 9223372036854775808;\n");
+  // The bare magnitude is out of range, in any base.
+  expectCompileError("let a = 9223372036854775808;\n", "bare 2^63 decimal");
+  expectCompileError("let a = 0x8000000000000000;\n", "bare 2^63 hex");
+  expectCompileError("let a = 0b1000000000000000000000000000000000000000000000000000000000000000;\n",
+                     "bare 2^63 binary");
+  // A magnitude above 2^63 overflows the unsigned read too.
+  expectCompileError("let a = -9223372036854775809;\n", "magnitude above 2^63");
+  expectCompileError("let a = 0xFFFFFFFFFFFFFFFF;\n", "hex magnitude above 2^63");
+
+  // `**` and the postfix operators bind tighter than unary minus, so the
+  // literal is not the direct operand there and the bare magnitude is rejected
+  // with the range error (not a stray syntax error).
+  expectCompileError("let a = -9223372036854775808 ** 2;\n", "2^63 under **");
+  expectCompileError("let a = -9223372036854775808!!;\n", "2^63 under postfix !!");
+  // A parenthesized literal is an ordinary operand again.
+  expectCompiles("let a = (-9223372036854775808) ** 2;\n");
+
+  // The folded value is exactly INT64_MIN, and it is a plain `int`.
+  Bytecode bc = compileSource("let a = -9223372036854775808;\n");
+  bool found = false;
+  for (const Value& constant : bc.constants) {
+    if (constant.isInt() && constant.asInt() == INT64_MIN) found = true;
+  }
+  assert(found);
+}
+
+void testConstOverflowWarning() {
+  // A const initializer that overflows wraps around (like the runtime) but
+  // raises a non-fatal warning instead of failing silently.
+  auto warns = [](const std::string& source) {
+    return !parseWarnings(source).empty();
+  };
+  assert(warns("const x = 9223372036854775807 + 1;\n"));
+  assert(warns("const x = 9223372036854775807 * 2;\n"));
+  assert(warns("const x = 2 ** 64;\n"));
+  assert(warns("const x = 3 ** 40;\n"));
+  assert(warns("const x = -(-9223372036854775807 - 1);\n"));
+  // Folding to a value that does fit stays silent, even when intermediate
+  // operands are large, and a plain literal never warns.
+  assert(!warns("const x = 10 * 2;\n"));
+  assert(!warns("const x = 2 ** 62;\n"));
+  assert(!warns("const x = 9223372036854775807;\n"));
+  assert(!warns("const x = 0 - 9223372036854775807;\n"));
+  // A shift drops high bits by design and is not an arithmetic overflow.
+  assert(!warns("const x = 1 << 63;\n"));
+
+  // The warning does not stop the program: the const still compiles and its
+  // value matches the wrapped result the same expression yields at run time.
+  Bytecode bc = compileSource("const x = 2 ** 64;\nlet y = x;\n");
+  bool found = false;
+  for (const Value& constant : bc.constants) {
+    if (constant.isInt() && constant.asInt() == 0) found = true;
+  }
+  assert(found);
+}
+
 void testLogicalAssignmentBytecode() {
   // `x ??= v` (PHASE 6.5 operators, compound form): read the target once,
   // compare against nil with NEQ, and short-circuit with JMP_IF_TRUE. No new
@@ -1609,6 +1681,8 @@ int main() {
   testMustUse();
   testTypeMismatchErrors();
   testFloatLiteralRange();
+  testIntegerLiteralAtInt64Min();
+  testConstOverflowWarning();
   testNullCoalesceBytecode();
   testLogicalAssignmentBytecode();
   testLogicalAssignmentErrors();

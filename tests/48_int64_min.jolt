@@ -1,0 +1,31 @@
+// `-9223372036854775808` (INT64_MIN) could not be written as a literal: its
+// magnitude is 2^63, which does not fit a positive 64-bit integer, so the lexer
+// rejected it with "integer literal is out of range". The lexer now reads the
+// magnitude as unsigned and flags the exact 2^63 case, and the parser accepts
+// the flagged literal only directly under a unary minus.
+
+assertEq(-9223372036854775808, -9223372036854775807 - 1);
+assertEq(type(-9223372036854775808), "int");
+
+// The same magnitude in another base, and with a space after the minus.
+assertEq(-0x8000000000000000, -9223372036854775807 - 1);
+assertEq(- 9223372036854775808, -9223372036854775807 - 1);
+
+// The neighbours are ordinary literals.
+assertEq(-9223372036854775807, -9223372036854775807);
+assertEq(9223372036854775807, 9223372036854775807);
+
+// `**` binds tighter than unary minus, so `-2^63 ** 2` is `-(2^63 ** 2)` and
+// the bare magnitude is out of range (see errors/int64_min_bare_pow.jolt).
+// Parenthesized, the literal is an ordinary operand again.
+assertEq((-9223372036854775808) ** 2, 0);
+
+// Arithmetic that lands on INT64_MIN keeps working (and folds identically).
+assertEq(-9223372036854775807 - 1, -9223372036854775808);
+assertEq(-(-9223372036854775808), -9223372036854775808);
+
+// A `const` that folds to INT64_MIN is usable.
+const MIN = -9223372036854775808;
+assertEq(MIN, -9223372036854775807 - 1);
+
+print("int64 min ok");

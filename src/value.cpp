@@ -327,72 +327,29 @@ MapPtr makeMap() { return makeRef<Map>(); }
 
 namespace {
 
-// Frees a chain of nested containers iteratively. `Array` and `Map` own their
-// children by `Value`, so the compiler-generated destructor would recurse one
-// C++ frame per nesting level; a structure built at run time (`a = [a]` in a
-// loop) can be arbitrarily deep and overflow the stack. Draining an explicit
-// work list instead keeps the C++ stack depth independent of the nesting.
-//
-// A container still owned from elsewhere (its count is above the single
-// reference the work list holds) is left alone, exactly as reference counting
-// would: only a container this work list is the sole owner of is emptied.
-void teardownContainers(std::vector<ArrayPtr> arrays, std::vector<MapPtr> maps) {
-  while (!arrays.empty() || !maps.empty()) {
-    if (!arrays.empty()) {
-      ArrayPtr node = std::move(arrays.back());
-      arrays.pop_back();
-      if (node->refs != 1) continue;
-      std::vector<Value> items;
-      items.swap(node->items);
-      for (Value& item : items) {
-        if (item.isArray()) arrays.push_back(item.arrayPtr());
-        else if (item.isMap()) maps.push_back(item.mapPtr());
-      }
-    } else {
-      MapPtr node = std::move(maps.back());
-      maps.pop_back();
-      if (node->refs != 1) continue;
-      std::vector<std::pair<std::string, Value>> entries;
-      entries.swap(node->entries);
-      for (auto& entry : entries) {
-        if (entry.second.isArray()) arrays.push_back(entry.second.arrayPtr());
-        else if (entry.second.isMap()) maps.push_back(entry.second.mapPtr());
-      }
-    }
-  }
-}
+// Objects whose last strong reference just dropped and that are waiting to be
+// destroyed. The list is intrusive (through `RefCounted::destroyNext`), so
+// deferring a destruction costs no allocation and cannot throw.
+RefCounted* pendingDestruction = nullptr;
+bool destroying = false;
 
 }  // namespace
 
-Array::~Array() {
-  std::vector<ArrayPtr> arrays;
-  std::vector<MapPtr> maps;
-  {
-    // Move the children out and drop this array's own references before
-    // draining, so a child only this array owned reaches the work list holding
-    // its last reference.
-    std::vector<Value> items;
-    items.swap(this->items);
-    for (Value& item : items) {
-      if (item.isArray()) arrays.push_back(item.arrayPtr());
-      else if (item.isMap()) maps.push_back(item.mapPtr());
-    }
+void destroyRefCounted(RefCounted* object) noexcept {
+  object->destroyNext = pendingDestruction;
+  pendingDestruction = object;
+  // Only the outermost call drains the list. A destruction triggered while
+  // draining — a member dropping its own last reference — just enqueues, so the
+  // C++ stack depth does not grow with the depth of the chain.
+  if (destroying) return;
+  destroying = true;
+  while (pendingDestruction != nullptr) {
+    RefCounted* node = pendingDestruction;
+    pendingDestruction = node->destroyNext;
+    node->destroyNext = nullptr;
+    node->destroy(node);
   }
-  teardownContainers(std::move(arrays), std::move(maps));
-}
-
-Map::~Map() {
-  std::vector<ArrayPtr> arrays;
-  std::vector<MapPtr> maps;
-  {
-    std::vector<std::pair<std::string, Value>> entries;
-    entries.swap(this->entries);
-    for (auto& entry : entries) {
-      if (entry.second.isArray()) arrays.push_back(entry.second.arrayPtr());
-      else if (entry.second.isMap()) maps.push_back(entry.second.mapPtr());
-    }
-  }
-  teardownContainers(std::move(arrays), std::move(maps));
+  destroying = false;
 }
 
 Value makeError(std::string message, int64_t code) {

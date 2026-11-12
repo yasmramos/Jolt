@@ -1,13 +1,16 @@
-# Jolt — Project Analysis and Improvement Plan
+# Jolt — Project Analysis
 
-Date: 2026-10-31 · Branch: `develop` · Base commit analyzed: `4dde99a` (merge of `origin/main`)
+Date: 2026-11-08 · Branch: `develop` · Language version: **0.1.0**
 
-This analysis is based on the **actual code in the repository** (~6,900 lines of C++17),
-not on assumptions. The project deliberately mirrors the Lua / LuaJIT pipeline:
-`source → lexer → parser → AST → compiler → register-based bytecode → VM`.
+This analysis reflects the **actual code in the repository** (about 12,300
+lines of engine C++ under `src/` and `include/`, plus about 6,300 lines for the
+AOT backend under `src/native/` and `include/native/`). The project mirrors the
+Lua / LuaJIT pipeline: `source → lexer → parser → AST → compiler →
+register-based bytecode → VM`, with an AOT backend in progress (PHASE 7).
 
-Everything below was verified by building (`sh build.sh`) and running the full test
-suite (`sh tests/run.sh`: 17/17 passing) plus targeted probes described inline.
+It supersedes the 2026-10-31 analysis, which described a state the tree has
+since left behind (a tree-walking AST interpreter as the production engine, 17
+tests and no CI).
 
 ---
 
@@ -15,139 +18,122 @@ suite (`sh tests/run.sh`: 17/17 passing) plus targeted probes described inline.
 
 | Area | Status | Evidence |
 |------|--------|----------|
-| Lexer / Parser / AST | Working, tested | `src/lexer.cpp` (504 L), `src/parser.cpp` (567 L), `tests/01–07*.jolt` |
-| Compiler AST→bytecode | Phases 1–5 done | `src/compiler.cpp` (633 L): literals, globals/locals, control flow, bitwise, short-circuit |
-| Register-based VM | Phases 1–5 done | `src/vm.cpp` (400 L), `include/bytecode.h` (~40 opcodes as designed) |
-| AST interpreter | Full language, still the production engine | `src/interpreter.cpp` (746 L) + `src/builtins.cpp` (1,096 L); `main.cpp` uses `Interpreter` directly |
-| Phase 6 (functions/collections in VM) | **Not started** | No `CALL`/`RETURN`/`CLOSURE`/`GETUPVAL` anywhere in `include/` or `src/vm.cpp` |
-| Tests | 17 `.jolt` tests + 2 C++ suites | `tests/run.sh`, `run_vm.sh` (584 L), `run_compiler.sh` (443 L) — but see §3.4 |
-| CI | None | No `.github/workflows` |
+| Lexer / Parser / AST | Working, tested | `src/lexer.cpp`, `src/parser.cpp` (1,742 L), `src/ast.h` |
+| Compiler AST→bytecode | PHASE 6.7 complete | `src/compiler.cpp` (2,853 L): literals, locals/globals, control flow, closures, collections, types, modules |
+| Register-based VM | PHASE 6 complete | `src/vm.cpp` (815 L); **39/40 opcodes** (`static_assert(kOpcodeCount <= 40)`) |
+| AST interpreter | **Retired** | no `src/interpreter.cpp`; the VM is the only engine |
+| Shared runtime | Working | `src/value.cpp`, `src/ops.cpp` (operators), `src/builtins.cpp` (1,524 L), `src/env.cpp`, `src/gc.cpp` |
+| AOT backend | PHASE 7 in progress (7a, 7b, 7c.0–7c.2) | `src/native/*` (codegen, lower, runtime, dtoa, elf, pe, arena, freestanding platform, entry) |
+| Tests | 50 `.jolt` + 100 error `.jolt` + 12 C++ suites | `tests/`, `tests/errors/`, wired into CTest |
+| CI | Two workflows | `.github/workflows/{cmake-multi-platform,artifacts}.yml` (Linux, Windows, macOS) |
 
-Benchmarks run on this machine (interpreter path, `-O2`):
-`fib(24)` recursive: **0.48 s**; array push+sum 200k: **0.10 s**. These numbers are the
-baseline any future VM/JIT work must beat — and they also show that today's bottleneck is
-the tree-walking interpreter, which reinforces the plan to finish the VM.
+Build (`sh build.sh`) and the full CTest suite run clean on Linux x86-64; the
+only local failure is `32_ffi_callback.jolt`, skipped by CMake when `libffi`
+is not installed (see §3.1).
 
 ---
 
-## 2. High-priority findings (correctness / architecture)
+## 2. Findings
 
-### 2.1 Reference-counting cycle leak (latent, becomes critical with closures)
-`RefCounted` has a **virtual destructor** (`src/value.h:28`), so plain `Ref<T>` members do
-*not* propagate destruction through cycles. A self-referencing container leaks:
+Each finding records its current status, verified against the tree.
 
-```jolt
-let a = [];
-a.push(a);   // refs never reach 0 → memory leak
-```
+### 2.1 Reference-counting cycle leak — **resolved**
+The old report feared that `RefCounted`'s virtual destructor would leave cycles
+uncollected. The design changed: `RefCounted` no longer has a virtual
+destructor; it stores a per-type `destroy` hook and objects are freed through
+`destroyRefCounted`, which walks a work list iteratively so a deep structure is
+released with constant C++ stack depth. A cycle collector (`src/gc.cpp`)
+reclaims the cycles counting cannot, and `Cell`s register lazily. Covered by
+`tests/11_cycles.jolt` and the `gc_test`/`vm_test` suites.
 
-Today the impact is small because scopes die per program run, but once phase 6 adds
-long-lived closures and REPL sessions, leaks accumulate.
+### 2.2 Duplicated arithmetic semantics — **resolved**
+Arithmetic now lives in one place, `src/ops.cpp` (`intPow`, `add`, comparisons,
+…), shared by the VM and the builtins. The retired interpreter's copy is gone.
+Integer `const`-fold overflow is now reported with a warning instead of wrapping
+silently (see `docs/language.md` §4.1).
 
-**Recommendation:** remove the virtual destructor (each concrete type knows how to destroy
-itself via a function pointer stored once per object, or template the release path), and/or
-introduce a `WeakRef` for parent/back pointers. This matches Lua's design where GC handles
-cycles outright; if a cycle collector is planned later, document that refcounting only
-covers the acyclic case now.
+### 2.3 Integer-overflow semantics — **documented, bounded**
+`intPow` wraps through `uint64_t` (defined behavior). The negative-exponent
+"huge loop count" landmine the old report flagged is not reachable: `intPow` is
+only called when the integer exponent is `>= 0`; a negative exponent takes the
+`std::pow` float path (`src/ops.cpp`). The chosen semantics (Jolt wraps silently
+on `int` overflow; `const` folding warns) are documented.
 
-### 2.2 Duplicated arithmetic semantics between interpreter and VM
-`intPow` exists twice, byte-for-byte (`src/interpreter.cpp:58` and `src/vm.cpp:39`), and
-`vm.cpp` comments say its helpers "replicate interpreter semantics". Replication-by-comment
-drifts silently. The differential oracle idea is right, but it needs teeth:
+### 2.4 Braceless single-statement bodies — **resolved**
+`if`, `while`, `for` and `for-in` accept a block or a single statement without
+braces (the brace-less body is wrapped in a block, so bytecode and scoping
+match). `switch` arms still require braces. See `docs/language.md` §6 and
+`tests/38_braceless_bodies.jolt`.
 
-**Recommendation:** extract shared semantics into one header (`src/numeric_ops.h`) used by
-both engines, *and* add a randomized differential fuzz test (§3.5) so any divergence fails CI.
-
-### 2.3 Undefined-behavior risk in integer paths
-The int fast-paths intentionally wrap via `uint64_t` casts (defined behavior), which is good,
-but `intPow(base, negative)` relies on `(uint64_t)exponent` wrapping to a huge loop count —
-currently unreachable from the VM/interpreter call sites, yet it is a landmine. Also
-`Value(std::fmod(...))` etc. should be guarded against NaN/infinity printing consistency.
-Document the chosen overflow semantics (Lua errors on float→int misuse; Jolt wraps silently).
-
-### 2.4 Grammar friction: no braceless single-statement bodies
-`if (cond) return x;` fails to parse ("expected '{'"). Every branch/example must use braces.
-Either support expression-bodied statements (like Lua's absence of braces entirely) or keep
-braces mandatory — but then say so in `docs/language.md` and emit a *targeted* diagnostic
-("did you mean `{ ... }`?") instead of the generic "expected '{'".
-
-### 2.5 API inconsistency for collections
-Maps expose method syntax `m.keys() / m.get(k) / m.set(k,v)` but have **no** `m.len()` /
-`m.size()` (only global `len(m)` works); arrays mix `push` with global `len`. One convention
-(method-first, like Lua's `#t` + methods, or builtin-first) should be picked and completed.
+### 2.5 Collection API consistency — **open (minor)**
+Maps expose `keys`/`values`/`entries`/`has`/`get`/`set`/`delete` and arrays
+expose `push`/`pop`/`shift`/`unshift`/`insert`/`removeAt`/`slice`/`concat`/
+`join`/`sort`/`sorted`/`reversed`/`contains`/`indexOf`/`map`/`filter`/`reduce`/
+`each`/`find`/`any`/`all`. Neither exposes a `len`/`size`/`length` method; the
+global `len(x)` is the only length accessor. Picking one convention (for example
+a `len` method mirroring the global) and applying it to both types would remove
+the asymmetry. Low priority.
 
 ---
 
 ## 3. Medium-priority improvements
 
-### 3.1 Finish phase 6 before anything else (per AGENT.md ordering)
-Scope already defined in AGENT.md §PHASE 6: protos per function, `CALL/RETURN/CLOSURE/
-GETUPVAL/SETUPVAL`, per-frame registers, upvalue lists with open→closed migration (Lua 5.4
-model), `Runtime` interface so builtins can call VM functions without re-entering the AST.
-Design notes worth adopting from Lua now, while cheap:
-- Store upvalues as a single linked/open list per closure (`lua_UpVal` style) rather than
-  vectors of cells copied at closure creation — avoids O(n²) capture cost.
-- Keep argument count / varargs in the proto header (`numparams`, `is_vararg`) to make
-  `wrong_argument_count` a VM-level check, matching existing interpreter error text.
-- Reserve opcode space for `NEWTABLE`/`GETTABLE`/`SETTABLE`/`ITER`-style ops *now* in the
-  enum comments so the ~40-opcode budget isn't blown when collections land.
+### 3.1 `libffi`-gated test noise outside CI
+`tests/run.sh` runs every `.jolt` file and fails `32_ffi_callback.jolt` when
+`libffi` is not installed, while CMake/CTest *skips* that test in the same
+situation. The result is a green CI and a red local run for the same tree.
+Teaching `run.sh` the same gate (skip when `libffi` is absent) removes the
+papercut. This is the most actionable item in this document.
 
-### 3.2 Then phase 4: make the VM the only engine
-`main.cpp` still runs everything through `Interpreter` (REPL included). Once parity is
-proven by the differential tests, flip `execute()`/`repl()` to compile→VM, keep `--ast`
-temporarily behind a flag, then delete the interpreter from the binary (AGENT.md §10).
+### 3.2 Benchmarks
+The old report quoted `fib(24)` timings with no harness in the tree. There is no
+`benchmarks/` directory. A minimal, reproducible benchmark script (recursion,
+array push+sum, string building) gives a baseline for the VM and a target for
+the AOT backend. Medium priority.
 
 ### 3.3 Instruction encoding
-`Instruction{op,a,b,c,jump}` = 20 bytes with an always-present `jump`. Lua packs everything
-into one 32-bit word (`iABC/iAsBx/iAx`). Suggested middle ground for Jolt: a tagged union or
-two variants (`ABC` / `sJmp`) cutting size ~2× and removing the dead field; improves fetch
-density before any native-compilation work (phase 7).
+`Instruction` is a flat struct (`op, a, b, c, jump, line, col`, 28 bytes) with
+an always-present `jump`. Lua packs an instruction into one 32-bit word. A
+tagged-union or two-variant encoding would cut size and improve fetch density
+before the native backend leans on it. This changes the bytecode contract, so it
+is a deliberate PHASE-level decision, not a drive-by edit.
 
-### 3.4 Wire the C++ test suites into the main runner
-`tests/run.sh` executes only `.jolt` files; `run_vm.sh` and `run_compiler.sh` exist but are
-never invoked together, and nothing checks examples. Add `tests/run_all.sh` (build + 3 suites
-+ examples smoke) and make it the single entry point.
+### 3.4 Header placement
+Public headers live in `include/` (`bytecode.h`, `compiler.h`, `ffi_*.h`,
+`platform*.h`, `vm.h`) while siblings (`value.h`, `lexer.h`, `parser.h`, …) live
+in `src/`. AGENT.md rule 7 says every new `.cpp` has its `.h` in `include/`.
+Consolidating the public headers in `include/` would make the rule uniform. Low
+priority; touches many includes.
 
-### 3.5 Differential fuzzing (the real value of keeping two engines)
-Generate random programs (same grammar subset both engines support), run interpreter vs VM,
-compare stdout/exit codes. This is exactly how the Lua team validated 5.4 and catches the
-§2.2 drift class permanently. Start with arithmetic/control-flow templates; extend after
-phase 6.
-
-### 3.6 CI
-Add GitHub Actions: linux (gcc+clang) build, `run_all.sh`, and ASan/UBSan variant. Cheap,
-catches the refcount bugs above immediately.
+### 3.5 CI hardening
+The two workflows build and test on three platforms. Adding an ASan/UBSan job
+would catch memory-safety regressions in the refcount/GC paths early. Medium
+priority.
 
 ---
 
 ## 4. Low-priority / hygiene
 
-1. **Language policy conflict.** Repo rules (`CONVENTIONS.md`, user instruction) require
-   code/comments/docs in **English**, but `AGENT.md`, README and `docs/language.md` are in
-   Spanish and AGENT.md rule 6 even mandates Spanish comments. Decide: translate AGENT.md
-   and inline comments progressively (start with touched files), or amend the convention.
-   Until resolved, new code follows English.
-2. **Executable bits lost.** `build.sh`/`tests/*.sh` ship non-executable (`./build.sh` →
-   Permission denied). Fix with `git update-index --chmod=+x`.
-3. **Header placement split.** `vm.h`/`bytecode.h`/`compiler.h` live in `include/` while
-   their siblings (`value.h`, `lexer.h`) live in `src/`; AGENT.md rule 7 says one place.
-   Consolidate public headers in `include/`.
-4. **Stack-trace flood.** Infinite recursion prints ~2,000 identical frames; cap the trace
-   (e.g. first/last 10 + "... N more") as Lua does.
-5. **Version/build metadata.** `kVersion` hardcoded in `main.cpp`; derive from CMake
-   project version to avoid drift.
+1. **Version metadata.** `kVersion` is a string literal in `src/main.cpp` and
+   `CMakeLists.txt` declares `project(jolt VERSION 0.1.0)`. Generating the
+   header from CMake avoids drift. Low priority.
+2. **Stack-trace flood — resolved.** `src/diagnostic.cpp` caps the trace to a
+   head and a tail with an "… N more …" line.
+3. **Executable bits — resolved.** `build.sh` and `tests/*.sh` are executable in
+   the index.
+4. **Language policy — resolved.** All code, comments and docs are English
+   (AGENT.md rule 6).
 
 ---
 
-## 5. Suggested slice order (each independently shippable)
+## 5. Suggested order (each independently shippable)
 
-1. `fix(memory)`: non-virtual RefCounted destruction (or weak refs) + regression test. *(§2.1)*
-2. `refactor(numeric)`: shared `numeric_ops.h` + differential fuzz harness v1. *(§2.2, §3.5)*
-3. `chore(repo)`: exec bits, CI workflow, `run_all.sh`, header consolidation. *(§3.4, §3.6, §4)*
-4. `feat(bytecode)`: compact instruction encoding + reserved collection opcodes. *(§3.3)*
-5. `feat(vm)`: phase 6 — protos, CALL/RETURN/CLOSURE/upvalues (split: calls → closures →
-   collections → for-in). *(§3.1)*
-6. `feat(cli)`: phase 4 — VM as sole engine, `--ast` oracle flag, persistent-VM REPL. *(§3.2)*
-7. Language/API cleanups: braceless bodies decision, map `len` consistency, trace cap. *(§2.4, §2.5, §4.4)*
+1. `fix(tests)`: gate `32_ffi_callback.jolt` on `libffi` in `tests/run.sh`. *(§3.1)*
+2. `chore(bench)`: add a benchmark harness and record a baseline. *(§3.2)*
+3. `ci`: add an ASan/UBSan job. *(§3.5)*
+4. `refactor(build)`: derive `kVersion` from the CMake project version. *(§4.1)*
+5. Collection-API consistency (`len` method) and header consolidation are
+   optional cleanups that touch the language surface or many includes; schedule
+   them deliberately. *(§2.5, §3.4)*
 
 Commits follow Conventional Commits in English (see `CONVENTIONS.md`).
