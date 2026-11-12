@@ -3043,6 +3043,348 @@ void emitRangeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLab
   emitFailCall(cg, fail, msgOom);
 }
 
+// `AotValue jolt_builtin_slice(AotValue* args, long argc, AotClosure* self)`: the
+// hidden `$slice` helper the compiler emits for `obj[start:end:step]` (PHASE
+// 7c.4d). It follows the hosted `$slice`: a bound is nil ("not given") or an
+// integer (negative counts from the end), and the selected indices follow
+// Python's rule -- a positive step walks `[from, to)` with the defaults
+// `0`/`length`, a negative step walks backwards with the defaults `length-1`/
+// `-1`, and both clamp to `[-1, length-1]` so a reverse slice never wraps. An
+// array slices by element; a string slices by UTF-8 code point. A start or end
+// that is neither nil nor an integer, a zero step and any other operand type
+// fail, each with its own message.
+void emitSliceBuiltin(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env,
+                      const DataBlob& msgSliceStart, const DataBlob& msgSliceEnd,
+                      const DataBlob& msgSliceStep, const DataBlob& msgSliceType) {
+  CodeGen::Label stepSet = cg.newLabel();
+  CodeGen::Label sliceArray = cg.newLabel();
+  CodeGen::Label sliceStr = cg.newLabel();
+  CodeGen::Label computeBounds = cg.newLabel();
+  CodeGen::Label negativeSetup = cg.newLabel();
+  CodeGen::Label afterSetup = cg.newLabel();
+  CodeGen::Label arrayBody = cg.newLabel();
+  CodeGen::Label strBody = cg.newLabel();
+  CodeGen::Label arrayCountLoop = cg.newLabel();
+  CodeGen::Label arrayCountDone = cg.newLabel();
+  CodeGen::Label arrayCopyLoop = cg.newLabel();
+  CodeGen::Label arrayDone = cg.newLabel();
+  CodeGen::Label strCountLoop = cg.newLabel();
+  CodeGen::Label strCountDone = cg.newLabel();
+  CodeGen::Label strCopyLoop = cg.newLabel();
+  CodeGen::Label strDone = cg.newLabel();
+  CodeGen::Label failStart = cg.newLabel();
+  CodeGen::Label failEnd = cg.newLabel();
+  CodeGen::Label failStepType = cg.newLabel();
+  CodeGen::Label failStep = cg.newLabel();
+  CodeGen::Label failType = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  // Stack slots (rbp-relative). r13/r14/r15 are the allocator's own state (the
+  // arena cursor/end and the global base), so this helper keeps every value it
+  // carries across a call in a slot instead of a register; only rbx and r12 are
+  // saved, as in the other helpers.
+  constexpr std::int64_t kObjTag = -24;
+  constexpr std::int64_t kStart = -32;
+  constexpr std::int64_t kStartPresent = -48;
+  constexpr std::int64_t kEnd = -56;
+  constexpr std::int64_t kEndPresent = -64;
+  constexpr std::int64_t kStep = -72;
+  constexpr std::int64_t kStepPresent = -80;
+  constexpr std::int64_t kLower = -88;
+  constexpr std::int64_t kUpper = -96;
+  constexpr std::int64_t kLength = -104;
+  constexpr std::int64_t kFrom = -112;
+  constexpr std::int64_t kTo = -120;
+  constexpr std::int64_t kIndex = -128;
+  constexpr std::int64_t kOutPtr = -136;  // array block, or the string write cursor
+  constexpr std::int64_t kCount = -144;   // selected count
+  constexpr std::int64_t kTotal = -152;   // string bytes, or the array copy index
+  constexpr std::int64_t kResult = -160;  // array header, or the string header
+
+  // Reads one bound into `valueSlot`/`presentSlot`; nil means "not given". A
+  // non-integer bound jumps to `failWhat`, so the message names the bound.
+  auto parseBound = [&](std::int64_t tagDisp, std::int64_t valueSlot,
+                        std::int64_t presentSlot, CodeGen::Label failWhat) {
+    CodeGen::Label absent = cg.newLabel();
+    CodeGen::Label boundDone = cg.newLabel();
+    cg.movFromMem(Rax, Rbx, tagDisp);
+    cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagNil));
+    cg.jcc(Jcc::Eq, absent);
+    cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagInt));
+    cg.jcc(Jcc::Ne, failWhat);
+    cg.movFromMem(Rax, Rbx, tagDisp + 8);
+    cg.movToMem(Rbp, valueSlot, Rax);
+    cg.movImmToMem(Rbp, presentSlot, 1);
+    cg.jmp(boundDone);
+    cg.bind(absent);
+    cg.movImmToMem(Rbp, presentSlot, 0);  // the stack slot is not zeroed for us
+    cg.bind(boundDone);
+  };
+
+  // Jumps to `loopDone` once the cursor has walked past `[from, to)` (positive
+  // step) or `(to, from]` (negative step).
+  auto selectGoto = [&](CodeGen::Label loopDone) {
+    CodeGen::Label negative = cg.newLabel();
+    CodeGen::Label body = cg.newLabel();
+    cg.movFromMem(R8, Rbp, kStep);
+    cg.testReg(R8);
+    cg.jcc(Jcc::S, negative);
+    cg.movFromMem(R9, Rbp, kIndex);
+    cg.movFromMem(R10, Rbp, kTo);
+    cg.cmpReg(R9, R10);
+    cg.jcc(Jcc::Ge, loopDone);
+    cg.jmp(body);
+    cg.bind(negative);
+    cg.movFromMem(R9, Rbp, kIndex);
+    cg.movFromMem(R10, Rbp, kTo);
+    cg.cmpReg(R9, R10);
+    cg.jcc(Jcc::Le, loopDone);
+    cg.bind(body);
+  };
+
+  // Clamps `valueSlot` (or the step-dependent default when absent) into
+  // `outSlot`, following the hosted rule.
+  auto computeBound = [&](std::int64_t valueSlot, std::int64_t presentSlot, bool isStart,
+                          std::int64_t outSlot) {
+    CodeGen::Label absent = cg.newLabel();
+    CodeGen::Label nonNegative = cg.newLabel();
+    CodeGen::Label clampLow = cg.newLabel();
+    CodeGen::Label clampHigh = cg.newLabel();
+    CodeGen::Label store = cg.newLabel();
+    CodeGen::Label negative = cg.newLabel();
+
+    cg.movFromMem(Rax, Rbp, presentSlot);
+    cg.testReg(Rax);
+    cg.jcc(Jcc::Eq, absent);
+    cg.movFromMem(Rax, Rbp, valueSlot);
+    cg.testReg(Rax);
+    cg.jcc(Jcc::Ge, nonNegative);
+    cg.movFromMem(R8, Rbp, kLength);
+    cg.addReg(Rax, R8);  // a negative bound counts from the end
+    cg.bind(nonNegative);
+    cg.movFromMem(R8, Rbp, kLower);
+    cg.cmpReg(Rax, R8);
+    cg.jcc(Jcc::Lt, clampLow);
+    cg.movFromMem(R9, Rbp, kUpper);
+    cg.cmpReg(Rax, R9);
+    cg.jcc(Jcc::Gt, clampHigh);
+    cg.jmp(store);
+    cg.bind(clampLow);
+    cg.movReg(Rax, R8);
+    cg.jmp(store);
+    cg.bind(clampHigh);
+    cg.movReg(Rax, R9);
+    cg.jmp(store);
+
+    cg.bind(absent);
+    cg.movFromMem(R8, Rbp, kLower);
+    cg.movFromMem(R9, Rbp, kUpper);
+    cg.movFromMem(R10, Rbp, kStep);
+    cg.testReg(R10);
+    cg.jcc(Jcc::S, negative);
+    if (isStart) cg.movReg(Rax, R8); else cg.movReg(Rax, R9);
+    cg.jmp(store);
+    cg.bind(negative);
+    if (isStart) cg.movReg(Rax, R9); else cg.movReg(Rax, R8);
+
+    cg.bind(store);
+    cg.movToMem(Rbp, outSlot, Rax);
+  };
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 176);
+  cg.movReg(Rbx, Rdi);  // args
+
+  // Bounds: start = args[1], end = args[2], step = args[3] (nil = absent).
+  parseBound(-16, kStart, kStartPresent, failStart);
+  parseBound(-32, kEnd, kEndPresent, failEnd);
+  parseBound(-48, kStep, kStepPresent, failStepType);
+  cg.movFromMem(Rax, Rbp, kStepPresent);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ne, stepSet);
+  cg.movImmToMem(Rbp, kStep, 1);
+  cg.bind(stepSet);
+  cg.movFromMem(Rax, Rbp, kStep);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, failStep);
+
+  cg.movFromMem(Rax, Rbx, 0);
+  cg.movToMem(Rbp, kObjTag, Rax);
+  cg.movFromMem(R12, Rbx, 8);  // object payload
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, sliceArray);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, sliceStr);
+  cg.jmp(failType);
+
+  cg.bind(sliceArray);
+  cg.movFromMem(Rax, R12, kTableLengthOffset);
+  cg.movToMem(Rbp, kLength, Rax);
+  cg.jmp(computeBounds);
+
+  cg.bind(sliceStr);
+  cg.movReg(Rdi, R12);
+  cg.callLabel(env.utf8Len);
+  cg.movToMem(Rbp, kLength, Rax);
+
+  cg.bind(computeBounds);
+  cg.movFromMem(R10, Rbp, kStep);
+  cg.testReg(R10);
+  cg.jcc(Jcc::S, negativeSetup);
+  cg.movImmToMem(Rbp, kLower, 0);
+  cg.movFromMem(Rax, Rbp, kLength);
+  cg.movToMem(Rbp, kUpper, Rax);
+  cg.jmp(afterSetup);
+  cg.bind(negativeSetup);
+  cg.movImmToMem(Rbp, kLower, -1);
+  cg.movFromMem(Rax, Rbp, kLength);
+  cg.subRegImm32(Rax, 1);
+  cg.movToMem(Rbp, kUpper, Rax);
+  cg.bind(afterSetup);
+  computeBound(kStart, kStartPresent, true, kFrom);
+  computeBound(kEnd, kEndPresent, false, kTo);
+  cg.movFromMem(Rax, Rbp, kObjTag);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, arrayBody);
+  cg.jmp(strBody);
+
+  // ---- array: count the selected indices, then copy the elements.
+  cg.bind(arrayBody);
+  cg.movFromMem(Rax, Rbp, kFrom);
+  cg.movToMem(Rbp, kIndex, Rax);
+  cg.movImmToMem(Rbp, kCount, 0);
+  cg.bind(arrayCountLoop);
+  selectGoto(arrayCountDone);
+  cg.movFromMem(R8, Rbp, kIndex);
+  cg.movFromMem(R9, Rbp, kStep);
+  cg.addReg(R8, R9);
+  cg.movToMem(Rbp, kIndex, R8);
+  cg.movFromMem(R8, Rbp, kCount);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, kCount, R8);
+  cg.jmp(arrayCountLoop);
+  cg.bind(arrayCountDone);
+  cg.movImm(Rdi, static_cast<std::int64_t>(kAotArrayHeaderSize));
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rbp, kResult, Rax);
+  cg.movFromMem(Rdi, Rbp, kCount);
+  cg.shlImm8(Rdi, 4);
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rbp, kOutPtr, Rax);
+  cg.movFromMem(R8, Rbp, kCount);
+  cg.movFromMem(R10, Rbp, kResult);
+  cg.movToMem(R10, kTableLengthOffset, R8);
+  cg.movToMem(R10, kTableCapacityOffset, R8);
+  cg.movToMem(R10, kTableBlockOffset, Rax);
+  cg.movFromMem(Rax, Rbp, kFrom);
+  cg.movToMem(Rbp, kIndex, Rax);
+  cg.movImmToMem(Rbp, kTotal, 0);
+  cg.bind(arrayCopyLoop);
+  selectGoto(arrayDone);
+  cg.movFromMem(R8, R12, kTableBlockOffset);
+  cg.movFromMem(R9, Rbp, kIndex);
+  cg.shlImm8(R9, 4);
+  cg.addReg(R8, R9);  // &source[i]
+  cg.movFromMem(R10, Rbp, kOutPtr);
+  cg.movFromMem(R11, Rbp, kTotal);
+  cg.shlImm8(R11, 4);
+  cg.addReg(R10, R11);  // &out[k]
+  cg.movFromMem(Rax, R8, 0);
+  cg.movFromMem(Rcx, R8, 8);
+  cg.movToMem(R10, 0, Rax);
+  cg.movToMem(R10, 8, Rcx);
+  cg.movFromMem(R8, Rbp, kIndex);
+  cg.movFromMem(R9, Rbp, kStep);
+  cg.addReg(R8, R9);
+  cg.movToMem(Rbp, kIndex, R8);
+  cg.movFromMem(R8, Rbp, kTotal);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, kTotal, R8);
+  cg.jmp(arrayCopyLoop);
+  cg.bind(arrayDone);
+  cg.movImm(Rax, kTagArray);
+  cg.movFromMem(Rdx, Rbp, kResult);
+  cg.jmp(done);
+
+  // ---- string: count the selected code points and their bytes, then copy.
+  cg.bind(strBody);
+  cg.movFromMem(Rax, Rbp, kFrom);
+  cg.movToMem(Rbp, kIndex, Rax);
+  cg.movImmToMem(Rbp, kTotal, 0);
+  cg.bind(strCountLoop);
+  selectGoto(strCountDone);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, kIndex);
+  cg.callLabel(env.utf8CharAt);  // rax = bytes, rdx = byte length
+  cg.movFromMem(R8, Rbp, kTotal);
+  cg.addReg(R8, Rdx);
+  cg.movToMem(Rbp, kTotal, R8);
+  cg.movFromMem(R8, Rbp, kIndex);
+  cg.movFromMem(R9, Rbp, kStep);
+  cg.addReg(R8, R9);
+  cg.movToMem(Rbp, kIndex, R8);
+  cg.jmp(strCountLoop);
+  cg.bind(strCountDone);
+  cg.movFromMem(Rdi, Rbp, kTotal);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.callLabel(env.alloc);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rbp, kResult, Rax);
+  cg.movFromMem(R8, Rbp, kTotal);
+  cg.movToMem(Rax, 0, R8);
+  cg.addImm32(Rax, static_cast<std::int32_t>(kAotStringHeaderSize));
+  cg.movToMem(Rbp, kOutPtr, Rax);  // the write cursor
+  cg.movFromMem(Rax, Rbp, kFrom);
+  cg.movToMem(Rbp, kIndex, Rax);
+  cg.bind(strCopyLoop);
+  selectGoto(strDone);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, kIndex);
+  cg.callLabel(env.utf8CharAt);  // rax = bytes, rdx = byte length
+  cg.movReg(Rsi, Rax);
+  cg.movReg(Rcx, Rdx);
+  cg.movFromMem(Rdi, Rbp, kOutPtr);
+  cg.repMovsb();
+  cg.movToMem(Rbp, kOutPtr, Rdi);  // the cursor advanced past the copied bytes
+  cg.movFromMem(R8, Rbp, kIndex);
+  cg.movFromMem(R9, Rbp, kStep);
+  cg.addReg(R8, R9);
+  cg.movToMem(Rbp, kIndex, R8);
+  cg.jmp(strCopyLoop);
+  cg.bind(strDone);
+  cg.movImm(Rax, kTagStr);
+  cg.movFromMem(Rdx, Rbp, kResult);
+  cg.jmp(done);
+
+  cg.bind(failStart);
+  emitFailCall(cg, env.fail, msgSliceStart);
+  cg.bind(failEnd);
+  emitFailCall(cg, env.fail, msgSliceEnd);
+  cg.bind(failStepType);
+  emitFailCall(cg, env.fail, msgSliceStep);
+  cg.bind(failStep);
+  emitFailCall(cg, env.fail, msgSliceStep);
+  cg.bind(failType);
+  emitFailCall(cg, env.fail, msgSliceType);
+  cg.bind(oom);
+  emitFailCall(cg, env.fail, *env.msgOom);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 176);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
 // `void jolt_sb_init(AotStringBuilder* sb, char* data, long capacity)`: start a
 // builder over a caller-owned buffer (`data`/`capacity`) with `length` zero. A
 // caller that renders a `print` value passes a stack buffer, so a small render
@@ -3891,6 +4233,10 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob textCloseBrace = addText("}");
   DataBlob textEllipsis = addText("...");
   DataBlob msgRangeBounds = addText("jolt: range bounds must be integers\n");
+  DataBlob msgSliceStart = addText("jolt: slice start must be an integer\n");
+  DataBlob msgSliceEnd = addText("jolt: slice end must be an integer\n");
+  DataBlob msgSliceStep = addText("jolt: slice step must not be zero\n");
+  DataBlob msgSliceType = addText("jolt: value is not sliceable\n");
   DataBlob textQuote = addText("\"");
   DataBlob textEscQuote = addText("\\\"");
   DataBlob textEscBackslash = addText("\\\\");
@@ -4036,6 +4382,8 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
                  textNil, msgStrBad);
   emitRangeBuiltin(cg, handles.rangeBuiltin, handles.alloc, fail, msgOom,
                    msgRangeBounds);
+  emitSliceBuiltin(cg, handles.sliceBuiltin, env, msgSliceStart, msgSliceEnd,
+                   msgSliceStep, msgSliceType);
   dtoa::emitDtoa(cg, dtoaHandles);
 
   // The "length" member name is a raw `AotString` (8-byte length + bytes), laid

@@ -31,6 +31,10 @@ for language in languages {
 - Modules with Java-style `import`, and C interop via `extern "C"` / `native fn`.
 - Built-in standard library: strings, arrays, maps, math, files, console and utilities.
 - Interactive REPL with session state, commands and expression evaluation.
+- **Ahead-of-time native compilation**: `jolt build file.jolt` emits a
+  self-contained static executable (no libc, no runtime to install; `ldd`
+  reports *"not a dynamic executable"*). See the
+  [CLI tutorial](docs/tutorial-cli.md).
 - Diagnostics with file, line, column, code snippet and stack trace.
 
 ## Status
@@ -278,7 +282,8 @@ Current limitations:
 
 Ideas for future versions:
 
-- A bytecode-to-native (AOT) backend that emits self-contained static binaries with no runtime to install (PHASE 7, in progress).
+- Completing the AOT backend (PHASE 7): the core of the language already
+  compiles to native code; the standard library builtins and file I/O are next.
 - User-defined methods on structs.
 - Better Unicode support (upper/lower case and graphemes).
 - More tooling: formatter and debugger.

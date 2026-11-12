@@ -12,7 +12,7 @@ programming language with a Lua-style internal architecture.
 | **Name** | Jolt |
 | **Extension** | `.jolt` |
 | **Philosophy** | Simple like Python, structured like Java, fast like Lua, safe like Kotlin |
-| **Implementation** | C++17 (standard library only, optional AsmJIT for JIT) |
+| **Implementation** | C++17 (standard library only; optional libffi, development engine only) |
 | **Initial platform** | Linux x86-64 (musl static), then Windows/macOS |
 | **Architecture** | Register-based bytecode + VM (dev engine) + AOT backend (production) |
 | **Niche** | Desktop apps, CLI, UI (not systems, not backend, not data science) |
@@ -58,8 +58,8 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `platform_posix.cpp` | `Platform` ops (dev engine) | libc-backed I/O | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | ✅ PHASE 7a/7b |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.3 |
-| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.3 |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | ✅ PHASE 7c.3 (all opcodes) |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | ✅ PHASE 7c.3 |
 | `native/dtoa.cpp` | float/double | shortest round-trip text | ✅ PHASE 7c.1b |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
@@ -71,10 +71,11 @@ bytecode that later turns out to be impossible to compile efficiently).
 
 `jolt` ships as a single binary until PHASE 7d. After the split:
 
-- `jolt` development engine (run, REPL, -c). Includes the VM and the JIT
-(AsmJIT).
+- `jolt` development engine (run, REPL, -c). Includes the VM and the JIT (the
+  JIT uses the project's own `native/codegen.h` emitter, not AsmJIT).
 - `joltc` host compiler (joltc file.jolt -o app). Reads sources and
-writes the ELF. Uses AsmJIT Assembler (no JIT). Links against musl static.
+  writes the ELF with the project's own `native/codegen.cpp` and
+  `native/elf.cpp` (no AsmJIT, no ELFIO). Links against musl static.
 - `jolt build` thin alias over `joltc`
 
 Boundary rule: src/compiler.* and src/native/* must not include
@@ -819,6 +820,62 @@ Slices, each independently shippable:
       `for-in` and container printing under the real `_start`) and
       `tests/lower_test.cpp` (the collection opcodes now lower instead of
       raising).
+    - **7c.4a** (done) — the hidden `$nonNull` and `$isError` helpers. The
+      compiler emits `$nonNull` for the non-null assertion `a!!` and `$isError`
+      for `try` / `x catch y` (PHASE 6.5/6.7); the AOT backend had no binding
+      for them, so a program using either failed to build with
+      `lowering: global '$nonNull'/'$isError' is read but never assigned`. They
+      are now seeded builtins like `print` and `$mapValue`:
+      `jolt_builtin_non_null` returns its operand or calls `fail` with the
+      hosted helper's message, and `jolt_builtin_is_error` returns `false`
+      (the AOT runtime has no error values yet, so the success path of `try`/
+      `catch` runs; a real failure still exits 70). Covered by
+      `tests/freestanding_test.cpp` (both helpers under the real `_start`, plus
+      the failing `!!` exiting 70) and the `jolt build` fixture.
+    - **7c.4b** (done) — the hidden `$str` helper for string interpolation and
+      computed keys. It renders the operand to an `AotString` in the arena,
+      byte-identical to the hosted `Value::toString` for nil, booleans,
+      integers (with the sign), floats/doubles (through the embedded dtoa) and
+      strings (returned unchanged, so a string interpolates without quotes);
+      a collection or function operand fails with a clear message instead of
+      producing different text (deferred to 7c.4b.2). Covered by
+      `tests/freestanding_test.cpp` and the `jolt build` fixture.
+    - **7c.4b.2** (done) — `$str` for collections and functions (recursive
+      repr). The printer's traversal is factored into `jolt_repr_into`, which
+      appends the representation of a value to a string builder; `print` and
+      `$str` both go through it, so `"${[1, 2]}"` and `print([1, 2])` agree
+      byte for byte (nested strings quoted, maps as `{k: v}`, functions as
+      `<fn>`, depth capped at 8). `jolt_print_repr` renders into a stack
+      builder and writes once; `jolt_repr_to_string` renders into an arena
+      `AotString`. The string builder (`jolt_sb_*`, `AotStringBuilder`) grows
+      by doubling in the arena. A function's *name* is not part of the AOT
+      closure yet, so `$str`/`print` render `<fn>` where the VM renders
+      `<fn name>`; that is pre-existing and tracked separately. Covered by
+      `tests/freestanding_test.cpp` and the `jolt build` fixture.
+    - **7c.4c** (done) — the hidden `$range` helper for the range literals
+      `a..b` / `a..=b`. A new `AotTag::Range` names a three-word arena header
+      (start, end, inclusive). `jolt_builtin_range` builds it from two integer
+      bounds (a non-integer bound fails with the hosted message). The value is
+      wired through the runtime: `for-in` (`jolt_iter_next` walks the range up
+      or down, inclusive or exclusive, stepping with unsigned arithmetic so
+      INT64_MIN/MAX stay defined), `in` (`jolt_contains`, including the
+      "descending exclusive matches neither bound" rule), `.length`
+      (`jolt_member_get`, saturated at INT64_MAX) and printing/interpolation
+      (`jolt_print_repr`/`jolt_builtin_str` render `<start>..<end>` or
+      `<start>..=<end>`). Covered by `tests/freestanding_test.cpp` (print,
+      iterate both directions, `.length`, membership, interpolation and the
+      failing bound) and the `jolt build` fixture.
+    - **7c.4d** (done) — the hidden `$slice` helper for
+      `obj[start:end:step]`. `jolt_builtin_slice` slices an array by element
+      and a string by UTF-8 code point, following the hosted rule: an omitted
+      bound is a step-aware default (`0`/`length` for a positive step,
+      `length-1`/`-1` for a negative one), a negative bound counts from the
+      end, and both clamp to `[-1, length-1]` so a reverse slice never wraps.
+      It builds a fresh array/string over the arena (two passes: measure then
+      copy), and fails on a non-integer start or end, a zero step and a
+      non-sliceable operand. Covered by `tests/freestanding_test.cpp` (array
+      and string slices, both step signs, negative and out-of-range bounds,
+      UTF-8, the error cases) and the `jolt build` fixture.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
@@ -914,7 +971,7 @@ inline caching or specialization, it is out of scope (§8).
 
 - **Cosmopolitan (APE)** for CLI multi-platform (optional).
 - **Interfaces/traits** (for generic code without full generics).
-- **Dynamic FFI** (`dlopen`, `dlsym`, runtime stubs with AsmJIT JIT).
+- **Dynamic FFI** (`dlopen`, `dlsym`, runtime stubs with the project's own JIT).
 - **Hot reload** (1.1+).
 - **Extended stdlib**: JSON, dates, bytes, regex, networking.
 - **Package manager** (`jolt install foo`) and registry.
@@ -938,7 +995,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7d done)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7c.4b, 7c.4c, 7c.4d, 7d done)
 Phase 8: 🔶 in progress (JIT for the development VM, slice 1 done: integer leaf protos)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
@@ -957,11 +1014,12 @@ and is no longer in the tree.
 
 ## 5. Code rules
 
-1. **Pure C++17**, no external dependencies **except optional AsmJIT** (for
-   JIT), **optional ELFIO** (for ELF emitter) and **optional libffi** (for FFI
-   callbacks, **development engine only**). The AOT product (`joltc`) uses
-   AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight. libffi
-   is never linked into an AOT product: the freestanding backend lowers
+1. **Pure C++17**, standard library only. The single optional dependency is
+   **libffi** (for FFI callbacks, **development engine only**). The machine
+   code, the static ELF/PE emitters and the JIT are the project's own
+   (`native/codegen.*`, `native/elf.*`, `native/pe.*`): **no AsmJIT and no
+   ELFIO** (LIEF, AsmJIT and LLVM were evaluated and rejected, see PHASE 7).
+   libffi is never linked into an AOT product: the freestanding backend lowers
    callbacks to compile-time stubs, so the end-user binary stays dependency
    free.
 2. **Names**: `camelCase` for functions, variables and members (private data
@@ -1042,16 +1100,18 @@ Without this checklist complete and approved, **do not proceed to code**.
 | Migrating the core to pure C | The core stays in C++17 |
 | Adding features without testing the previous one | Breaks incremental development |
 | Skipping the 7-point checklist | Creates architectural debt |
-| **External libraries beyond AsmJIT/ELFIO/libffi** | AsmJIT, ELFIO and libffi are the only allowed dependencies (libffi is development-engine only) |
+| **External libraries beyond libffi** | libffi (development engine only) is the only allowed dependency; the emitter and the JIT are the project's own |
 | Superinstructions | Violate the 40-opcode ceiling |
 | Inline caching | Changes the bytecode contract |
 | Runtime specialization | Changes the bytecode contract |
 | `async`/`await`, generics, full pattern matching, generators, transactions | Out of scope |
 
-**Note**: AsmJIT, ELFIO and libffi are **optional** dependencies. The AOT
-product (`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
-development VM (`jolt`) may use AsmJIT JIT and libffi (callbacks). **The
-end-user binary (`hello.exe`) contains none of them.**
+**Note**: libffi is the only **optional** dependency, and it is
+**development-engine only** (FFI callbacks). The machine-code emitter, the
+static ELF/PE writers and the JIT are the project's own C++ (no AsmJIT, no
+ELFIO): the AOT product (`joltc`) emits the binary itself and the development
+VM (`jolt`) may use libffi for callbacks. **The end-user binary (`hello.exe`)
+contains none of them.**
 
 ---
 
@@ -1142,8 +1202,6 @@ myapp.jpkg
 - *The Implementation of Lua 5.0* — register VM design
 - LuaJIT source code (Mike Pall) — performance reference
 - System V ABI AMD64 — calling convention (PHASE 7)
-- AsmJIT documentation — JIT and Assembler
-- ELFIO documentation — ELF emitter
 - AXL documentation — arena allocator and low-level utilities
 - Cosmopolitan Libc — multi-platform CLI (optional)
 

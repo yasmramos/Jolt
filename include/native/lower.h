@@ -15,8 +15,10 @@
 // EQ, NEQ, LT, LTE, GT, GTE, JMP, JMP_IF_FALSE, JMP_IF_TRUE, HALT; from 7c.2a,
 // GETGLOBAL/SETGLOBAL over a flat global table in the arena; from 7c.2b,
 // DECLLOCAL/GETLOCAL/SETLOCAL over a second stack region; from 7c.2c.2, CALL,
-// RETURN, CLOSURE, GETUPVAL/SETUPVAL and cell capture; and from 7c.2d, the
-// `print`/`write`/`eprint` builtins, seeded as globals.
+// RETURN, CLOSURE, GETUPVAL/SETUPVAL and cell capture; from 7c.2d, the
+// `print`/`write`/`eprint` builtins, seeded as globals; and from 7c.3,
+// NEWTABLE, GETTABLE, SETTABLE, IN and ITER, so arrays, maps, indexing,
+// members, `in` and `for-in` compile to native code.
 //
 // A bytecode register is a 16-byte slot in a register file on the stack, not a
 // physical CPU register: a boxed value does not fit in one, and the file is
@@ -26,12 +28,9 @@
 // buffer with every `call` resolved through the emitter's labels (no linker,
 // no relocations).
 //
-// Every other opcode throws a `LoweringError`:
-//   - NEWTABLE, GETTABLE, SETTABLE, IN, ITER: need collections (7c.3).
-// A GETGLOBAL of a name the chunk never assigns and that is not a builtin is
-// also a `LoweringError`. From 7c.2d the `print`, `write` and `eprint` builtins
-// are seeded as globals, so a program can print without a runtime to install
-// them.
+// A GETGLOBAL of a name the chunk never assigns and that is not a builtin is a
+// `LoweringError`. From 7c.2d the `print`, `write` and `eprint` builtins are
+// seeded as globals, so a program can print without a runtime to install them.
 //
 // From 7c.2c.1 every proto is lowered to its own machine function with the
 // lowering's own convention `AotValue entry(AotValue* args, long argc,
