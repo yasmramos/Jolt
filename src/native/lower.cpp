@@ -278,11 +278,28 @@ GlobalSlots collectGlobals(const std::vector<const Bytecode*>& protos,
       globals.slotOfName[name] = globals.count++;
     }
   }
+  // A `SETGLOBAL N` whose value is the read of the same `N` is not an
+  // assignment: it is the compiler's shape for a host binding (`native fn` and
+  // `extern "C"`, which read the name the host registered) and for a
+  // self-referential declaration (`var x = x;`). The hosted engine resolves
+  // such a name in its host registry; the AOT backend has no host, so the name
+  // stays unassigned and the read is reported by the loop below (the same error
+  // the hosted engine raises for `var x = x;`). Counting it as an assignment
+  // would emit a binary that calls a nil value at run time.
+  auto isHostBinding = [&](const Bytecode& proto, std::size_t index) {
+    if (index == 0) return false;
+    const Instruction& set = proto.code[index];
+    const Instruction& prev = proto.code[index - 1];
+    if (set.op != OpCode::SETGLOBAL || prev.op != OpCode::GETGLOBAL) return false;
+    return nameOf(proto, set.b) == nameOf(proto, prev.b);
+  };
   // First-assignment order across every proto, so a function and its caller
   // (recursion) agree on the slot of a shared name.
   for (const Bytecode* proto : protos) {
-    for (const Instruction& instr : proto->code) {
+    for (std::size_t i = 0; i < proto->code.size(); ++i) {
+      const Instruction& instr = proto->code[i];
       if (instr.op != OpCode::SETGLOBAL) continue;
+      if (isHostBinding(*proto, i)) continue;
       const std::string& name = nameOf(*proto, instr.b);
       if (globals.slotOfName.find(name) != globals.slotOfName.end()) continue;
       globals.slotOfName[name] = globals.count++;

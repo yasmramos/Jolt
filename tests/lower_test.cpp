@@ -116,6 +116,34 @@ static void testUnassignedGlobalThrows() {
         "reading an unassigned global throws");
 }
 
+static void testHostBindingThrows() {
+  // `native fn` and `extern "C"` compile to `GETGLOBAL N; SETGLOBAL N` (the
+  // host registered N; the read resolves it). The AOT backend has no host, so
+  // the name is unassigned and must be reported, not lowered to a binary that
+  // calls nil at run time.
+  auto proto = makeProto({instr(OpCode::GETGLOBAL, 0, 0), instr(OpCode::SETGLOBAL, 0, 0),
+                          instr(OpCode::HALT)},
+                         {Value(std::string("hostFn"))}, 1);
+  check(loweringThrows(proto, "global 'hostFn' is read but never assigned"),
+        "a native/extern host binding throws");
+
+  // A genuine self-assignment (`var x = x;`) has the same shape and the same
+  // hosted behaviour (an undefined-variable error), so it throws too.
+  auto self = makeProto({instr(OpCode::GETGLOBAL, 0, 0), instr(OpCode::SETGLOBAL, 0, 0),
+                         instr(OpCode::HALT)},
+                        {Value(std::string("x"))}, 1);
+  check(loweringThrows(self, "global 'x' is read but never assigned"),
+        "a self-referential declaration throws");
+
+  // The shape is only a host binding when the names match: `GETGLOBAL a;
+  // SETGLOBAL b` is an ordinary assignment of a real value, so it lowers.
+  auto real = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::SETGLOBAL, 0, 1),
+                         instr(OpCode::GETGLOBAL, 1, 1), instr(OpCode::HALT)},
+                        {Value(static_cast<int64_t>(5)), Value(std::string("y"))}, 2);
+  LoweredChunk chunk = lower(real);
+  check(!chunk.code.empty(), "an ordinary global assignment still lowers");
+}
+
 static void testInvalidUnopSelectorThrows() {
   auto proto = makeProto(
       {instr(OpCode::UNOP, 0, 0, 99), instr(OpCode::HALT)}, {}, 1);
@@ -795,6 +823,7 @@ int main() {
   testCollectionsLower();
   testBadJumpTargetThrows();
   testUnassignedGlobalThrows();
+  testHostBindingThrows();
   testInvalidUnopSelectorThrows();
 
 #ifdef LOWER_EXEC_TESTS
