@@ -676,8 +676,11 @@ static void test_exec_backward_jmp_with_trailing_epilogue() {
   g.subReg(X64Reg::Rax, X64Reg::Rcx);
   g.testReg(X64Reg::Rax);            // ZF set when the counter hits zero
   g.jcc(Jcc::Ne, top);               // backward jcc fixup
-  g.movImm(X64Reg::Rbx, 0xBEEF);     // extra bytes AFTER the jump: must not
-  g.retInsn();                        // influence the pinned next_rip
+  g.movImm(X64Reg::R11, 0xBEEF);     // extra bytes AFTER the jump: must not
+  g.retInsn();                        // influence the pinned next_rip. The
+                                      // snippet runs as a C function with no
+                                      // prologue, so the padding register
+                                      // must be caller-saved (r11, not rbx).
   auto fn = reinterpret_cast<std::int64_t (*)()>(
       emitExecutable((g.finalize(), g.code())));
   std::int64_t result = fn();
