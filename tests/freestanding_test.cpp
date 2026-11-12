@@ -498,6 +498,41 @@ static void test_collection_repr() {
   check(result.exitCode == 0, "a self-referential program still exits 0");
 }
 
+// `$str` renders a collection or function with the recursive repr (PHASE
+// 7c.4b.2), so `"${[1, 2]}"` reads exactly like `print([1, 2])`: nested strings
+// quoted, maps as `{k: v}`, functions as `<fn>`, and a self-referential
+// structure stops at the depth cap instead of recursing forever.
+static void test_str_helper_collections() {
+  Bytecode proto = compileSource(
+      "print(\"${[1, 2, 3]}\");\n"
+      "print(\"${[\"a\", \"b\"]}\");\n"
+      "print(\"${[[1, 2], {\"k\": 3}]}\");\n"
+      "var m = {\"x\": 1, \"y\": [1, 2]};\n"
+      "print(\"${m}\");\n"
+      "fn f() {}\n"
+      "print(\"${f}\");\n"
+      "print(\"${0..=3}\");\n"
+      "let self = {};\n"
+      "self[\"me\"] = self;\n"
+      "print(\"${self}\");\n"
+      "print(\"sum=${[1, 2, 3].length}\");\n");
+  RunResult result = buildAndRun("/tmp/jolt_str_collections", proto);
+  check(result.output.find(
+            "[1, 2, 3]\n"
+            "[\"a\", \"b\"]\n"
+            "[[1, 2], {\"k\": 3}]\n"
+            "{\"x\": 1, \"y\": [1, 2]}\n"
+            "<fn>\n"
+            "0..=3\n") == 0,
+        "a compiled program interpolates collections and functions like print");
+  check(result.output.find("{\"me\":") != std::string::npos &&
+            result.output.find("...") != std::string::npos,
+        "interpolating a self-referential map stops at the depth cap");
+  check(result.output.find("sum=3\n") != std::string::npos,
+        "a collection expression interpolates with the recursive repr");
+  check(result.exitCode == 0, "a program interpolating a collection exits 0");
+}
+
 // Drives the boxed printer directly: the runtime's `jolt_print_value` is what
 // the `print` builtin will call once `CALL` lands (7c.2), so this checks the
 // integer-to-text routine (including the negative case) and the boolean/nil
@@ -886,6 +921,7 @@ int main() {
   test_range_helper();
   test_range_helper_bad_bounds();
   test_collection_repr();
+  test_str_helper_collections();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
 #endif

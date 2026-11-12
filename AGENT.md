@@ -838,8 +838,18 @@ Slices, each independently shippable:
       a collection or function operand fails with a clear message instead of
       producing different text (deferred to 7c.4b.2). Covered by
       `tests/freestanding_test.cpp` and the `jolt build` fixture.
-    - **7c.4b.2** — `$str` for collections and functions (recursive repr),
-      reusing the printer's `jolt_print_repr` into an arena string.
+    - **7c.4b.2** (done) — `$str` for collections and functions (recursive
+      repr). The printer's traversal is factored into `jolt_repr_into`, which
+      appends the representation of a value to a string builder; `print` and
+      `$str` both go through it, so `"${[1, 2]}"` and `print([1, 2])` agree
+      byte for byte (nested strings quoted, maps as `{k: v}`, functions as
+      `<fn>`, depth capped at 8). `jolt_print_repr` renders into a stack
+      builder and writes once; `jolt_repr_to_string` renders into an arena
+      `AotString`. The string builder (`jolt_sb_*`, `AotStringBuilder`) grows
+      by doubling in the arena. A function's *name* is not part of the AOT
+      closure yet, so `$str`/`print` render `<fn>` where the VM renders
+      `<fn name>`; that is pre-existing and tracked separately. Covered by
+      `tests/freestanding_test.cpp` and the `jolt build` fixture.
     - **7c.4c** (done) — the hidden `$range` helper for the range literals
       `a..b` / `a..=b`. A new `AotTag::Range` names a three-word arena header
       (start, end, inclusive). `jolt_builtin_range` builds it from two integer
