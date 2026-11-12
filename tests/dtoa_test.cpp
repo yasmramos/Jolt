@@ -37,6 +37,16 @@ static void check(bool condition, const std::string& what) {
 #if defined(DTOA_EXEC_TESTS)
 using FormatFn = std::int64_t (*)(std::int64_t, std::int64_t, char*, void*);
 
+// C11 requires `aligned_alloc`'s size to be a multiple of the alignment;
+// `kScratchBytes + 64` is not necessarily one, and passing it anyway is
+// undefined behavior (glibc tolerates it, the sanitizers reject it).
+static void* allocScratch() {
+  const std::size_t alignment = 64;
+  std::size_t bytes = dtoa::kScratchBytes + alignment;
+  bytes = (bytes + alignment - 1) / alignment * alignment;
+  return std::aligned_alloc(alignment, bytes);
+}
+
 static FormatFn emitFormat() {
   CodeGen gen;
   dtoa::DtoaHandles handles = dtoa::newDtoaHandles(gen);
@@ -81,7 +91,7 @@ static std::string reference32(float f) {
 
 static void test_random_doubles() {
   FormatFn fn = emitFormat();
-  void* scratch = std::aligned_alloc(64, dtoa::kScratchBytes + 64);
+  void* scratch = allocScratch();
   std::mt19937_64 rng(20240607);
   long mismatches = 0;
   long total = 0;
@@ -109,7 +119,7 @@ static void test_random_doubles() {
 
 static void test_random_floats() {
   FormatFn fn = emitFormat();
-  void* scratch = std::aligned_alloc(64, dtoa::kScratchBytes + 64);
+  void* scratch = allocScratch();
   std::mt19937_64 rng(424242);
   long mismatches = 0;
   long total = 0;
@@ -139,7 +149,7 @@ static void test_random_floats() {
 
 static void test_specials() {
   FormatFn fn = emitFormat();
-  void* scratch = std::aligned_alloc(64, dtoa::kScratchBytes + 64);
+  void* scratch = allocScratch();
   auto D = static_cast<std::uint64_t>(AotTag::Double);
   check(formatWith(fn, scratch, D, 0.0) == "0", "double 0 -> 0");
   check(formatWith(fn, scratch, D, -0.0) == "-0", "double -0 -> -0");

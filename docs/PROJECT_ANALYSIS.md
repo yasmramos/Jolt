@@ -108,10 +108,13 @@ in `src/`. AGENT.md rule 7 says every new `.cpp` has its `.h` in `include/`.
 Consolidating the public headers in `include/` would make the rule uniform. Low
 priority; touches many includes.
 
-### 3.5 CI hardening
-The two workflows build and test on three platforms. Adding an ASan/UBSan job
-would catch memory-safety regressions in the refcount/GC paths early. Medium
-priority.
+### 3.5 CI hardening — resolved.
+The two workflows build and test on three platforms. A `sanitizers` job in
+`cmake-multi-platform.yml` now also runs the suite under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`, so a memory-safety
+regression in the refcount/GC paths fails the build instead of hiding in a
+Release run. Landing it surfaced three undefined behaviors (two in the tests,
+one in the AOT string-constant pool), all fixed.
 
 ---
 
@@ -132,7 +135,7 @@ priority.
 ## 5. Suggested order (each independently shippable)
 
 1. `chore(bench)`: add a benchmark harness and record a baseline. *(§3.2)*
-2. `ci`: add an ASan/UBSan job. *(§3.5)*
+2. `ci`: add an ASan/UBSan job. *(§3.5 — done.)*
 3. `refactor(build)`: derive `kVersion` from the CMake project version. *(§4.1)*
 4. Collection-API consistency (`len` method) and header consolidation are
    optional cleanups that touch the language surface or many includes; schedule
