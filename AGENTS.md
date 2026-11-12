@@ -33,6 +33,16 @@ Repository-specific workflow for AI agents. Project conventions live in
   adding its real compiler to `include` *and* excluding the impossible pairs,
   or the product grows dead jobs.
 
+## Build and tests
+
+- `cmake -S . -B build && cmake --build build -j4 && (cd build && ctest)`.
+  The suite globs `tests/*.jolt` and `examples/*.jolt` at **configure time**, so
+  a new example or test needs `cmake -S . -B build` again before `ctest` picks
+  it up (the build alone will not).
+- `jolt build` prints lowering errors (unsupported builtins, unlowered
+  opcodes) and exits 65 without writing a binary; it never emits a
+  mis-compiled one.
+
 ## Release and artifacts
 
 - `.github/workflows/artifacts.yml` builds the engine on Linux, Windows and
