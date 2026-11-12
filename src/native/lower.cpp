@@ -238,7 +238,7 @@ void loadMemberName(CodeGen& cg, const Bytecode& proto, int c, X64Reg tag, X64Re
 // constant index (`instruction.b`), but the binary has no strings: each
 // distinct name gets an index into a flat `AotValue` array. The lowerer
 // derives the map from the code itself, in first-assignment order, so the
-// `Bytecode` structure and the `.jolc` format stay unchanged.
+// `Bytecode` structure and the `.oskc` format stay unchanged.
 //
 // A `GETGLOBAL` of a name the program never assigns is a lowering error naming
 // the variable, the compile-time counterpart of the hosted engine's run-time

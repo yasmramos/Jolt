@@ -1,8 +1,8 @@
-# Jolt Language Reference
+# Oskel Language Reference
 
 Language version: **0.1.0**
 
-This guide describes the syntax and semantics of Jolt as implemented by the compiler and the register-based VM included in this repository.
+This guide describes the syntax and semantics of Oskel as implemented by the compiler and the register-based VM included in this repository.
 
 ## Table of contents
 
@@ -33,18 +33,18 @@ This guide describes the syntax and semantics of Jolt as implemented by the comp
 
 ---
 
-A Jolt program is a UTF-8 text file (extension `.jolt`). The pipeline is:
+A Oskel program is a UTF-8 text file (extension `.oskl`). The pipeline is:
 
 1. **Lexer**: turns the text into tokens.
 2. **Parser**: builds an AST with a recursive-descent parser and operator precedence.
 3. **Compiler**: translates the AST to bytecode (40 opcodes, register-based).
 4. **VM**: executes the bytecode.
 
-The AST is never executed: the `jolt` executable compiles source to bytecode and runs it on the register-based VM, and the compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
+The AST is never executed: the `oskel` executable compiles source to bytecode and runs it on the register-based VM, and the compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
 
 The program runs from top to bottom in the global scope. Simple statements end with `;`. Statements with a block (`if`, `while`, `for`, `fn`) close with `}` and optionally accept a `;` after it.
 
-```jolt
+```oskel
 let a = 1;
 if (a == 1) {
   print("one");
@@ -59,7 +59,7 @@ A file may start with a `#!...` line (shebang); the lexer ignores it.
 
 ### 2.1 Comments
 
-```jolt
+```oskel
 // Line comment
 
 /* Block comment.
@@ -120,7 +120,7 @@ The convention is `camelCase` for variables, functions and methods, and the stan
 
 Strings are written between double quotes. There are no single quotes or raw strings. They may span several lines:
 
-```jolt
+```oskel
 let greeting = "Hello";
 let text = "first line
 second line";
@@ -144,7 +144,7 @@ Escape sequences:
 
 Inside a string, `${expression}` evaluates an expression and converts it to text:
 
-```jolt
+```oskel
 let name = "Ada";
 let age = 36;
 print("${name} is ${age} years old");
@@ -154,13 +154,13 @@ print("result: ${ {a: 1}.a }");
 
 Interpolated expressions may contain strings and nested braces:
 
-```jolt
+```oskel
 print("nested: ${"inner ${1 + 1}"}");
 ```
 
 To write a literal `${`, escape the dollar sign:
 
-```jolt
+```oskel
 print("\${not evaluated}"); // ${not evaluated}
 ```
 
@@ -191,16 +191,16 @@ The `type(value)` function returns the name of the type as a string.
 
 Only two values are falsy:
 
-```jolt
+```oskel
 false
 nil
 ```
 
 Everything else is truthy, including `0`, `0.0`, `""`, `[]` and `{}`.
 
-```jolt
+```oskel
 if (0) {
-  print("0 is truthy in Jolt");
+  print("0 is truthy in Oskel");
 }
 ```
 
@@ -219,7 +219,7 @@ compared against itself is equal, and two self-referential containers are equal
 when their contents match once the cycle closes, so a value that contains
 itself can be compared safely:
 
-```jolt
+```oskel
 let a = [1];
 a.push(a);
 let b = [1];
@@ -232,7 +232,7 @@ assertEq(a == a, true);
 
 Assigning an array or a map to another variable **does not copy it**: both variables point to the same value.
 
-```jolt
+```oskel
 let a = [1];
 let b = a;
 b.push(2);
@@ -248,9 +248,9 @@ For a shallow copy use `.clone()`. Strings are immutable, so they behave like va
 
 ### 4.1 Declaration
 
-```jolt
+```oskel
 var counter;           // mutable, initialized to nil
-var name = "Jolt";     // mutable binding, initializer optional
+var name = "Oskel";     // mutable binding, initializer optional
 let LIMIT = 10;        // immutable binding evaluated at runtime
 const MAX = 10 * 2;    // immutable binding folded at compile time
 ```
@@ -274,7 +274,7 @@ An integer `const` initializer whose folded value does not fit an `int` (`+ - *`
 
 Every block `{ ... }` creates a new scope. Variables are resolved from the current scope up through the parents.
 
-```jolt
+```oskel
 let x = 1;
 {
   let x = 2;   // shadows the outer x
@@ -289,7 +289,7 @@ Redeclaring a name in the same block replaces the previous definition.
 
 Assignment looks the variable up in the current scope and, if it does not exist, in the parent scopes. It does not create new variables:
 
-```jolt
+```oskel
 let x = 1;
 {
   x = 2; // modifies the outer x
@@ -309,16 +309,16 @@ y = 3; // error: undefined variable 'y'
 
 ### 4.6 Type annotations
 
-Jolt is dynamically typed, but a declaration, a parameter or a return value may
+Oskel is dynamically typed, but a declaration, a parameter or a return value may
 carry an optional type annotation. Annotations are **compile-time metadata**:
 the compiler checks them and then erases them, so the bytecode is identical
 with or without them and the VM never sees a type.
 
-```jolt
+```oskel
 let count: int = 5;
 let ratio: float = 0.5f;
 let precise: double = 0.5;
-let title: string = "Jolt";
+let title: string = "Oskel";
 let ok: bool = true;
 let items: array = [1, 2, 3];
 let table: map = {a: 1};
@@ -341,7 +341,7 @@ reads like its C declaration: `native fn free(p): void;`. `void` is
 compile-time metadata: the function still returns `nil` at run time, so no
 opcode and no runtime type is added.
 
-```jolt
+```oskel
 fn logLine(msg: string): void {
   print(msg);
 }
@@ -364,7 +364,7 @@ function uses a block body.
 **FFI scalar types.** To write a C signature the way C writes it, the FFI
 vocabulary (PHASE 6.6) adds pointers and fixed-width/unsigned integers:
 
-| Jolt | C | Notes |
+| Oskel | C | Notes |
 | --- | --- | --- |
 | `ptr` | `void *` | Opaque handle. `nil` is NULL. |
 | `cstring` | `const char *` | NUL-terminated byte string. `nil` is NULL. Upcasts to `ptr`. |
@@ -381,7 +381,7 @@ runtime value (see **Pointer values** below), because a pointer has to be
 recognisable at run time to be marshalled safely. The width and signedness of
 the integers are recorded for the FFI marshalling to honour, not for the VM.
 
-```jolt
+```oskel
 native fn strlen(s: cstring): size_t;
 native fn memcmp(a: ptr, b: ptr, n: size_t): int32;
 native fn malloc(n: size_t): ptr;
@@ -396,14 +396,14 @@ is not implicit. The integer family (`int`, the fixed-width types, `uint`,
 `size_t`) is mutually assignable at compile time and widens to `float`/`double`,
 following the same numeric rule as `int`.
 
-A C function's `const char *` **parameter** may also be spelled `string`: a Jolt
+A C function's `const char *` **parameter** may also be spelled `string`: a Oskel
 string is NUL-terminated and stays alive for the whole call, so its bytes are a
 valid `const char *` (`extern fn strlen(s: string): int;`). A `string` is not a
 valid *return* type — a C function that returns text returns a `cstring`.
 
 **Pointer values.** A `ptr`/`cstring` is an **opaque handle**, never a machine
 address: the program can pass it to a native and read it back, but it can never
-dereference an arbitrary location. This keeps Jolt memory-safe and keeps the
+dereference an arbitrary location. This keeps Oskel memory-safe and keeps the
 allocation visible to the cycle collector. `type()` reports `ptr` for a `void *`
 and `cstring` for a C string, and a `cstring` upcasts to `ptr` without losing
 its kind. Pointers compare by identity (like functions), not by their contents.
@@ -413,8 +413,8 @@ these builtins:
 
 | Builtin | Meaning |
 | --- | --- |
-| `cstring(s)` | Builds a `cstring` from a Jolt string (bytes plus a NUL). |
-| `cstr(p)` | Reads a `cstring`/buffer back as a Jolt string. |
+| `cstring(s)` | Builds a `cstring` from a Oskel string (bytes plus a NUL). |
+| `cstr(p)` | Reads a `cstring`/buffer back as a Oskel string. |
 | `buffer(n)` | Allocates `n` zero-initialised bytes and returns a `ptr`. |
 | `byteLen(p)` | Bytes the handle owns (`cstring` excludes the NUL; `void *` is 0). |
 | `loadByte(p, i)` | Byte `0..255` at index `i` (bounds-checked). |
@@ -422,7 +422,7 @@ these builtins:
 | `intToPtr(n)` / `ptrToInt(p)` | Wraps and reads the opaque integer token a native returns. |
 | `free(p)` | Releases the handle's storage; a later use is a runtime error. |
 
-```jolt
+```oskel
 let greeting = cstring("hi");
 print(cstr(greeting));      // hi
 print(byteLen(greeting));   // 2
@@ -439,7 +439,7 @@ program that only passes them to natives compiles unchanged.
 **`extern "C"` blocks.** A C function is declared with `extern` (PHASE 6.6). Two
 spellings are accepted and compile to the same thing:
 
-```jolt
+```oskel
 extern "C" { fn sqrt(x: float): float; }   // block: explicit ABI
 extern fn sqrt(x: float): float;           // single: implicit "C" ABI
 ```
@@ -460,7 +460,7 @@ its arguments and reads its result across the System V AMD64 ABI without
 width the declaration named (so a C `int` is not read as a 64-bit value). A
 symbol the host cannot resolve is a clear runtime error, never a wild call.
 
-```jolt
+```oskel
 extern "C" {
   fn strlen(s: cstring): size_t;
   fn sqrt(x: double): double;
@@ -471,8 +471,8 @@ print(sqrt(16.0));         // 4
 let n: size_t = strlen("hi");
 ```
 
-A Jolt `string` is a valid `cstring` argument (`strlen("hi")`), and a parameter
-may be spelled `string` directly: a Jolt string is NUL-terminated and stays alive
+A Oskel `string` is a valid `cstring` argument (`strlen("hi")`), and a parameter
+may be spelled `string` directly: a Oskel string is NUL-terminated and stays alive
 for the whole call, so its bytes are a valid `const char *`. A `string` is not a
 valid *return* type; a C function returns a `cstring`. A `ptr` argument accepts
 `nil` (NULL) and an owned `cstring`/buffer, whose bytes are the address the C
@@ -483,7 +483,7 @@ as a parameter and as a return value. A struct is a map at runtime, so the
 compiler records its field layout from the declaration and the marshalling
 moves the bytes across the ABI in registers:
 
-```jolt
+```oskel
 struct DivResult {
   quot: int32;
   rem: int32;
@@ -520,10 +520,10 @@ arguments and results stay portable: the call goes through a typed function
 pointer, so the host compiler applies whichever ABI it targets.
 
 **Callbacks.** A parameter typed `fn(paramTypes): returnType` is a C function
-pointer. A Jolt function (or a closure) passed for it is callable from C, and a
+pointer. A Oskel function (or a closure) passed for it is callable from C, and a
 callback signature only carries scalar FFI types:
 
-```jolt
+```oskel
 extern "C" {
   fn qsort(base: ptr, nmemb: size_t, size: size_t, compar: fn(ptr, ptr): int): void;
   fn memcmp(a: ptr, b: ptr, n: size_t): int;
@@ -542,7 +542,7 @@ qsort(data, 4, 1, ascending);
 ```
 
 In the development engine the callback is a `libffi` closure: the trampoline
-re-enters the VM with the C arguments boxed as Jolt values and writes the Jolt
+re-enters the VM with the C arguments boxed as Oskel values and writes the Oskel
 result back in the declared C type. The callback runs while the C function is on
 the stack, so the trampoline is alive for the whole call; storing the function
 pointer for a later call is out of scope for this phase. `nil` is the NULL
@@ -558,7 +558,7 @@ returns: `pcall` catches it like any other runtime error. The AOT backend
 initializer when it is a literal or another typed binding, and then checks
 later assignments against it:
 
-```jolt
+```oskel
 var n = 0;
 n = 1;        // ok
 n = "text";   // compile error: cannot assign 'string' to 'int' in 'n'
@@ -571,7 +571,7 @@ rejects a program that would have run.
 **Widening.** Numeric widening follows Java: `int` → `float` → `double`. The
 reverse is not implicit; use an explicit conversion.
 
-```jolt
+```oskel
 let a: float = 3;      // ok: int widens to float
 let b: double = 3;     // ok: int widens to double
 let c: double = 1.5f;  // ok: float widens to double
@@ -582,7 +582,7 @@ let e: int = 1.5;      // compile error
 **Nullability.** A trailing `?` marks a type that also accepts `nil`. Without
 it, `nil` is rejected.
 
-```jolt
+```oskel
 let maybe: string? = nil;   // ok
 let name: string = nil;     // compile error
 ```
@@ -595,7 +595,7 @@ let name: string = nil;     // compile error
 | Safe access | `a?.b` | `nil` when `a` is `nil`, otherwise `a.b` |
 | Non-null assertion | `a!!` | `a`, or a runtime error when `a` is `nil` |
 
-```jolt
+```oskel
 let a: string? = nil;
 print(a ?? "default");   // "default"
 let b: string? = "hi";
@@ -626,7 +626,7 @@ value of the union's type may be any one of the alternatives, and the
 annotation is checked like every other type and then erased, so it adds no
 opcode.
 
-```jolt
+```oskel
 let value: int | string = 1;
 value = "text";                 // the other alternative is accepted too
 let result: int | error = try parse(input);
@@ -636,7 +636,7 @@ let result: int | error = try parse(input);
 so `nil` folds into the nullability of the whole annotation. That keeps the two
 spellings interchangeable, and a `?` alone means exactly the same thing.
 
-```jolt
+```oskel
 let a: int | nil = nil;     // same type as `int?`
 let b: int | string | nil = nil;
 ```
@@ -649,7 +649,7 @@ Assignment follows the same rule as a single type, applied to each alternative:
   assignable to a wider union that contains all of its members.
 - `nil` needs the union to be nullable (written `| nil` or with a `?`).
 
-```jolt
+```oskel
 let x: int | string = 1;                 // ok
 let y: float | string = 1;               // ok: int widens to float
 let wide: int | string | bool = x;       // ok: every member fits
@@ -666,7 +666,7 @@ rejected wherever a type must cross the FFI boundary: `extern "C"` signatures,
 type is the union of the two. That is what lets a fallback of a different type
 type-check without a cast.
 
-```jolt
+```oskel
 fn parse(s: string): int | error { ... }
 let recovered = parse(input) catch 0;    // int
 ```
@@ -681,7 +681,7 @@ be — maps plus closures replace classes). Like `import`, a `struct` is
 **module-level metadata**: it may only be declared at the top level of a file,
 and the declaration itself emits no bytecode.
 
-```jolt
+```oskel
 struct Point {
   x: int;
   y: int;
@@ -704,7 +704,7 @@ struct name. A field annotation is optional; when present, the value is checked
 with the same rules as every other annotation (including `int` → `float` →
 `double` widening).
 
-```jolt
+```oskel
 struct Pair { first; second; }          // untyped fields
 let a = Pair { first: 1, second: "x" }; // ok: any value fits
 
@@ -719,7 +719,7 @@ let bad3 = Vec { x: 1, y: "no" };       // error: cannot assign 'string' to 'flo
 A struct name is a valid type annotation, and — like a hoisted `fn` — a struct
 declared later in the file is visible earlier:
 
-```jolt
+```oskel
 fn origin(): Point {
   return Point { x: 0, y: 0 };
 }
@@ -799,7 +799,7 @@ Rules:
 - `int` overflow wraps around (two's complement).
 - `+` concatenates two strings and also two arrays (creating a new array).
 
-```jolt
+```oskel
 assertEq(7 / 2, 3);
 assertEq(7 / 2.0, 3.5);
 assertEq(type(1.5f + 1.5f), "float");
@@ -833,7 +833,7 @@ Comparing incompatible types is an error.
 
 `&&` and `||` **return one of their operands**, not a boolean:
 
-```jolt
+```oskel
 assertEq(nil || "default", "default");
 assertEq("value" || "default", "value");
 assertEq(false && 123, false);
@@ -856,7 +856,7 @@ The right operand is only evaluated if needed.
 
 They only accept `int`. Shifting requires a count between 0 and 63.
 
-```jolt
+```oskel
 assertEq(6 & 3, 2);
 assertEq(6 | 3, 7);
 assertEq(1 << 4, 16);
@@ -875,7 +875,7 @@ The `in` operator tests membership:
 | string | The left side must be a string; checks whether it is a substring. |
 | range | The left side must be an integer; checks whether it lies within the range. |
 
-```jolt
+```oskel
 assertEq(2 in [1, 2, 3], true);
 assertEq("a" in {a: 1}, true);
 assertEq("ell" in "hello", true);
@@ -884,13 +884,13 @@ assertEq(5 in 1..10, true);
 
 ### 5.8 Ternary
 
-```jolt
+```oskel
 let label = age >= 18 ? "adult" : "minor";
 ```
 
 Only the chosen branch is evaluated. It can be nested:
 
-```jolt
+```oskel
 let size = n > 100 ? "large" : n > 10 ? "medium" : "small";
 ```
 
@@ -902,7 +902,7 @@ let size = n > 100 ? "large" : n > 10 ? "medium" : "small";
 | Safe access | `a?.b` | `nil` when `a` is `nil`, otherwise `a.b` |
 | Non-null assertion | `a!!` | `a`, or a runtime error when `a` is `nil` |
 
-```jolt
+```oskel
 let name: string? = nil;
 print(name ?? "anonymous");   // "anonymous"
 
@@ -924,7 +924,7 @@ side is evaluated only when the left is `nil`), and `a?.b` is read-only. See
 
 Assignment is an expression and returns the assigned value:
 
-```jolt
+```oskel
 var x = 0;
 let y = (x = 5);
 assertEq(x, 5);
@@ -937,7 +937,7 @@ let c = (a = b = 3); // right-associative
 
 Compound operators:
 
-```jolt
+```oskel
 x += 1;
 x -= 1;
 x *= 2;
@@ -948,7 +948,7 @@ x **= 2;
 
 They also work on indexes and members:
 
-```jolt
+```oskel
 let data = [1, 2];
 data[0] += 10;
 data[0] *= 2;
@@ -962,11 +962,11 @@ The logical operators have a compound form too. Each one short-circuits exactly
 like its binary counterpart and writes the target back only when it does not,
 so the right-hand side is evaluated at most once:
 
-```jolt
+```oskel
 var name = nil;
 name ??= "anon";  // assigns only when `name` is nil
 
-var count = 0;    // 0 is truthy in Jolt
+var count = 0;    // 0 is truthy in Oskel
 count ||= 10;     // not assigned: `count` is already truthy
 
 var flag = true;
@@ -994,14 +994,14 @@ There are no `++` or `--`; use `+= 1` and `-= 1`.
 
 An expression followed by `;` is evaluated and its result is discarded:
 
-```jolt
+```oskel
 1 + 2;
 print("hello");
 ```
 
 ### 6.2 Blocks
 
-```jolt
+```oskel
 {
   let temporary = 1;
   print(temporary);
@@ -1014,7 +1014,7 @@ Blocks create a new scope. An empty `;` statement is also valid.
 
 The condition goes in parentheses. The body is usually a block:
 
-```jolt
+```oskel
 if (age >= 18) {
   print("adult");
 } else if (age >= 13) {
@@ -1028,7 +1028,7 @@ A body may also be a single statement without braces. It is wrapped in a
 block, so its bytecode is the same as the brace form, it is a scope of its own
 (a `let` in it does not leak) and a `defer` in it runs when the body exits:
 
-```jolt
+```oskel
 if (x > 0) print("positive"); else print("non-positive");
 
 if (n >= 90) return "A";
@@ -1043,7 +1043,7 @@ works for `while`, `for` and `for-in` (§6.4, §6.5, §6.6).
 
 `while` tests its condition before each iteration:
 
-```jolt
+```oskel
 var i = 0;
 while (i < 5) {
   print(i);
@@ -1055,7 +1055,7 @@ while (i < 5) {
 condition is checked, so it always runs at least once. The trailing `;` after
 the condition is optional.
 
-```jolt
+```oskel
 var n = 0;
 do {
   n += 1;
@@ -1070,7 +1070,7 @@ In both loops `break` leaves the loop, `continue` re-tests the condition (in a
 
 ### 6.5 Classic `for`
 
-```jolt
+```oskel
 for (var i = 0; i < 5; i += 1) {
   print(i);
 }
@@ -1078,7 +1078,7 @@ for (var i = 0; i < 5; i += 1) {
 
 Any of the three clauses may be omitted:
 
-```jolt
+```oskel
 for (;;) {
   break;
 }
@@ -1090,7 +1090,7 @@ The variable declared in the initializer lives in a scope of its own for the loo
 
 Syntax, with or without parentheses:
 
-```jolt
+```oskel
 for value in [10, 20, 30] {
   print(value);
 }
@@ -1111,7 +1111,7 @@ You can iterate over:
 - **maps**: by key, in insertion order;
 - **ranges**: ascending or descending depending on the bounds.
 
-```jolt
+```oskel
 for c in "abc" {
   print(c.upper());
 }
@@ -1133,7 +1133,7 @@ any other iterable raises a runtime error. The first variable is the key that
 the loop already produces, so the value form does not change the iteration
 order or the live-mutation rules below.
 
-```jolt
+```oskel
 for key, value in {a: 1, b: 2} {
   print("${key} = ${value}");
 }
@@ -1143,7 +1143,7 @@ The iterable is evaluated only once. Arrays and maps are iterated **live**: an a
 
 ### 6.7 `break` and `continue`
 
-```jolt
+```oskel
 for n in 0..10 {
   if (n % 2 == 0) {
     continue;
@@ -1159,7 +1159,7 @@ They only affect the innermost loop. They cannot cross a function boundary: a `b
 
 ### 6.8 `return`
 
-```jolt
+```oskel
 fn maximum(a, b) {
   if (a > b) {
     return a;
@@ -1172,7 +1172,7 @@ fn maximum(a, b) {
 
 ### 6.9 Function declarations
 
-```jolt
+```oskel
 fn name(parameter1, parameter2) {
   // body
   return value;
@@ -1183,7 +1183,7 @@ They can be declared in the global scope or inside a block. They are hoisted wit
 
 ### 6.10 `switch`
 
-```jolt
+```oskel
 switch (value) {
   case 1: {
     print("one");
@@ -1206,7 +1206,7 @@ The first matching case runs and then control leaves the switch. **There is no f
 
 The subject may be any expression. Each case body is a block with its own scope, so a `let` declared there stays local. `break` and `continue` inside a switch bind to the enclosing loop (the switch is not a loop), and `return` works as usual inside a case. Because the bytecode is built from the existing `EQ`, `IN` and `JMP` instructions, `switch` adds no opcode.
 
-```jolt
+```oskel
 fn classify(n) {
   switch (n) {
     case 0: { return "zero"; }
@@ -1218,7 +1218,7 @@ fn classify(n) {
 
 ### 6.11 `defer`
 
-```jolt
+```oskel
 fn readConfig(path) {
   let file = open(path);
   defer {
@@ -1237,7 +1237,7 @@ The body must be a `{ ... }` block, and `defer` may only appear inside a functio
 
 Because the deferred blocks are inlined at the scope exits, `defer` adds no opcode and no VM support.
 
-```jolt
+```oskel
 fn lifo() {
   var log = [];
   defer { log.push("first"); }
@@ -1253,7 +1253,7 @@ fn lifo() {
 
 ### 7.1 Declarations and calls
 
-```jolt
+```oskel
 fn add(a, b) {
   return a + b;
 }
@@ -1263,7 +1263,7 @@ print(add(2, 3)); // 5
 
 A function whose body is a single expression can use the short form with `=>`. It needs a terminating `;`:
 
-```jolt
+```oskel
 fn square(x) => x * x;
 
 print(square(4)); // 16
@@ -1275,7 +1275,7 @@ extra argument into an array; the `...` follows the optional type annotation
 (`rest...` or `parts: int...`), which describes the elements, not the array.
 A variadic parameter must be the last one, and a function may have at most one.
 
-```jolt
+```oskel
 fn sum(first, rest...) {
   var total = first;
   for x in rest {
@@ -1294,7 +1294,7 @@ print(sum(1, 2, 3, 4)); // 10
 
 Parameters are local. Arrays and maps are passed by reference; reassigning the parameter inside the function does not change the caller's variable.
 
-```jolt
+```oskel
 fn append(arr) {
   arr.push(1); // visible outside
 }
@@ -1307,7 +1307,7 @@ fn replace(arr) {
 ### 7.2 Lambdas
 
 `fn` always declares a named function. An anonymous function is written as a **lambda** with `=>`, and a function is a value:
-```jolt
+```oskel
 let double = x => {
   return x * 2;
 };
@@ -1323,7 +1323,7 @@ A single parameter needs no parentheses (`x => ...`); zero or several do (`() =>
 
 Lambdas can be passed as arguments:
 
-```jolt
+```oskel
 let squares = [1, 2, 3].map(x => x * x);
 ```
 
@@ -1331,7 +1331,7 @@ let squares = [1, 2, 3].map(x => x * x);
 
 A lambda bound to a variable can call itself through that variable, because the name is resolved when the lambda is called:
 
-```jolt
+```oskel
 let power = (base, exp) => exp == 0 ? 1 : base * power(base, exp - 1);
 
 print(power(2, 10)); // 1024
@@ -1343,7 +1343,7 @@ For anything longer than a one-liner, prefer a declared function (`fn power(base
 
 Functions capture the environment where they are created and keep it alive:
 
-```jolt
+```oskel
 fn makeCounter() {
   var n = 0;
   return () => {
@@ -1359,7 +1359,7 @@ print(counter()); // 2
 
 Capture is by reference: if the captured variable changes after the function is created, the function sees the new value.
 
-```jolt
+```oskel
 fn example() {
   var state = 1;
   let read = () => state;
@@ -1374,7 +1374,7 @@ print(example()()); // 2
 
 Recursion works both in declared functions and in named lambdas. The runtime limits the call depth to **2000**; exceeding it produces a runtime error.
 
-```jolt
+```oskel
 fn factorial(n) {
   if (n <= 1) {
     return 1;
@@ -1385,13 +1385,13 @@ fn factorial(n) {
 
 ### 7.6 `native fn`
 
-A `native fn` declares a function whose body is **not** written in Jolt: the
+A `native fn` declares a function whose body is **not** written in Oskel: the
 name binds to a function the host (the VM or the future AOT runtime) already
 provides, such as a standard-library builtin. The declaration is bodyless and
 carries only a signature, so it emits no bytecode and adds no opcode — the name
 is bound with a plain `GETGLOBAL` of the host function.
 
-```jolt
+```oskel
 native fn sqrt(x: double): double;
 
 print(sqrt(9.0));   // 3
@@ -1407,7 +1407,7 @@ variadic parameter's element type. The return type is used for inference, so
 unannotated parameter (or `any`) turns the check off for that argument, which is
 how a builtin with a loose signature is declared:
 
-```jolt
+```oskel
 native fn str(v: any): string;
 native fn min(first: double, rest: double...): double;   // variadic
 native fn len(v);                 // fully untyped parameter
@@ -1437,7 +1437,7 @@ A function may be declared `@MustUse`: the caller must do something with the
 return value. When a call to it is used as a statement, so its result is thrown
 away, the compiler reports a **warning** (never an error), naming the function:
 
-```jolt
+```oskel
 @MustUse
 fn parse(input: string): int | error { ... }
 
@@ -1452,7 +1452,7 @@ of a program is identical with and without it. It is accepted on `fn` and on
 Discarding the result is sometimes intentional. Assigning it to `_` is the
 explicit acknowledgement, and it never warns:
 
-```jolt
+```oskel
 _ = parse(text);      // ok: the discard is deliberate
 ```
 
@@ -1466,7 +1466,7 @@ The check is precise about **which** function is called. A local or upvalue that
 shadows a `@MustUse` name is a different function, so it carries its own flag and
 does not inherit the annotation:
 
-```jolt
+```oskel
 @MustUse
 fn parse(input: string): int | error { ... }
 
@@ -1488,21 +1488,21 @@ confused with the `camelCase` of ordinary identifiers.
 
 ### 8.1 Literals and indexes
 
-```jolt
+```oskel
 let empty = [];
 let numbers = [1, 2, 3,];
 ```
 
 A trailing comma is allowed. Indexes are integers; negative ones count from the end:
 
-```jolt
+```oskel
 assertEq(numbers[0], 1);
 assertEq(numbers[-1], 3);
 ```
 
 An out-of-range index is a runtime error. Arrays are mutable:
 
-```jolt
+```oskel
 numbers[0] = 10;
 numbers.push(4);
 ```
@@ -1516,7 +1516,7 @@ follow Python's rule: with a negative step the defaults are the end and
 before the start, so `a[::-1]` reverses. A slice is a copy, so mutating it
 never touches the source, and it is not an assignment target.
 
-```jolt
+```oskel
 let a = [10, 20, 30, 40, 50];
 assertEq(a[1:3], [20, 30]);
 assertEq(a[2:], [30, 40, 50]);
@@ -1572,7 +1572,7 @@ Details:
 - `sum` requires all elements to be numbers; it returns `int` if all are integers and `double` otherwise.
 - `clone` is shallow: nested arrays and maps are shared.
 
-```jolt
+```oskel
 let nums = [3, 1, 2];
 assertEq(nums.sorted(), [1, 2, 3]);
 assertEq(nums.sorted((a, b) => a > b), [3, 2, 1]);
@@ -1586,7 +1586,7 @@ assertEq(nums.reduce((a, n) => a + n, 0), 6);
 
 Strings are immutable and indexed by code point:
 
-```jolt
+```oskel
 let s = "áé";
 assertEq(s.length, 2);
 assertEq(s[0], "á");
@@ -1599,7 +1599,7 @@ Strings also support slicing by code point, with the same rules as arrays
 (bounds and step omitted, negatives counted from the end, clamped, negative
 step reverses):
 
-```jolt
+```oskel
 let s = "hello";
 assertEq(s[1:3], "el");
 assertEq(s[2:], "llo");
@@ -1641,7 +1641,7 @@ Details:
 - `padStart` and `padEnd` pad by code points and trim the fill to the exact width. The result has the same 64 MB limit as `repeat`.
 - `repeat` has a 64 MB limit on the result.
 
-```jolt
+```oskel
 assertEq("  hello  ".trim(), "hello");
 assertEq("a,b,c".split(","), ["a", "b", "c"]);
 assertEq("abc".substr(1, 2), "bc");
@@ -1656,7 +1656,7 @@ assertEq("5".padStart(3, "0"), "005");
 
 Keys in a literal can be identifiers, string literals, scalar literals (`int`, `float`, `double`, `true`, `false`, `nil`) or computed expressions in brackets:
 
-```jolt
+```oskel
 let person = {
   name: "Ada",
   age: 36,
@@ -1678,7 +1678,7 @@ All map keys are strings internally: scalar and computed keys are normalized wit
 
 ### 10.2 Access and assignment
 
-```jolt
+```oskel
 assertEq(person.name, "Ada");
 assertEq(person["age"], 36);
 
@@ -1709,7 +1709,7 @@ Maps preserve insertion order. Reassigning an existing key does not move it.
 | `merge(other)` | Copies the keys of `other` into this map and returns it. |
 | `clone()` | Shallow copy. |
 
-```jolt
+```oskel
 let m = {a: 1};
 m.set("b", 2);
 assertEq(m.keys(), ["a", "b"]);
@@ -1723,7 +1723,7 @@ Map equality does not depend on order: two maps with the same keys and values ar
 
 Iterating a map produces its keys:
 
-```jolt
+```oskel
 for key in {a: 1, b: 2} {
   print(key);
 }
@@ -1742,7 +1742,7 @@ for key in {a: 1, b: 2} {
 
 The bounds must be integers. A range can be ascending or descending:
 
-```jolt
+```oskel
 assertEq((1..4).toArray(), [1, 2, 3]);
 assertEq((1..=3).toArray(), [1, 2, 3]);
 assertEq((3..0).toArray(), [3, 2, 1]);
@@ -1762,7 +1762,7 @@ The `range(end)` function produces `0..end`, and `range(start, end)` produces `s
 
 Range values are lightweight: they only store the bounds and the inclusiveness flag. Iterating a range with `for ... in` is lazy (constant memory); operations that need all elements at once, such as `toArray()` or passing the range to `map`/`filter`-style builtins, materialize them and are capped at 10,000,000 elements. A range wider than `INT64_MAX` elements reports a `.length` of `9223372036854775807` (the count saturates rather than overflowing).
 
-```jolt
+```oskel
 assertEq(2 in 1..5, true);
 assertEq(5 in 1..5, false);
 assertEq(5 in 1..=5, true);
@@ -1792,7 +1792,7 @@ assertEq(len(5..0), 5);
 | `int(value)` | Converts to integer (truncates floats and doubles). |
 | `float(value)` | Converts to `float` (binary32). |
 | `double(value)` | Converts to `double` (binary64). |
-| `bool(value)` | Applies Jolt's truthiness. |
+| `bool(value)` | Applies Oskel's truthiness. |
 
 `int(string)` accepts the `strtoll` format with base 0 (decimal, `0x...`, `0...` octal) and trims whitespace. `float(string)` and `double(string)` use `strtod` (`float` then rounds to binary32). Converting an empty or badly formatted string is an error. `int(float)` and `int(double)` truncate toward zero and are an error when the value is outside the `int` range (a non-finite value is an error too).
 
@@ -1800,7 +1800,7 @@ A floating-point value prints with the shortest decimal text that round-trips th
 
 `str` of an array or map uses the representation of its elements, with inner strings in quotes:
 
-```jolt
+```oskel
 assertEq(str(42), "42");
 assertEq(str([1, "a"]), "[1, \"a\"]");
 assertEq(repr("a"), "\"a\"");
@@ -1836,7 +1836,7 @@ Host builtins:
 
 `floor`, `ceil` and `round` return the same `int` if they receive an `int`, and a `double` for a `float` or `double` argument (like Java's `Math.floor`, which takes and returns `double`).
 
-```jolt
+```oskel
 import std.math.*;
 
 assertEq(abs(-7), 7);
@@ -1909,7 +1909,7 @@ are never a machine address the program can dereference.
 
 ## 13. Errors and diagnostics
 
-Jolt distinguishes two kinds of errors:
+Oskel distinguishes two kinds of errors:
 
 - **Compile error**: detected by the lexer or the parser (for example, a missing `;` or a malformed literal).
 - **Runtime error**: detected while the program runs (for example, an undefined variable, a division by zero or an out-of-range index).
@@ -1917,7 +1917,7 @@ Jolt distinguishes two kinds of errors:
 Both are shown with the location and a code snippet:
 
 ```text
-script.jolt:3:11: runtime error: division by zero
+script.oskl:3:11: runtime error: division by zero
   |
 3 | let x = 1 / 0;
   |           ^
@@ -1934,7 +1934,7 @@ member of a visible global table. `import std.math;` binds the namespace
 root is caught with the fix spelled out:
 
 ```text
-script.jolt:2:7: runtime error: undefined variable 'math' (did you mean 'std.math'?)
+script.oskl:2:7: runtime error: undefined variable 'math' (did you mean 'std.math'?)
   |
 2 | print(math.sqrt(4));
   |       ^
@@ -1946,7 +1946,7 @@ and runs and keeps its exit code. The only warning today is the discarded result
 of a `@MustUse` function (see §7.7).
 
 ```text
-script.jolt:4:6: warning: the result of '@MustUse' function 'parse' is discarded; assign it to '_' to acknowledge
+script.oskl:4:6: warning: the result of '@MustUse' function 'parse' is discarded; assign it to '_' to acknowledge
   |
 4 | parse(text);
   |      ^
@@ -1963,7 +1963,7 @@ Process exit codes:
 | `70` | Runtime error. |
 | other | Code given to `exit(n)`. |
 
-`jolt -c file.jolt` compiles the script without running it: the lexer, the parser, the compiler and import resolution all run, so syntax errors, type errors and a missing module are reported, but the VM never starts and no output is produced. Use it to validate a file in CI.
+`oskel -c file.oskl` compiles the script without running it: the lexer, the parser, the compiler and import resolution all run, so syntax errors, type errors and a missing module are reported, but the VM never starts and no output is produced. Use it to validate a file in CI.
 
 ### 13.1 Recovering from an error: `pcall`
 
@@ -1975,7 +1975,7 @@ runtime error into a value instead of aborting the program. It returns a map
 - on failure, `ok` is `false`, `value` is `nil` and `error` is an error value
   (see §13.2).
 
-```jolt
+```oskel
 let result = pcall(() => 1 / 0);
 if (!result.ok) {
   print("failed: ${result.error}");            // failed: division by zero
@@ -2001,7 +2001,7 @@ An error is a first-class value with its own runtime type, not a map that
 happens to have the right shape. `error(message, code?)` builds one and
 `isError(value)` detects it:
 
-```jolt
+```oskel
 let failure = error("not found", 404);
 print(type(failure));        // error
 print(failure.message);      // not found
@@ -2036,7 +2036,7 @@ operators cover that, and both work on error **values** (the result of
 - **`expr catch default`** — if `expr` is an error value, the whole expression
   is `default`; otherwise it is `expr`. It is Zig's `catch`.
 
-```jolt
+```oskel
 fn parse(s) {
   if (len(s) == 0) { return error("empty input"); }
   return 42;
@@ -2087,7 +2087,7 @@ the function runs (LIFO) before the caller sees the error.
 
 ## 14. REPL
 
-Running `jolt` with no arguments starts the REPL. Features:
+Running `oskel` with no arguments starts the REPL. Features:
 
 - Expressions are evaluated and shown with `repr`; `nil` is not printed.
 - `_` holds the last evaluated value.
@@ -2102,8 +2102,8 @@ program: a `let` stays immutable, a `var` keeps its type annotation, a
 once. Redefining a name in a later entry is allowed and replaces the old
 binding. An entry that fails to compile leaves no trace: it commits nothing,
 so an import it started can be imported again cleanly. `:clear` drops the
-whole session state with the definitions. A file run directly (`jolt
-file.jolt`) always starts from an empty session; `:load` instead runs the file
+whole session state with the definitions. A file run directly (`oskel
+file.oskl`) always starts from an empty session; `:load` instead runs the file
 in the current session, so it sees the session's definitions and merges its
 own into it.
 
@@ -2120,13 +2120,13 @@ Commands:
 Example:
 
 ```text
-jolt> let x = 10
-jolt> let double = n => n * 2
-jolt> double(x)
+oskel> let x = 10
+oskel> let double = n => n * 2
+oskel> double(x)
 20
-jolt> _
+oskel> _
 20
-jolt> :vars
+oskel> :vars
   _: int
   double: function
   x: int
@@ -2137,11 +2137,11 @@ jolt> :vars
 ## 15. Command line
 
 ```text
-jolt                      starts the REPL
-jolt <file.jolt>          runs a script
-jolt -e "<code>"          runs code from the command line
-jolt -c <file.jolt>       compiles the script without running it
-jolt build <file.jolt>    compiles the script to a native binary (AOT)
+oskel                      starts the REPL
+oskel <file.oskl>          runs a script
+oskel -e "<code>"          runs code from the command line
+oskel -c <file.oskl>       compiles the script without running it
+oskel build <file.oskl>    compiles the script to a native binary (AOT)
 ```
 
 | Option | Description |
@@ -2156,28 +2156,28 @@ jolt build <file.jolt>    compiles the script to a native binary (AOT)
 Options must come before the file. Everything after the file is considered an argument of the script and is obtained with `args()`.
 
 ```sh
-jolt program.jolt one two
+oskel program.oskl one two
 ```
 
-```jolt
+```oskel
 for argument in args() {
   print(argument);
 }
 ```
 
-`jolt build` runs the full AOT pipeline: lex, parse, compile to bytecode and lower
+`oskel build` runs the full AOT pipeline: lex, parse, compile to bytecode and lower
 that bytecode to machine code, then wrap it in a static executable. The emitted
 binary is freestanding — it carries its own runtime and calls the Linux kernel
 directly, so it has no dynamic dependencies (`ldd` reports "not a dynamic
-executable") and runs on any Linux x86-64 without Jolt installed. It embeds only
+executable") and runs on any Linux x86-64 without Oskel installed. It embeds only
 the runtime, never the compiler, so a compiled program cannot `eval`.
 
 ```sh
-jolt build app.jolt -o app   # writes ./app
+oskel build app.oskl -o app   # writes ./app
 ./app
 ```
 
-The backend targets x86_64-linux-sysv today; on any other target `jolt build`
+The backend targets x86_64-linux-sysv today; on any other target `oskel build`
 reports the unsupported target instead of emitting bytes for an ABI it cannot
 produce.
 
@@ -2191,20 +2191,20 @@ conversions need a freestanding string parser. They land in a later slice.
 **Planned (PHASE 7)**:
 
 ```sh
-joltc <file.jolt> -o app    compiles to a native binary (AOT, musl static)
-joltc <file.jolt> -c        compiles to bytecode (.jolc)
-joltc -pkg ... -o app.jpkg  packages a .jpkg
+oskelc <file.oskl> -o app    compiles to a native binary (AOT, musl static)
+oskelc <file.oskl> -c        compiles to bytecode (.oskc)
+oskelc -pkg ... -o app.oskpkg  packages a .oskpkg
 ```
 
-`joltc` is the host compiler. It reads sources and writes the ELF, so it links libc; the freestanding part is what it emits, not the compiler itself. 
-`jolt` (the development engine) may use AsmJIT JIT; joltc uses AsmJIT Assembler (no JIT).
+`oskelc` is the host compiler. It reads sources and writes the ELF, so it links libc; the freestanding part is what it emits, not the compiler itself. 
+`oskel` (the development engine) may use AsmJIT JIT; oskelc uses AsmJIT Assembler (no JIT).
 
 ---
 
 ## 16. Known limitations
 
-- Dynamic typing. The `jolt` executable compiles source to bytecode and runs it on the register-based VM; the AST is never executed. The compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
-- No JIT. A JIT (AsmJIT) is planned for `jolt` (development engine) in PHASE 8+, not for `joltc` (product).
+- Dynamic typing. The `oskel` executable compiles source to bytecode and runs it on the register-based VM; the AST is never executed. The compiler and the VM cover functions, closures, control flow, and collections (PHASE 6 done).
+- No JIT. A JIT (AsmJIT) is planned for `oskel` (development engine) in PHASE 8+, not for `oskelc` (product).
 - No classes, interfaces or inheritance (and there never will be — maps + closures replace them). A `struct` (data only, no methods) is supported (see §4.7): it is a named map shape checked at compile time, not a class.
 - No `try`/`catch` *statement* and no catchable exceptions. Error handling is value-based: `nil` (not found), `pcall(fn, ...)` to turn a raised runtime error into a `{ok, value, error}` map (see §13.1), and the error-value operators `try expr` (propagate, Rust's `?`) and `expr catch default` (recover locally, Zig's `catch`, see §13.3). `panic()` is for unrecoverable errors. A raised runtime error is not a value and is not caught by `catch`; use `pcall` for that.
 - Modules use Java-style `import` (see §18). `import` is only allowed at the top level of a module: nesting an import inside a function or block is a compile error. `require` (Lua-style) is dropped — `import` is the only module form. A module is loaded once, eagerly, when the program is compiled, and a cyclic import is a compile error rather than a crash.
@@ -2227,7 +2227,7 @@ joltc -pkg ... -o app.jpkg  packages a .jpkg
 
 ## 17. Complete example
 
-```jolt
+```oskel
 // Counts words and shows the most frequent ones.
 
 fn countWords(text) {
@@ -2260,9 +2260,9 @@ one: 1
 
 ## 18. Modules and `import`
 
-Jolt imports are Java-style: the module is named by a **dotted path without quotes**, and `std.` is reserved for the standard library. Four forms exist.
+Oskel imports are Java-style: the module is named by a **dotted path without quotes**, and `std.` is reserved for the standard library. Four forms exist.
 
-```jolt
+```oskel
 import std.math;                  // qualified: access is std.math.sqrt
 import std.math.*;                // wildcard: access is sqrt
 import std.math as m;             // alias: access is m.sqrt
@@ -2275,17 +2275,17 @@ import { sqrt, pow } from std.math; // selective: access is sqrt and pow
 
 | Form | Meaning |
 | --- | --- |
-| `import a.b;` | Load `a/b.jolt` and bind it to the namespace `a.b`. Access is `a.b.name`. |
-| `import a.b.*;` | Load `a/b.jolt` and add all its public names to the current scope. Access is `name`. |
-| `import a.b as c;` | Load `a/b.jolt` and bind it to `c`. Access is `c.name`. |
-| `import { x, y } from a.b;` | Load `a/b.jolt` and bind only `x` and `y`. Access is `x` and `y`. |
+| `import a.b;` | Load `a/b.oskl` and bind it to the namespace `a.b`. Access is `a.b.name`. |
+| `import a.b.*;` | Load `a/b.oskl` and add all its public names to the current scope. Access is `name`. |
+| `import a.b as c;` | Load `a/b.oskl` and bind it to `c`. Access is `c.name`. |
+| `import { x, y } from a.b;` | Load `a/b.oskl` and bind only `x` and `y`. Access is `x` and `y`. |
 
 ### 18.2 What a module exports
 
-A module is a `.jolt` file. Its top-level declarations become the module's public names. A binding whose name starts with `_` is **private** and is not exported.
+A module is a `.oskl` file. Its top-level declarations become the module's public names. A binding whose name starts with `_` is **private** and is not exported.
 
-```jolt
-// std/math.jolt
+```oskel
+// std/math.oskl
 const PI = 3.141592653589793;
 
 fn sqrt(x) {
@@ -2322,14 +2322,14 @@ A name the importing module declares itself (`let`, `var` or `fn`) wins over an 
 
 ### 18.4 Module resolution
 
-A dotted path `a.b.c` maps to the file `a/b/c.jolt`, looked up in this order:
+A dotted path `a.b.c` maps to the file `a/b/c.oskl`, looked up in this order:
 
 | Path | Resolves to |
 | --- | --- |
-| `std.*` | the standard library directory (`std/math.jolt`). `std.` is reserved: a user module under that prefix is a compile error. |
-| anything else | the project directory (the directory of the file being compiled), then the installed packages (`$JOLT_PACKAGES`, or `$HOME/.jolt/packages`). |
+| `std.*` | the standard library directory (`std/math.oskl`). `std.` is reserved: a user module under that prefix is a compile error. |
+| anything else | the project directory (the directory of the file being compiled), then the installed packages (`$OSKEL_PACKAGES`, or `$HOME/.oskel/packages`). |
 
-The standard library directory is found by looking in the working directory, then walking up from the running executable's directory (so `std/` is found whether `jolt` sits in the source tree, in `build/`, or in an install prefix), then `../share/jolt/std` next to the binary. `$JOLT_STDLIB` overrides the search. `cmake --install` ships `std/` to `share/jolt/std`, so an installed `jolt` resolves `import std.math` from any working directory.
+The standard library directory is found by looking in the working directory, then walking up from the running executable's directory (so `std/` is found whether `oskel` sits in the source tree, in `build/`, or in an install prefix), then `../share/oskel/std` next to the binary. `$OSKEL_STDLIB` overrides the search. `cmake --install` ships `std/` to `share/oskel/std`, so an installed `oskel` resolves `import std.math` from any working directory.
 
 A path that resolves nowhere is a compile error: `module 'X' not found`.
 
@@ -2337,7 +2337,7 @@ Nested imports (a module that imports another module) resolve from the same proj
 
 ### 18.5 Example
 
-```jolt
+```oskel
 import std.math;            // std.math.sqrt, std.math.pow, ...
 import { sqrt } from std.math;
 
@@ -2350,21 +2350,21 @@ print(sqrt(25));            // 5
 ## 19. File extensions
 | Extension | What it is | Java analog |
 |-----------|------------|-------------|
-| `.jolt` | Source code | `.java` |
-| `.jolc` | Bytecode | `.class` |
-| `.jpkg` | Package (ZIP) | `.jar` |
-| `.jlib` | Native library | `.dll` / `.so` / `.dylib` |
-| `.jdoc` | Documentation | `.javadoc` |
+| `.oskl` | Source code | `.java` |
+| `.oskc` | Bytecode | `.class` |
+| `.oskpkg` | Package (ZIP) | `.jar` |
+| `.osklib` | Native library | `.dll` / `.so` / `.dylib` |
+| `.oskdoc` | Documentation | `.javadoc` |
 | `myapp` | Native binary (Linux/macOS) | (GraalVM) `.exe` |
 | `myapp.exe` | Native binary (Windows) | (GraalVM) `.exe` |
 
-**`.jpkg` format** (ZIP):
+**`.oskpkg` format** (ZIP):
 
 ```text
-myapp.jpkg
+myapp.oskpkg
 ├── META-INF/MANIFEST.MF
-├── bin/main.jolc
-├── lib/mylib.jlib
+├── bin/main.oskc
+├── lib/mylib.osklib
 ├── resources/icon.png
 └── README.md
 ```
