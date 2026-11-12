@@ -830,8 +830,16 @@ Slices, each independently shippable:
       `catch` runs; a real failure still exits 70). Covered by
       `tests/freestanding_test.cpp` (both helpers under the real `_start`, plus
       the failing `!!` exiting 70) and the `jolt build` fixture.
-    - **7c.4b** — `$str` for string interpolation and computed keys, rendering
-      scalars byte-identically to the hosted `Value::toString`.
+    - **7c.4b** (done) — the hidden `$str` helper for string interpolation and
+      computed keys. It renders the operand to an `AotString` in the arena,
+      byte-identical to the hosted `Value::toString` for nil, booleans,
+      integers (with the sign), floats/doubles (through the embedded dtoa) and
+      strings (returned unchanged, so a string interpolates without quotes);
+      a collection or function operand fails with a clear message instead of
+      producing different text (deferred to 7c.4b.2). Covered by
+      `tests/freestanding_test.cpp` and the `jolt build` fixture.
+    - **7c.4b.2** — `$str` for collections and functions (recursive repr),
+      reusing the printer's `jolt_print_repr` into an arena string.
     - **7c.4c** — `$range` (`a..b` / `a..=b`): a `Range` value and its
       `for-in` iteration.
     - **7c.4d** — `$slice` (`obj[start:end:step]`) for strings and arrays.
@@ -922,7 +930,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7d done)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7c.4a, 7c.4b, 7d done)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 

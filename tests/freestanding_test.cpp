@@ -382,6 +382,39 @@ static void test_hidden_helpers_non_null_failure() {
         "the failed '!!' names the non-null assertion");
 }
 
+// The `$str` helper (PHASE 7c.4b) renders the scalars a compiled program
+// interpolates: int, negative int, float, double, bool, nil and string must
+// match the hosted `Value::toString` byte for byte.
+static void test_str_helper() {
+  Bytecode proto = compileSource(
+      "var n = 3;\n"
+      "print(\"n=${n}\");\n"
+      "var f = 1.0 / 3.0;\n"
+      "print(\"f=${f}\");\n"
+      "var d = 0.1 + 0.2;\n"
+      "print(\"d=${d}\");\n"
+      "var b = true;\n"
+      "print(\"b=${b}\");\n"
+      "var s = \"hi\";\n"
+      "print(\"s=${s}\");\n"
+      "var z = nil;\n"
+      "print(\"z=${z}\");\n"
+      "var neg = -42;\n"
+      "print(\"neg=${neg}\");\n");
+  RunResult result = buildAndRun("/tmp/jolt_str_helper", proto);
+  std::string expected =
+      "n=3\n"
+      "f=0.3333333333333333\n"
+      "d=0.30000000000000004\n"
+      "b=true\n"
+      "s=hi\n"
+      "z=nil\n"
+      "neg=-42\n";
+  check(result.output == expected,
+        "a compiled program interpolates scalars like the VM");
+  check(result.exitCode == 0, "a program using interpolation exits 0");
+}
+
 // A nested container prints with the recursive repr, and a self-referential one
 // stops at the depth cap instead of recursing forever.
 static void test_collection_repr() {
@@ -786,6 +819,7 @@ int main() {
   test_collections();
   test_hidden_helpers();
   test_hidden_helpers_non_null_failure();
+  test_str_helper();
   test_collection_repr();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
