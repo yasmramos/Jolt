@@ -315,7 +315,13 @@ void collectProtos(const Bytecode& proto, std::vector<const Bytecode*>& out) {
 // them; the `lea` fixups emitted by `loadStringImmediate` resolve against these
 // labels.
 void emitStringConstants(CodeGen& cg, const std::vector<StringConstant>& constants) {
+  // `AotString` begins with a `uint64_t`, so each header must land on an
+  // 8-byte boundary: the layout is the contract every AOT target shares and
+  // the runtime's arena allocator already honors it. x86-64 happens to
+  // tolerate the misaligned load, but the pool must not rely on that.
+  constexpr std::uint8_t kPad = 0x00;
   for (const StringConstant& constant : constants) {
+    while (cg.offset() % alignof(std::uint64_t) != 0) cg.emitBytes(&kPad, 1);
     cg.bind(constant.label);
     const std::uint64_t length = constant.bytes.size();
     cg.emitBytes(reinterpret_cast<const std::uint8_t*>(&length), sizeof length);
