@@ -21,11 +21,20 @@ if [ -z "${CXX:-}" ]; then
     fi
 fi
 
+# Link the whole runtime like CMake's `jolt_lib`: every src/**/*.cpp except the
+# `jolt` entry point. The list is detected, never written by hand, so it cannot
+# drift when a source is added or removed.
+sources=""
+for src in src/*.cpp src/native/*.cpp; do
+    if [ "$src" != "src/main.cpp" ]; then
+        sources="$sources $src"
+    fi
+done
+
+# shellcheck disable=SC2086
 "$CXX" -std=c++17 -O2 -Wall -Wextra -Iinclude -Isrc \
     -o build/gc_test \
     tests/gc_test.cpp \
-    src/gc.cpp \
-    src/env.cpp \
-    src/value.cpp
+    $sources
 
 ./build/gc_test
