@@ -2559,6 +2559,178 @@ void emitNonNullBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   epilogue(cg);
 }
 
+// `AotValue jolt_builtin_str(AotValue* args, long argc, AotClosure* self)`: the
+// hidden `$str` helper the compiler emits for string interpolation (`"${x}"`)
+// and computed map keys. It renders the operand to an `AotString` in the arena,
+// byte-identical to the hosted `Value::toString` for nil, booleans, integers,
+// floats, doubles and strings (a string is returned unchanged, so a string
+// interpolates without quotes). Collections and functions are not rendered yet
+// (deferred to 7c.4b.2); they fail with a clear message instead of silently
+// producing different text.
+void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                    CodeGen::Label fail, CodeGen::Label formatDouble,
+                    const DataBlob& msgOom, const DataBlob& textTrue,
+                    const DataBlob& textFalse, const DataBlob& textNil,
+                    const DataBlob& msgStrBad) {
+  CodeGen::Label asInt = cg.newLabel();
+  CodeGen::Label asBool = cg.newLabel();
+  CodeGen::Label boolFalse = cg.newLabel();
+  CodeGen::Label asNil = cg.newLabel();
+  CodeGen::Label asStr = cg.newLabel();
+  CodeGen::Label asNum = cg.newLabel();
+  CodeGen::Label intPos = cg.newLabel();
+  CodeGen::Label intConv = cg.newLabel();
+  CodeGen::Label intLoop = cg.newLabel();
+  CodeGen::Label intEmit = cg.newLabel();
+  CodeGen::Label buildConst = cg.newLabel();
+  CodeGen::Label numOom = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);   // int digit buffer; keeps rsp 16-byte aligned
+  cg.movReg(Rbx, Rdi);       // rbx = args
+
+  // args[0] is the operand: tag at [rbx + 0], payload at [rbx + 8].
+  cg.movFromMem(Rax, Rbx, 0);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, asStr);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagNil));
+  cg.jcc(Jcc::Eq, asNil);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagBool));
+  cg.jcc(Jcc::Eq, asBool);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Eq, asInt);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagFloat));
+  cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagDouble));
+  cg.jcc(Jcc::Eq, asNum);
+  emitFailCall(cg, fail, msgStrBad);
+
+  // A string renders as itself.
+  cg.bind(asStr);
+  cg.movFromMem(Rax, Rbx, 0);
+  cg.movFromMem(Rdx, Rbx, 8);
+  cg.jmp(done);
+
+  cg.bind(asNil);
+  cg.leaRipLabel(R8, textNil.label);
+  cg.movImm(R12, static_cast<std::int64_t>(textNil.text.size()));
+  cg.jmp(buildConst);
+
+  cg.bind(asBool);
+  cg.movFromMem(R9, Rbx, 8);
+  cg.testReg(R9);
+  cg.jcc(Jcc::Eq, boolFalse);
+  cg.leaRipLabel(R8, textTrue.label);
+  cg.movImm(R12, static_cast<std::int64_t>(textTrue.text.size()));
+  cg.jmp(buildConst);
+  cg.bind(boolFalse);
+  cg.leaRipLabel(R8, textFalse.label);
+  cg.movImm(R12, static_cast<std::int64_t>(textFalse.text.size()));
+  cg.jmp(buildConst);
+
+  // An integer: decimal digits built backwards into the stack buffer, then a
+  // leading '-' when negative, matching `std::to_string`.
+  cg.bind(asInt);
+  cg.movFromMem(R12, Rbx, 8);
+  cg.movReg(R8, Rsp);
+  cg.addImm32(R8, 32);       // cursor = end of buffer
+  cg.movReg(Rax, R12);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ge, intPos);
+  cg.movImm(R9, 1);          // negative
+  cg.negReg(Rax);
+  cg.jmp(intConv);
+  cg.bind(intPos);
+  cg.xorReg(R9, R9);
+  cg.bind(intConv);
+  cg.movImm(Rcx, 10);
+  cg.bind(intLoop);
+  cg.divUnsigned(Rcx);       // rax /= 10, rdx = rax % 10
+  cg.addImm32(Rdx, static_cast<std::int32_t>('0'));
+  cg.subRegImm32(R8, 1);
+  cg.movByteToMem(R8, 0, Rdx);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ne, intLoop);
+  cg.testReg(R9);
+  cg.jcc(Jcc::Eq, intEmit);
+  cg.subRegImm32(R8, 1);
+  cg.movImmByteToMem(R8, 0, static_cast<std::uint8_t>('-'));
+  cg.bind(intEmit);
+  cg.movReg(R12, Rsp);
+  cg.addImm32(R12, 32);
+  cg.subReg(R12, R8);        // length = end - start
+  cg.jmp(buildConst);
+
+  // A Float/Double: format with the embedded dtoa into a stack frame, then copy
+  // the text into the arena string. The frame keeps rsp 16-byte aligned at the
+  // `call`, as the ABI and the formatter's own calls require.
+  cg.bind(asNum);
+  cg.subRegImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.movFromMem(Rdi, Rbx, 0);                 // tag
+  cg.movFromMem(Rsi, Rbx, 8);                 // payload
+  cg.movReg(Rcx, Rsp);                        // scratch = rsp
+  cg.movReg(Rdx, Rsp);
+  cg.addImm32(Rdx, static_cast<std::int32_t>(kDtoaScratchBytes));  // out
+  cg.callLabel(formatDouble);
+  cg.movReg(R12, Rax);                        // length
+  cg.movReg(R8, Rsp);
+  cg.addImm32(R8, static_cast<std::int32_t>(kDtoaScratchBytes));   // text start
+  cg.movReg(Rdi, R12);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, numOom);
+  cg.movToMem(Rax, 0, R12);                   // store the length
+  cg.movReg(Rdi, Rax);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.movReg(Rsi, R8);
+  cg.movReg(Rcx, R12);
+  cg.repMovsb();
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagStr);
+  cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.jmp(done);
+
+  cg.bind(numOom);
+  cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.jmp(oom);
+
+  // Build an `AotString` from a constant/data region: r8 = address, r12 = length.
+  cg.bind(buildConst);
+  cg.movReg(Rdi, R12);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rax, 0, R12);
+  cg.movReg(Rdi, Rax);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.movReg(Rsi, R8);
+  cg.movReg(Rcx, R12);
+  cg.repMovsb();
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagStr);
+  cg.jmp(done);
+
+  cg.bind(oom);
+  cg.addImm32(Rsp, 32);
+  cg.leaRipLabel(Rdi, msgOom.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(msgOom.text.size()));
+  cg.callLabel(fail);
+  cg.ud2();
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
 // `void jolt_print_str_escaped(AotString* s, long fd)`: writes `s` between
 // double quotes with the same escapes as `quoteString`: `\"`, `\\`, `\n`,
 // `\t`, `\r`, and `\xHH` for any other control byte.
@@ -2955,6 +3127,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob msgBadIn = addText("jolt: unsupported operands for 'in'\n");
   DataBlob msgMapValue = addText("jolt: key/value iteration ('for k, v in ...') requires a map\n");
   DataBlob msgNonNull = addText("jolt: unexpected nil (non-null assertion '!!' failed)\n");
+  DataBlob msgStrBad = addText("jolt: cannot render this value to a string\n");
   DataBlob textTrue = addText("true");
   DataBlob textFalse = addText("false");
   DataBlob textNil = addText("nil");
@@ -3089,6 +3262,9 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitMapValueBuiltin(cg, handles.mapValueBuiltin, env.mapFind, env);
   emitIsErrorBuiltin(cg, handles.isErrorBuiltin);
   emitNonNullBuiltin(cg, handles.nonNullBuiltin, fail, msgNonNull);
+  emitStrBuiltin(cg, handles.strBuiltin, handles.alloc, fail,
+                 dtoaHandles.formatDouble, msgOom, textTrue, textFalse, textNil,
+                 msgStrBad);
   dtoa::emitDtoa(cg, dtoaHandles);
 
   // The "length" member name is a raw `AotString` (8-byte length + bytes), laid

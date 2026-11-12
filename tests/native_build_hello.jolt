@@ -41,3 +41,8 @@ print("non-null =", sure);
 var fallback = sure catch 0;
 print("catch =", fallback);
 
+// String interpolation lowers to the hidden `$str` helper (PHASE 7c.4b).
+var ratio = 1.0 / 3.0;
+print("ratio = ${ratio}");
+print("sure = ${sure}, label = ${"x"}");
+
