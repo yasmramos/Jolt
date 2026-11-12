@@ -2141,6 +2141,7 @@ jolt                      starts the REPL
 jolt <file.jolt>          runs a script
 jolt -e "<code>"          runs code from the command line
 jolt -c <file.jolt>       compiles the script without running it
+jolt build <file.jolt>    compiles the script to a native binary (AOT)
 ```
 
 | Option | Description |
@@ -2149,6 +2150,7 @@ jolt -c <file.jolt>       compiles the script without running it
 | `-v`, `--version` | Version. |
 | `-e`, `--eval <code>` | Code to run. The remaining arguments go to the script. |
 | `-c`, `--check` | Compiles without running; reports syntax, type and import errors. |
+| `-o`, `--output <file>` | Output path for `build` (default: the script's base name). |
 | `--` | End of options; the next argument is the file. |
 
 Options must come before the file. Everything after the file is considered an argument of the script and is obtained with `args()`.
@@ -2162,6 +2164,23 @@ for argument in args() {
   print(argument);
 }
 ```
+
+`jolt build` runs the full AOT pipeline: lex, parse, compile to bytecode and lower
+that bytecode to machine code, then wrap it in a static executable. The emitted
+binary is freestanding — it carries its own runtime and calls the Linux kernel
+directly, so it has no dynamic dependencies (`ldd` reports "not a dynamic
+executable") and runs on any Linux x86-64 without Jolt installed. It embeds only
+the runtime, never the compiler, so a compiled program cannot `eval`.
+
+```sh
+jolt build app.jolt -o app   # writes ./app
+./app
+```
+
+The backend targets x86_64-linux-sysv today; on any other target `jolt build`
+reports the unsupported target instead of emitting bytes for an ABI it cannot
+produce.
+
 **Planned (PHASE 7)**:
 
 ```sh

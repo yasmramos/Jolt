@@ -1,0 +1,32 @@
+// Fixture for `jolt build` (tests/build_binary.cmake).
+//
+// Only constructs the AOT backend lowers are used (functions, recursion,
+// arithmetic, `while`, collections and `print`), so the same program runs on
+// the development VM (as an ordinary script test) and compiles to a native
+// binary. The output is asserted byte for byte by the CMake script.
+
+fn fib(n) {
+  if (n < 2) { return n; }
+  return fib(n - 1) + fib(n - 2);
+}
+
+print("fib(10) =", fib(10));
+
+var total = 0;
+var i = 0;
+while (i < 5) {
+  total = total + i;
+  i = i + 1;
+}
+print("total =", total);
+
+var squares = [1, 4, 9];
+print("squares =", squares);
+print("9 in squares =", 9 in squares);
+
+var ages = {"ada": 36, "alan": 41};
+var ageSum = 0;
+for name, age in ages {
+  ageSum = ageSum + age;
+}
+print("age sum =", ageSum);

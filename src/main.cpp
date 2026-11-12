@@ -11,6 +11,7 @@
 #define NOMINMAX
 #include <windows.h>
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -20,6 +21,10 @@
 #include "diagnostic.h"
 #include "lexer.h"
 #include "module_resolver.h"
+#include "native/codegen.h"
+#include "native/elf.h"
+#include "native/lower.h"
+#include "native/target.h"
 #include "parser.h"
 #include "util.h"
 #include "vm.h"
@@ -34,12 +39,14 @@ const char *kUsage =
     "  jolt <file.jolt> [args]   run a script\n"
     "  jolt -e \"<code>\" [args]   run inline code\n"
     "  jolt -c <file.jolt>       parse a script without running it\n"
+    "  jolt build <file.jolt>    compile to a native binary (AOT)\n"
     "\n"
     "options:\n"
     "  -h, --help                show this help\n"
     "  -v, --version             show the version\n"
     "  -e, --eval <code>         evaluate code from the command line\n"
-    "  -c, --check               only check the script for errors\n";
+    "  -c, --check               only check the script for errors\n"
+    "  -o, --output <file>       output path for `build` (default: the script's base name)\n";
 
 // Joins a directory and a relative path without doubling the separator.
 std::string joinPath(const std::string &dir, const std::string &relative) {
@@ -225,6 +232,73 @@ int runSource(const std::string &source, const std::string &name,
     printRuntimeError(name, source, error, platformPosix());
     return 70;
   }
+  return 0;
+}
+
+// Compiles `source` (resolving imports) and writes a freestanding native
+// binary to `output`. The whole pipeline is the dev engine's: lex, parse,
+// compile to bytecode, then lower the bytecode to machine code and wrap it in
+// a static executable. The emitted binary embeds only the AOT runtime, never
+// the compiler, so it cannot `eval` (AGENT.md §3, the GraalVM pitfall).
+//
+// Returns 0 on success, 65 for compile errors and 74 for a write failure.
+int buildBinary(const std::string &source, const std::string &name,
+                const std::string &output, const std::string &argv0) {
+  std::vector<Token> tokens;
+  try {
+    tokens = lex(source);
+  } catch (const CompileError &error) {
+    printCompileError(name, source, error, platformPosix());
+    return 65;
+  }
+
+  StmtPtr program;
+  std::vector<Warning> warnings;
+  try {
+    Parser parser(std::move(tokens), name);
+    program = parser.parseProgram();
+    warnings = parser.warnings();
+  } catch (const CompileError &error) {
+    printCompileError(name, source, error, platformPosix());
+    return 65;
+  }
+  for (const Warning &warning : warnings) {
+    printCompileWarning(name, source, warning, platformPosix());
+  }
+
+  Bytecode bytecode;
+  Compiler compiler;
+  try {
+    compiler.setImportLoader(makeImportLoader(resolverFor(name, argv0)));
+    bytecode = compiler.compile(program);
+  } catch (const CompileError &error) {
+    printCompileError(name, source, error, platformPosix());
+    return 65;
+  }
+  for (const Warning &warning : compiler.warnings()) {
+    printCompileWarning(name, source, warning, platformPosix());
+  }
+
+  const Target target = Target::linuxX64();
+  std::vector<std::uint8_t> image;
+  try {
+    LoweredChunk chunk = lowerToX64(target, bytecode, CodeGen{});
+    image = buildStaticElf(target, chunk.code, {}, chunk.processEntry);
+  } catch (const LoweringError &error) {
+    std::string message = error.what();
+    message += '\n';
+    platformPosix().writeErr(message.data(), message.size());
+    return 65;
+  }
+
+  if (!writeBinaryFile(output, image)) {
+    std::string message = "jolt: cannot write '" + output + "'\n";
+    platformPosix().writeErr(message.data(), message.size());
+    return 74;
+  }
+#ifndef _WIN32
+  ::chmod(output.c_str(), 0755);
+#endif
   return 0;
 }
 
@@ -495,6 +569,51 @@ int main(int argc, char **argv) {
 #endif
 
   std::vector<std::string> arguments(argv + 1, argv + argc);
+
+  // `jolt build <file.jolt> [-o <out>]`: the AOT backend. It is a subcommand,
+  // not a script, so it is intercepted before the ordinary argument parsing.
+  // The default output is the script's base name without extension, like a
+  // native compiler.
+  if (!arguments.empty() && arguments[0] == "build") {
+    std::string buildFile;
+    std::string buildOutput;
+    for (size_t i = 1; i < arguments.size(); ++i) {
+      const std::string &arg = arguments[i];
+      if (arg == "-o" || arg == "--output") {
+        if (i + 1 >= arguments.size()) {
+          std::cerr << "jolt: option '" << arg << "' needs an argument\n";
+          return 64;
+        }
+        buildOutput = arguments[++i];
+        continue;
+      }
+      if (arg == "-h" || arg == "--help") {
+        std::cout << "Jolt " << kVersion << "\n\n" << kUsage;
+        return 0;
+      }
+      if (!arg.empty() && arg[0] == '-') {
+        std::cerr << "jolt: unknown option '" << arg << "'\n";
+        return 64;
+      }
+      if (!buildFile.empty()) {
+        std::cerr << "jolt: build accepts a single file\n";
+        return 64;
+      }
+      buildFile = arg;
+    }
+    if (buildFile.empty()) {
+      std::cerr << "jolt: build requires a file\n";
+      return 64;
+    }
+    if (buildOutput.empty()) buildOutput = stripExtension(buildFile);
+    std::string buildSource;
+    if (!readSourceFile(buildFile, buildSource)) {
+      std::cerr << "jolt: cannot read file '" << buildFile << "'\n";
+      return 66;
+    }
+    return buildBinary(buildSource, buildFile, buildOutput, argv[0]);
+  }
+
   std::string file;
   std::string evalCode;
   bool hasEval = false;

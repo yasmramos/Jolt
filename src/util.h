@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cctype>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 template <class... Ts>
 struct Overloaded : Ts... {
@@ -46,4 +48,26 @@ inline bool readSourceFile(const std::string& path, std::string& out) {
     out.erase(0, 3);
   }
   return true;
+}
+
+// Writes raw bytes to `path`, creating or truncating it. Used by `jolt build`
+// to drop a generated executable; `data` is already the complete image.
+inline bool writeBinaryFile(const std::string& path,
+                            const std::vector<std::uint8_t>& data) {
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  if (!file) return false;
+  file.write(reinterpret_cast<const char*>(data.data()),
+             static_cast<std::streamsize>(data.size()));
+  return static_cast<bool>(file);
+}
+
+// The path without its extension ("a/b.jolt" -> "a/b", "a/b" -> "a/b"). A dot
+// in a directory component is not an extension, so only the last component is
+// inspected.
+inline std::string stripExtension(const std::string& path) {
+  size_t slash = path.find_last_of("/\\");
+  size_t start = slash == std::string::npos ? 0 : slash + 1;
+  size_t dot = path.find_last_of('.');
+  if (dot == std::string::npos || dot < start) return path;
+  return path.substr(0, dot);
 }
