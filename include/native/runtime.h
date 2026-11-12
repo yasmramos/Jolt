@@ -136,10 +136,27 @@ struct AotRuntimeHandles {
   // `$slice` (`obj[start:end:step]`): slices a string by UTF-8 character or an
   // array by element, following Python's bounds rule.
   CodeGen::Label sliceBuiltin;     // AotValue jolt_builtin_slice(AotValue* args, long argc, AotClosure* self)
+  // The public standard-library builtins (PHASE 7c.5a). They use the proto
+  // convention too and are seeded into their global slots like `print`, so a
+  // call reaches them through the ordinary `jolt_call` path. Each is a pure
+  // value transformation -- no libm, no libc -- so they compile into the
+  // freestanding binary. `str` and `isError` reuse the existing `strBuiltin`
+  // and `isErrorBuiltin` (the public names are just two more seeds of the same
+  // code), so only the remaining eight need their own entry point.
+  CodeGen::Label lenBuiltin;       // AotValue jolt_builtin_len(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label typeBuiltin;      // AotValue jolt_builtin_type(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label reprBuiltin;      // AotValue jolt_builtin_repr(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label boolBuiltin;      // AotValue jolt_builtin_bool(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label ordBuiltin;       // AotValue jolt_builtin_ord(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label chrBuiltin;       // AotValue jolt_builtin_chr(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label assertBuiltin;    // AotValue jolt_builtin_assert(AotValue* args, long argc, AotClosure* self)
+  CodeGen::Label panicBuiltin;     // AotValue jolt_builtin_panic(AotValue* args, long argc, AotClosure* self)
 };
 
 inline AotRuntimeHandles newAotRuntimeHandles(CodeGen& code) {
   return AotRuntimeHandles{
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
+      code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),
       code.newLabel(), code.newLabel(), code.newLabel(), code.newLabel(),

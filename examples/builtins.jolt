@@ -1,0 +1,33 @@
+// The public standard-library builtins.
+//
+// Each is a plain function call, so the program runs identically on the
+// development VM and in a binary produced by `jolt build`.
+
+// `len` counts UTF-8 code points in a string, entries in an array or map, and
+// the span of a range.
+print("len str =", len("héllo"));       // 5, not the 6 bytes
+print("len array =", len([1, 2, 3]));
+print("len map =", len({"a": 1, "b": 2}));
+print("len range =", len(0..=5));
+
+// `type` names the value's type.
+print("type =", type(nil), type(true), type(1), type(1.5), type("x"));
+print("type =", type([1]), type({"k": 1}), type(0..1));
+
+// `str` renders without quotes; `repr` quotes a string and shows a collection.
+print("str =", str(42), str(3.5), str(true), str(nil));
+print("repr =", repr("hi"), repr([1, "two"]), repr(7));
+
+// `bool` is the truthiness: `0`, `nil` and `""` are false.
+print("bool =", bool(0), bool(1), bool(nil), bool(""), bool([]));
+
+// `ord` reads the first (and only) code point; `chr` builds the string.
+print("ord =", ord("A"), ord("é"), ord("😀"));
+print("chr =", chr(65), chr(233), chr(128512));
+
+// `assert` passes silently, or fails the program with the given message.
+assert(len([1, 2]) == 2);
+assert(true, "this message is only used on failure");
+
+// `isError` reports whether a value is an error; a plain value is not.
+print("isError =", isError(5), isError("x"));

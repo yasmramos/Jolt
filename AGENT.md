@@ -876,6 +876,31 @@ Slices, each independently shippable:
       non-sliceable operand. Covered by `tests/freestanding_test.cpp` (array
       and string slices, both step signs, negative and out-of-range bounds,
       UTF-8, the error cases) and the `jolt build` fixture.
+    - **7c.5a** (done) — the public standard-library builtins. A compiled
+      binary could print and use collections, but a call to `len`, `type`,
+      `str`, `repr`, `bool`, `ord`, `chr`, `assert`, `panic` or `isError` was
+      still a lowering error ("global 'len' is read but never assigned"), so a
+      program using them could not build. Each is now a machine-code function
+      with the proto convention, seeded into its global slot as an `AotClosure`
+      like `print`, so a `CALL` reaches it through the ordinary `jolt_call`
+      path and the compiler is unchanged. `len` counts UTF-8 code points,
+      array/map entries or a range's span (saturated at INT64_MAX); `type`
+      returns the hosted type-name string (`nil`, `bool`, `int`, `float`,
+      `double`, `string`, `array`, `map`, `function`, `range`); `str` reuses
+      the `$str` renderer and `repr` the recursive `jolt_repr_to_string`
+      (`Value::repr()` semantics, so a top-level string is quoted); `bool` is
+      `jolt_truthy`;
+      `ord`/`chr` decode and encode a UTF-8 code point; `assert`/`panic` fail
+      through a new dynamic-failure helper (`jolt_fail_dynamic`) that prints
+      "jolt: " + the caller's message and exits 70, matching the hosted engine;
+      `isError` reuses `$isError`. Every builtin is pure -- no libm, no libc --
+      so it links into the freestanding binary. Covered by
+      `tests/freestanding_test.cpp` (each builtin and every failure path under
+      the real `_start`) and the `jolt build` fixture.
+    - **7c.5b** (pending) — the remaining builtins: `int`/`float`/`double`
+      (string parsing and float conversion with overflow handling) and the math
+      block (`sqrt`, `pow`, `sin`, ...), which needs an embedded libm because
+      the freestanding binary cannot call the host's.
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not

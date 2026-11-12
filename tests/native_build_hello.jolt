@@ -74,3 +74,18 @@ print("even =", [0, 1, 2, 3, 4, 5][::2]);
 print("text =", "abcdef"[1:4]);
 print("text reverse =", "abcdef"[::-1]);
 
+// The public standard-library builtins (PHASE 7c.5a): `len`, `type`, `str`,
+// `repr`, `bool`, `ord`, `chr`, `assert`, `panic` and `isError`. Each is a
+// machine-code function seeded into its global slot, so a `CALL` reaches it
+// through the ordinary call path and the VM and the binary agree byte for byte.
+print("len =", len("hello"), len(squares), len(ages), len(0..=5));
+print("type =", type(nil), type(true), type(1), type(1.5), type("x"), type(squares));
+print("type2 =", type(ages), type(fib), type(0..1));
+print("str =", str(42), str(3.5), str(true), str(nil));
+print("repr =", repr("hi"), repr([1, "two"]), repr(7));
+print("bool =", bool(0), bool(1), bool(nil), bool(""), bool(squares));
+print("ord =", ord("A"), ord("é"), ord("😀"));
+print("chr =", chr(65), chr(233), chr(128512));
+assert(true);
+assert(len(squares) == 3, "squares has three entries");
+print("isError =", isError(5), isError("x"));
