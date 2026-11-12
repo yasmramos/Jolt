@@ -57,6 +57,20 @@ constexpr std::int64_t kRangeInclusiveOffset = 16;
 // `native/value.h`): the length is an 8-byte word, the bytes follow.
 constexpr std::int64_t kStringDataOffset = static_cast<std::int64_t>(kAotStringHeaderSize);
 
+// Field offsets of a string builder header (see `native/value.h`). It shares the
+// array/map three-word shape (length, capacity, block), so the array offsets
+// above serve it too; these aliases name the intent.
+constexpr std::int64_t kSbLengthOffset = 0;
+constexpr std::int64_t kSbCapacityOffset = 8;
+constexpr std::int64_t kSbDataOffset = 16;
+// Initial capacity of a string builder, in bytes. A rendered scalar or a small
+// collection fits without a regrow; the arena never frees, so the block is
+// sized to cover the common case rather than the worst one.
+constexpr std::int64_t kSbInitialCapacity = 64;
+// The depth at which the recursive repr prints `...` instead of descending, so
+// a self-referential structure terminates. Matches the hosted `writeValue`.
+constexpr std::int64_t kReprMaxDepth = 8;
+
 // The sign bit of an IEEE-754 binary64, used to negate a float by flipping it.
 constexpr std::int64_t kDoubleSignBit = static_cast<std::int64_t>(0x8000000000000000ULL);
 // INT64_MIN as a bit pattern, for the `idiv` overflow special case.
@@ -2779,20 +2793,21 @@ void emitIntDigitsBackwards(CodeGen& cg, X64Reg cursor, CodeGen::Label positive,
 // and computed map keys. It renders the operand to an `AotString` in the arena,
 // byte-identical to the hosted `Value::toString` for nil, booleans, integers,
 // floats, doubles and strings (a string is returned unchanged, so a string
-// interpolates without quotes). Collections and functions are not rendered yet
-// (deferred to 7c.4b.2); they fail with a clear message instead of silently
-// producing different text.
+// interpolates without quotes). A collection or function operand renders with
+// the recursive repr (`jolt_repr_to_string`), so `"${[1, 2]}"` reads exactly
+// like `print([1, 2])` (7c.4b.2).
 void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
                     CodeGen::Label fail, CodeGen::Label formatDouble,
-                    const DataBlob& msgOom, const DataBlob& textTrue,
-                    const DataBlob& textFalse, const DataBlob& textNil,
-                    const DataBlob& msgStrBad) {
+                    CodeGen::Label reprToString, const DataBlob& msgOom,
+                    const DataBlob& textTrue, const DataBlob& textFalse,
+                    const DataBlob& textNil, const DataBlob& msgStrBad) {
   CodeGen::Label asInt = cg.newLabel();
   CodeGen::Label asBool = cg.newLabel();
   CodeGen::Label boolFalse = cg.newLabel();
   CodeGen::Label asNil = cg.newLabel();
   CodeGen::Label asStr = cg.newLabel();
   CodeGen::Label asNum = cg.newLabel();
+  CodeGen::Label asRepr = cg.newLabel();
   CodeGen::Label asRange = cg.newLabel();
   CodeGen::Label rangeIncl = cg.newLabel();
   CodeGen::Label rangeAfterSep = cg.newLabel();
@@ -2836,7 +2851,21 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   cg.jcc(Jcc::Eq, asNum);
   cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagRange));
   cg.jcc(Jcc::Eq, asRange);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, asRepr);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, asRepr);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagFunc));
+  cg.jcc(Jcc::Eq, asRepr);
   emitFailCall(cg, fail, msgStrBad);
+
+  // A collection or function renders with the recursive repr, so `"${[1, 2]}"`
+  // reads exactly like `print([1, 2])` (nested strings quoted, depth-capped).
+  cg.bind(asRepr);
+  cg.movFromMem(Rdi, Rbx, 0);
+  cg.movFromMem(Rsi, Rbx, 8);
+  cg.callLabel(reprToString);
+  cg.jmp(done);
 
   // A string renders as itself.
   cg.bind(asStr);
@@ -3014,6 +3043,622 @@ void emitRangeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLab
   emitFailCall(cg, fail, msgOom);
 }
 
+// `void jolt_sb_init(AotStringBuilder* sb, char* data, long capacity)`: start a
+// builder over a caller-owned buffer (`data`/`capacity`) with `length` zero. A
+// caller that renders a `print` value passes a stack buffer, so a small render
+// never touches the arena; `jolt_sb_new` passes an arena block. Growth copies
+// the bytes to a fresh arena block, so the initial buffer may be on the stack.
+void emitSbInit(CodeGen& cg, CodeGen::Label label) {
+  cg.bind(label);
+  cg.movImmToMem(Rdi, kSbLengthOffset, 0);
+  cg.movToMem(Rdi, kSbCapacityOffset, Rdx);
+  cg.movToMem(Rdi, kSbDataOffset, Rsi);
+  cg.retInsn();
+}
+
+// `void jolt_sb_append(AotStringBuilder* sb, const char* ptr, long len)`:
+// append `len` bytes from `ptr`, growing the block when the capacity is short.
+// Growth doubles the capacity until it fits, allocates a fresh arena block and
+// copies the bytes already written. Preserves rbx/r12 (the builder and the
+// source pointer), which are callee-saved.
+void emitSbAppend(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                  CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label grow = cg.newLabel();
+  CodeGen::Label growLoop = cg.newLabel();
+  CodeGen::Label growDone = cg.newLabel();
+  CodeGen::Label noCopy = cg.newLabel();
+  CodeGen::Label copy = cg.newLabel();
+  CodeGen::Label oom = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 32);
+  cg.movReg(Rbx, Rdi);            // sb
+  cg.movReg(R12, Rsi);            // ptr
+  cg.movToMem(Rbp, -24, Rdx);     // len
+  cg.movFromMem(Rax, Rbx, kSbLengthOffset);
+  cg.addReg(Rax, Rdx);            // needed = length + len
+  cg.movToMem(Rbp, -32, Rax);
+  cg.movFromMem(R8, Rbx, kSbCapacityOffset);
+  cg.cmpReg(Rax, R8);
+  cg.jcc(Jcc::A, grow);
+  cg.jmp(copy);
+
+  cg.bind(grow);
+  cg.movFromMem(R8, Rbx, kSbCapacityOffset);
+  cg.movFromMem(R9, Rbp, -32);
+  cg.bind(growLoop);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, growDone);
+  cg.addReg(R8, R8);
+  cg.jmp(growLoop);
+  cg.bind(growDone);
+  cg.movToMem(Rbp, -32, R8);      // newCap
+  cg.movReg(Rdi, R8);
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movReg(R10, Rax);            // new block
+  cg.movFromMem(Rcx, Rbx, kSbLengthOffset);
+  cg.testReg(Rcx);
+  cg.jcc(Jcc::Eq, noCopy);
+  cg.movReg(Rdi, R10);
+  cg.movFromMem(Rsi, Rbx, kSbDataOffset);
+  cg.repMovsb();
+  cg.bind(noCopy);
+  cg.movToMem(Rbx, kSbDataOffset, R10);
+  cg.movFromMem(R8, Rbp, -32);
+  cg.movToMem(Rbx, kSbCapacityOffset, R8);
+
+  cg.bind(copy);
+  cg.movFromMem(Rdi, Rbx, kSbDataOffset);
+  cg.movFromMem(Rax, Rbx, kSbLengthOffset);
+  cg.addReg(Rdi, Rax);            // dst = data + length
+  cg.movReg(Rsi, R12);
+  cg.movFromMem(Rcx, Rbp, -24);
+  cg.repMovsb();
+  cg.movFromMem(Rax, Rbx, kSbLengthOffset);
+  cg.movFromMem(R9, Rbp, -24);
+  cg.addReg(Rax, R9);
+  cg.movToMem(Rbx, kSbLengthOffset, Rax);
+  cg.addImm32(Rsp, 32);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
+}
+
+// `void jolt_sb_append_byte(AotStringBuilder* sb, long byte)`: append one byte.
+// A thin wrapper over `jolt_sb_append` through a one-byte stack slot.
+void emitSbAppendByte(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend) {
+  cg.bind(label);
+  prologue(cg);
+  cg.subRegImm32(Rsp, 16);
+  cg.movByteToMem(Rsp, 0, Rsi);
+  cg.movReg(Rsi, Rsp);
+  cg.movImm(Rdx, 1);
+  cg.callLabel(sbAppend);
+  cg.addImm32(Rsp, 16);
+  epilogue(cg);
+}
+
+// `AotStringBuilder* jolt_sb_new(void)`: allocate a builder header and its
+// initial block from the arena, and return the header address. Reports "out of
+// memory" on a null allocation.
+void emitSbNew(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+               CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label oom = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.subRegImm32(Rsp, 16);
+  cg.movImm(Rdi, static_cast<std::int64_t>(kAotSbHeaderSize));
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movReg(Rbx, Rax);
+  cg.movImm(Rdi, kSbInitialCapacity);
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rbx, kSbDataOffset, Rax);
+  cg.movImmToMem(Rbx, kSbLengthOffset, 0);
+  cg.movImmToMem(Rbx, kSbCapacityOffset, kSbInitialCapacity);
+  cg.movReg(Rax, Rbx);
+  cg.addImm32(Rsp, 16);
+  cg.pop(Rbx);
+  epilogue(cg);
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
+}
+
+// `void jolt_sb_append_escaped(AotStringBuilder* sb, AotString* s)`: append `s`
+// between double quotes with the same escapes as `quoteString`: `\"`, `\\`,
+// `\n`, `\t`, `\r`, and `\xHH` for any other control byte. This is the
+// builder-sink counterpart of `jolt_print_str_escaped`, so a quoted string in a
+// rendered collection reads identically on `print` and `$str`.
+void emitSbAppendEscaped(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend,
+                         CodeGen::Label sbAppendByte, const DataBlob& textQuote,
+                         const DataBlob& textEscQuote, const DataBlob& textEscBackslash,
+                         const DataBlob& textEscNL, const DataBlob& textEscTab,
+                         const DataBlob& textEscCR) {
+  CodeGen::Label loop = cg.newLabel();
+  CodeGen::Label plain = cg.newLabel();
+  CodeGen::Label hex = cg.newLabel();
+  CodeGen::Label next = cg.newLabel();
+  CodeGen::Label loopDone = cg.newLabel();
+  CodeGen::Label escQuote = cg.newLabel();
+  CodeGen::Label escBack = cg.newLabel();
+  CodeGen::Label escNL = cg.newLabel();
+  CodeGen::Label escTab = cg.newLabel();
+  CodeGen::Label escCR = cg.newLabel();
+  CodeGen::Label hexLow = cg.newLabel();
+  CodeGen::Label hexHigh = cg.newLabel();
+  CodeGen::Label hexLowDone = cg.newLabel();
+  CodeGen::Label hexHighDone = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.push(X64Reg::R13);
+  cg.subRegImm32(Rsp, 40);
+  cg.movReg(Rbx, Rdi);  // sb
+  cg.movReg(R12, Rsi);  // string
+  cg.movImmToMem(Rbp, -40, 0);  // index
+
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textQuote.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textQuote.text.size()));
+  cg.callLabel(sbAppend);
+
+  cg.bind(loop);
+  cg.movFromMem(X64Reg::R13, Rbp, -40);
+  cg.movFromMem(R9, R12, 0);
+  cg.cmpReg(X64Reg::R13, R9);
+  cg.jcc(Jcc::Ae, loopDone);
+
+  cg.movReg(R10, X64Reg::R13);
+  cg.addReg(R10, R12);
+  cg.movzxFromMem(R10, R10, kStringDataOffset);
+  cg.cmpImm32(R10, '"');
+  cg.jcc(Jcc::Eq, escQuote);
+  cg.cmpImm32(R10, '\\');
+  cg.jcc(Jcc::Eq, escBack);
+  cg.cmpImm32(R10, '\n');
+  cg.jcc(Jcc::Eq, escNL);
+  cg.cmpImm32(R10, '\t');
+  cg.jcc(Jcc::Eq, escTab);
+  cg.cmpImm32(R10, '\r');
+  cg.jcc(Jcc::Eq, escCR);
+  cg.cmpImm32(R10, 0x20);
+  cg.jcc(Jcc::B, hex);
+  cg.jmp(plain);
+
+  cg.bind(escQuote);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textEscQuote.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textEscQuote.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(next);
+  cg.bind(escBack);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textEscBackslash.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textEscBackslash.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(next);
+  cg.bind(escNL);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textEscNL.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textEscNL.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(next);
+  cg.bind(escTab);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textEscTab.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textEscTab.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(next);
+  cg.bind(escCR);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textEscCR.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textEscCR.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(next);
+
+  cg.bind(hex);
+  cg.movImmByteToMem(Rbp, -48, '\\');
+  cg.movImmByteToMem(Rbp, -47, 'x');
+  cg.movFromMem(R10, Rbp, -40);
+  cg.addReg(R10, R12);
+  cg.movzxFromMem(R10, R10, kStringDataOffset);
+  cg.movReg(R9, R10);
+  cg.shrImm8(R9, 4);
+  cg.andImm32(R9, 0x0F);
+  cg.movReg(R8, R9);
+  cg.cmpImm32(R8, 10);
+  cg.jcc(Jcc::B, hexHigh);
+  cg.addImm32(R8, 'a' - 10);
+  cg.jmp(hexHighDone);
+  cg.bind(hexHigh);
+  cg.addImm32(R8, '0');
+  cg.bind(hexHighDone);
+  cg.movByteToMem(Rbp, -46, R8);
+  cg.andImm32(R10, 0x0F);
+  cg.cmpImm32(R10, 10);
+  cg.jcc(Jcc::B, hexLow);
+  cg.addImm32(R10, 'a' - 10);
+  cg.jmp(hexLowDone);
+  cg.bind(hexLow);
+  cg.addImm32(R10, '0');
+  cg.bind(hexLowDone);
+  cg.movByteToMem(Rbp, -45, R10);
+  cg.movReg(Rdi, Rbx);
+  cg.leaMem(Rsi, Rbp, -48);
+  cg.movImm(Rdx, 4);
+  cg.callLabel(sbAppend);
+  cg.jmp(next);
+
+  cg.bind(plain);
+  cg.movReg(Rdi, Rbx);
+  cg.movReg(Rsi, R10);
+  cg.callLabel(sbAppendByte);
+
+  cg.bind(next);
+  cg.movFromMem(X64Reg::R13, Rbp, -40);
+  cg.addImm32(X64Reg::R13, 1);
+  cg.movToMem(Rbp, -40, X64Reg::R13);
+  cg.jmp(loop);
+
+  cg.bind(loopDone);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textQuote.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textQuote.text.size()));
+  cg.callLabel(sbAppend);
+  cg.addImm32(Rsp, 40);
+  cg.pop(X64Reg::R13);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
+// `void jolt_repr_into(AotValue v, long depth, AotStringBuilder* sb)`: append
+// the representation of `v` to `sb`, the builder-sink counterpart of the hosted
+// `Value::repr` (`[1, 2]`, `{"k": 1}`, quoted strings, `<fn>`). `depth` caps the
+// recursion at 8, where `...` is appended instead, so a self-referential
+// structure terminates. Every `print` and every `$str` of a collection goes
+// through here, so the two agree byte for byte.
+void emitReprInto(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend,
+                  CodeGen::Label sbAppendEscaped, CodeGen::Label formatDouble,
+                  const DataBlob& textTrue, const DataBlob& textFalse,
+                  const DataBlob& textNil, const DataBlob& textFunc,
+                  const DataBlob& textComma, const DataBlob& textColon,
+                  const DataBlob& textOpenBracket, const DataBlob& textCloseBracket,
+                  const DataBlob& textOpenBrace, const DataBlob& textCloseBrace,
+                  const DataBlob& textEllipsis) {
+  CodeGen::Label asInt = cg.newLabel();
+  CodeGen::Label asBool = cg.newLabel();
+  CodeGen::Label boolFalse = cg.newLabel();
+  CodeGen::Label asNil = cg.newLabel();
+  CodeGen::Label asStr = cg.newLabel();
+  CodeGen::Label asNum = cg.newLabel();
+  CodeGen::Label asFunc = cg.newLabel();
+  CodeGen::Label asArray = cg.newLabel();
+  CodeGen::Label asMap = cg.newLabel();
+  CodeGen::Label asRange = cg.newLabel();
+  CodeGen::Label rangeIncl = cg.newLabel();
+  CodeGen::Label rangeAfterSep = cg.newLabel();
+  CodeGen::Label arrayLoop = cg.newLabel();
+  CodeGen::Label arrayBody = cg.newLabel();
+  CodeGen::Label arrayEnd = cg.newLabel();
+  CodeGen::Label mapLoop = cg.newLabel();
+  CodeGen::Label mapBody = cg.newLabel();
+  CodeGen::Label mapEnd = cg.newLabel();
+  CodeGen::Label tooDeep = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+  CodeGen::Label intPos = cg.newLabel();
+  CodeGen::Label intConv = cg.newLabel();
+  CodeGen::Label intLoop = cg.newLabel();
+  CodeGen::Label intEmit = cg.newLabel();
+  CodeGen::Label rangeEndPos = cg.newLabel();
+  CodeGen::Label rangeEndConv = cg.newLabel();
+  CodeGen::Label rangeEndLoop = cg.newLabel();
+  CodeGen::Label rangeEndEmit = cg.newLabel();
+  CodeGen::Label rangeStartPos = cg.newLabel();
+  CodeGen::Label rangeStartConv = cg.newLabel();
+  CodeGen::Label rangeStartLoop = cg.newLabel();
+  CodeGen::Label rangeStartEmit = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 128);   // digit buffer (rbp-144..rbp-80) + locals
+  cg.movReg(Rbx, Rcx);        // sb
+  cg.movToMem(Rbp, -24, Rdx); // depth
+  cg.movToMem(Rbp, -32, Rdi); // tag
+  cg.movToMem(Rbp, -40, Rsi); // payload
+
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kReprMaxDepth));
+  cg.jcc(Jcc::Gt, tooDeep);
+
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Eq, asInt);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagBool));
+  cg.jcc(Jcc::Eq, asBool);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagNil));
+  cg.jcc(Jcc::Eq, asNil);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
+  cg.jcc(Jcc::Eq, asStr);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFloat));
+  cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagDouble));
+  cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFunc));
+  cg.jcc(Jcc::Eq, asFunc);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagArray));
+  cg.jcc(Jcc::Eq, asArray);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, asMap);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Eq, asRange);
+  cg.jmp(done);
+
+  cg.bind(asInt);
+  cg.movFromMem(Rax, Rbp, -40);
+  cg.movReg(R8, Rsp);
+  cg.addImm32(R8, 64);        // cursor = end of digit buffer
+  emitIntDigitsBackwards(cg, R8, intPos, intConv, intLoop, intEmit);
+  cg.movReg(Rdx, Rsp);
+  cg.addImm32(Rdx, 64);
+  cg.subReg(Rdx, R8);         // len = end - cursor
+  cg.movReg(Rsi, R8);
+  cg.movReg(Rdi, Rbx);
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(asBool);
+  cg.movFromMem(R8, Rbp, -40);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, boolFalse);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textTrue.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textTrue.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+  cg.bind(boolFalse);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textFalse.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textFalse.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(asNil);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textNil.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textNil.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(asStr);
+  cg.movReg(Rdi, Rbx);
+  cg.movFromMem(Rsi, Rbp, -40);
+  cg.callLabel(sbAppendEscaped);
+  cg.jmp(done);
+
+  cg.bind(asNum);
+  cg.subRegImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.movFromMem(Rdi, Rbp, -32);               // tag
+  cg.movFromMem(Rsi, Rbp, -40);               // payload
+  cg.movReg(Rcx, Rsp);                        // scratch
+  cg.movReg(Rdx, Rsp);
+  cg.addImm32(Rdx, static_cast<std::int32_t>(kDtoaScratchBytes));  // out
+  cg.callLabel(formatDouble);
+  cg.movReg(Rdx, Rax);                        // len
+  cg.movReg(Rsi, Rsp);
+  cg.addImm32(Rsi, static_cast<std::int32_t>(kDtoaScratchBytes));
+  cg.movReg(Rdi, Rbx);
+  cg.callLabel(sbAppend);
+  cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
+  cg.jmp(done);
+
+  cg.bind(asFunc);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textFunc.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textFunc.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(asArray);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textOpenBracket.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textOpenBracket.text.size()));
+  cg.callLabel(sbAppend);
+  cg.movFromMem(R12, Rbp, -40);        // array header
+  cg.movImmToMem(Rbp, -48, 0);         // index
+  cg.bind(arrayLoop);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.movFromMem(R9, R12, kTableLengthOffset);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, arrayEnd);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, arrayBody);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textComma.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textComma.text.size()));
+  cg.callLabel(sbAppend);
+  cg.bind(arrayBody);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.shlImm8(R8, 4);
+  cg.movFromMem(R9, R12, kTableBlockOffset);
+  cg.addReg(R9, R8);
+  cg.movFromMem(Rdi, R9, 0);
+  cg.movFromMem(Rsi, R9, 8);
+  cg.movFromMem(Rdx, Rbp, -24);
+  cg.addImm32(Rdx, 1);
+  cg.movReg(Rcx, Rbx);
+  cg.callLabel(label);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, -48, R8);
+  cg.jmp(arrayLoop);
+  cg.bind(arrayEnd);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textCloseBracket.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textCloseBracket.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(asMap);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textOpenBrace.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textOpenBrace.text.size()));
+  cg.callLabel(sbAppend);
+  cg.movFromMem(R12, Rbp, -40);        // map header
+  cg.movImmToMem(Rbp, -48, 0);         // index
+  cg.bind(mapLoop);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.movFromMem(R9, R12, kTableLengthOffset);
+  cg.cmpReg(R8, R9);
+  cg.jcc(Jcc::Ae, mapEnd);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, mapBody);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textComma.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textComma.text.size()));
+  cg.callLabel(sbAppend);
+  cg.bind(mapBody);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R9, R12, kTableBlockOffset);
+  cg.addReg(R9, R8);
+  cg.movReg(Rdi, Rbx);
+  cg.movFromMem(Rsi, R9, kMapEntryKeyOffset);
+  cg.callLabel(sbAppendEscaped);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textColon.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textColon.text.size()));
+  cg.callLabel(sbAppend);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
+  cg.movFromMem(R9, R12, kTableBlockOffset);
+  cg.addReg(R9, R8);
+  cg.movFromMem(Rdi, R9, kMapEntryValueOffset);
+  cg.movFromMem(Rsi, R9, kMapEntryValueOffset + 8);
+  cg.movFromMem(Rdx, Rbp, -24);
+  cg.addImm32(Rdx, 1);
+  cg.movReg(Rcx, Rbx);
+  cg.callLabel(label);
+  cg.movFromMem(R8, Rbp, -48);
+  cg.addImm32(R8, 1);
+  cg.movToMem(Rbp, -48, R8);
+  cg.jmp(mapLoop);
+  cg.bind(mapEnd);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textCloseBrace.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textCloseBrace.text.size()));
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(asRange);
+  cg.movFromMem(R12, Rbp, -40);        // range header
+  cg.movReg(R8, Rsp);
+  cg.addImm32(R8, 64);                 // cursor = end of digit buffer
+  cg.movFromMem(Rax, R12, kRangeEndOffset);
+  emitIntDigitsBackwards(cg, R8, rangeEndPos, rangeEndConv, rangeEndLoop, rangeEndEmit);
+  cg.movFromMem(R9, R12, kRangeInclusiveOffset);
+  cg.testReg(R9);
+  cg.jcc(Jcc::Eq, rangeIncl);
+  cg.subRegImm32(R8, 3);
+  cg.movImmByteToMem(R8, 0, static_cast<std::uint8_t>('.'));
+  cg.movImmByteToMem(R8, 1, static_cast<std::uint8_t>('.'));
+  cg.movImmByteToMem(R8, 2, static_cast<std::uint8_t>('='));
+  cg.jmp(rangeAfterSep);
+  cg.bind(rangeIncl);
+  cg.subRegImm32(R8, 2);
+  cg.movImmByteToMem(R8, 0, static_cast<std::uint8_t>('.'));
+  cg.movImmByteToMem(R8, 1, static_cast<std::uint8_t>('.'));
+  cg.bind(rangeAfterSep);
+  cg.movFromMem(Rax, R12, kRangeStartOffset);
+  emitIntDigitsBackwards(cg, R8, rangeStartPos, rangeStartConv, rangeStartLoop,
+                         rangeStartEmit);
+  cg.movReg(Rdx, Rsp);
+  cg.addImm32(Rdx, 64);
+  cg.subReg(Rdx, R8);
+  cg.movReg(Rsi, R8);
+  cg.movReg(Rdi, Rbx);
+  cg.callLabel(sbAppend);
+  cg.jmp(done);
+
+  cg.bind(tooDeep);
+  cg.movReg(Rdi, Rbx);
+  cg.leaRipLabel(Rsi, textEllipsis.label);
+  cg.movImm(Rdx, static_cast<std::int64_t>(textEllipsis.text.size()));
+  cg.callLabel(sbAppend);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 128);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
+// `AotValue jolt_repr_to_string(AotValue v)`: render `v` with the recursive repr
+// (`jolt_repr_into`) into a fresh arena `AotString` and return it as a `Str`
+// value. The `$str` helper uses it for a collection, function or range operand,
+// so `"${[1, 2]}"` reads exactly like `print([1, 2])`.
+void emitReprToString(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbNew,
+                      CodeGen::Label reprInto, CodeGen::Label allocLabel,
+                      CodeGen::Label fail, const DataBlob& msgOom) {
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label done = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.subRegImm32(Rsp, 16);
+  cg.movReg(R12, Rdi);          // tag
+  cg.movToMem(Rbp, -24, Rsi);   // payload
+  cg.callLabel(sbNew);          // rax = builder
+  cg.movReg(Rbx, Rax);
+  cg.movReg(Rdi, R12);
+  cg.movFromMem(Rsi, Rbp, -24);
+  cg.xorReg(Rdx, Rdx);
+  cg.movReg(Rcx, Rbx);
+  cg.callLabel(reprInto);
+  cg.movFromMem(R12, Rbx, kSbLengthOffset);   // length
+  cg.movReg(Rdi, R12);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movToMem(Rax, 0, R12);
+  cg.movReg(Rdi, Rax);
+  cg.addImm32(Rdi, static_cast<std::int32_t>(kStringDataOffset));
+  cg.movFromMem(Rsi, Rbx, kSbDataOffset);
+  cg.movReg(Rcx, R12);
+  cg.repMovsb();
+  cg.movReg(Rdx, Rax);
+  cg.movImm(Rax, kTagStr);
+  cg.jmp(done);
+
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
+
+  cg.bind(done);
+  cg.addImm32(Rsp, 16);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+}
+
 // `void jolt_print_str_escaped(AotString* s, long fd)`: writes `s` between
 // double quotes with the same escapes as `quoteString`: `\"`, `\\`, `\n`,
 // `\t`, `\r`, and `\xHH` for any other control byte.
@@ -3160,247 +3805,36 @@ void emitPrintStrEsc(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabe
 
 // `void jolt_print_repr(AotValue v, long depth, long fd)`: the recursive
 // container renderer, matching `Value::repr` (`[1, 2]`, `{"k": 1}`, quoted
-// strings, `<fn>`). Depth is capped at 8, where a `...` is printed instead, so a
-// self-referential structure cannot recurse forever. Scalars reuse the existing
-// writers; strings go through `jolt_print_str_escaped`.
+// strings, `<fn>`). It renders into a stack string builder and writes the bytes
+// in one syscall; `jolt_repr_into` does the traversal, so `print` and `$str`
+// share one renderer.
 void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
-                   CodeGen::Label writeInt, CodeGen::Label formatDouble,
-                   CodeGen::Label printStrEsc, const DataBlob& textTrue,
-                   const DataBlob& textFalse, const DataBlob& textNil,
-                   const DataBlob& textFunc, const DataBlob& textComma,
-                   const DataBlob& textColon, const DataBlob& textOpenBracket,
-                   const DataBlob& textCloseBracket, const DataBlob& textOpenBrace,
-                   const DataBlob& textCloseBrace, const DataBlob& textEllipsis,
-                   const DataBlob& textRangeIncl, const DataBlob& textRangeExcl) {
-  CodeGen::Label asInt = cg.newLabel();
-  CodeGen::Label asBool = cg.newLabel();
-  CodeGen::Label boolFalse = cg.newLabel();
-  CodeGen::Label asNil = cg.newLabel();
-  CodeGen::Label asStr = cg.newLabel();
-  CodeGen::Label asNum = cg.newLabel();
-  CodeGen::Label asFunc = cg.newLabel();
-  CodeGen::Label asArray = cg.newLabel();
-  CodeGen::Label asMap = cg.newLabel();
-  CodeGen::Label asRange = cg.newLabel();
-  CodeGen::Label rangeDotDot = cg.newLabel();
-  CodeGen::Label rangePrintEnd = cg.newLabel();
-  CodeGen::Label arrayLoop = cg.newLabel();
-  CodeGen::Label arrayBody = cg.newLabel();
-  CodeGen::Label arraySep = cg.newLabel();
-  CodeGen::Label arrayEnd = cg.newLabel();
-  CodeGen::Label mapLoop = cg.newLabel();
-  CodeGen::Label mapBody = cg.newLabel();
-  CodeGen::Label mapSep = cg.newLabel();
-  CodeGen::Label mapEnd = cg.newLabel();
-  CodeGen::Label tooDeep = cg.newLabel();
-  CodeGen::Label done = cg.newLabel();
-
+                   CodeGen::Label sbInit, CodeGen::Label reprInto) {
   cg.bind(label);
   prologue(cg);
-  cg.push(Rbx);
-  cg.push(R12);
-  cg.subRegImm32(Rsp, 32);
-  cg.movReg(Rbx, Rcx);          // fd
-  cg.movToMem(Rbp, -24, Rdx);   // depth
-  cg.movToMem(Rbp, -32, Rdi);   // tag
-  cg.movToMem(Rbp, -40, Rsi);   // payload
-
-  cg.cmpImm32(Rdx, 8);
-  cg.jcc(Jcc::Gt, tooDeep);
-
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagInt));
-  cg.jcc(Jcc::Eq, asInt);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagBool));
-  cg.jcc(Jcc::Eq, asBool);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagNil));
-  cg.jcc(Jcc::Eq, asNil);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagStr));
-  cg.jcc(Jcc::Eq, asStr);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFloat));
-  cg.jcc(Jcc::Eq, asNum);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagDouble));
-  cg.jcc(Jcc::Eq, asNum);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagFunc));
-  cg.jcc(Jcc::Eq, asFunc);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagArray));
-  cg.jcc(Jcc::Eq, asArray);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagMap));
-  cg.jcc(Jcc::Eq, asMap);
-  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagRange));
-  cg.jcc(Jcc::Eq, asRange);
-  cg.jmp(done);
-
-  cg.bind(asInt);
-  cg.movReg(Rdi, Rsi);
-  cg.movReg(R10, Rbx);
-  cg.callLabel(writeInt);
-  cg.jmp(done);
-
-  cg.bind(asNum);
-  cg.subRegImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
-  cg.movReg(Rcx, Rsp);
-  cg.movReg(Rdx, Rsp);
-  cg.addImm32(Rdx, static_cast<std::int32_t>(kDtoaScratchBytes));
-  cg.callLabel(formatDouble);
-  cg.movReg(Rsi, Rax);
-  cg.movReg(Rdi, Rsp);
-  cg.addImm32(Rdi, static_cast<std::int32_t>(kDtoaScratchBytes));
-  cg.addImm32(Rsp, static_cast<std::int32_t>(kDtoaFrameBytes));
-  cg.movReg(R10, Rbx);
+  cg.push(Rbx);                  // saved at [rbp-8]
+  cg.push(R12);                  // saved at [rbp-16]
+  cg.subRegImm32(Rsp, 640);      // builder header + 512-byte initial buffer
+  // The builder header sits below the saved registers: [rbp-40] length,
+  // [rbp-32] capacity, [rbp-24] data. The buffer runs [rbp-552, rbp-40).
+  cg.movToMem(Rbp, -560, Rdi);   // value tag
+  cg.movToMem(Rbp, -568, Rsi);   // value payload
+  cg.movToMem(Rbp, -576, Rdx);   // depth
+  cg.movReg(R12, Rcx);           // fd
+  cg.leaMem(Rdi, Rbp, -40);      // builder header
+  cg.leaMem(Rsi, Rbp, -552);     // initial buffer
+  cg.movImm(Rdx, 512);
+  cg.callLabel(sbInit);
+  cg.leaMem(Rcx, Rbp, -40);      // sb = header
+  cg.movFromMem(Rdi, Rbp, -560);
+  cg.movFromMem(Rsi, Rbp, -568);
+  cg.movFromMem(Rdx, Rbp, -576);
+  cg.callLabel(reprInto);
+  cg.movFromMem(Rsi, Rbp, -40);  // length
+  cg.movFromMem(Rdi, Rbp, -24);  // data
+  cg.movReg(R10, R12);
   inlineWriteFd(cg, writeLabel, R10);
-  cg.jmp(done);
-
-  cg.bind(asBool);
-  cg.movFromMem(R8, Rbp, -40);
-  cg.testReg(R8);
-  cg.jcc(Jcc::Eq, boolFalse);
-  cg.leaRipLabel(Rdi, textTrue.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textTrue.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(done);
-  cg.bind(boolFalse);
-  cg.leaRipLabel(Rdi, textFalse.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textFalse.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(done);
-
-  cg.bind(asNil);
-  cg.leaRipLabel(Rdi, textNil.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textNil.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(done);
-
-  cg.bind(asFunc);
-  cg.leaRipLabel(Rdi, textFunc.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textFunc.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(done);
-
-  cg.bind(asStr);
-  cg.movReg(Rdi, Rsi);
-  cg.movReg(Rsi, Rbx);
-  cg.callLabel(printStrEsc);
-  cg.jmp(done);
-
-  cg.bind(asArray);
-  cg.leaRipLabel(Rdi, textOpenBracket.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textOpenBracket.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.movFromMem(R12, Rbp, -40);        // array ptr
-  cg.movImmToMem(Rbp, -48, 0);         // index
-  cg.bind(arrayLoop);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.movFromMem(R9, R12, kTableLengthOffset);
-  cg.cmpReg(R8, R9);
-  cg.jcc(Jcc::Ae, arrayEnd);
-  cg.testReg(R8);
-  cg.jcc(Jcc::Eq, arrayBody);
-  cg.bind(arraySep);
-  cg.leaRipLabel(Rdi, textComma.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textComma.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.bind(arrayBody);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.shlImm8(R8, 4);
-  cg.movFromMem(R9, R12, kTableBlockOffset);
-  cg.addReg(R9, R8);
-  cg.movFromMem(Rdi, R9, 0);
-  cg.movFromMem(Rsi, R9, 8);
-  cg.movFromMem(Rdx, Rbp, -24);
-  cg.addImm32(Rdx, 1);
-  cg.movReg(Rcx, Rbx);
-  cg.callLabel(label);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.addImm32(R8, 1);
-  cg.movToMem(Rbp, -48, R8);
-  cg.jmp(arrayLoop);
-  cg.bind(arrayEnd);
-  cg.leaRipLabel(Rdi, textCloseBracket.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textCloseBracket.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(done);
-
-  cg.bind(asMap);
-  cg.leaRipLabel(Rdi, textOpenBrace.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textOpenBrace.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.movFromMem(R12, Rbp, -40);        // map ptr
-  cg.movImmToMem(Rbp, -48, 0);         // index
-  cg.bind(mapLoop);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.movFromMem(R9, R12, kTableLengthOffset);
-  cg.cmpReg(R8, R9);
-  cg.jcc(Jcc::Ae, mapEnd);
-  cg.testReg(R8);
-  cg.jcc(Jcc::Eq, mapBody);
-  cg.bind(mapSep);
-  cg.leaRipLabel(Rdi, textComma.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textComma.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.bind(mapBody);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
-  cg.movFromMem(R9, R12, kTableBlockOffset);
-  cg.addReg(R9, R8);
-  cg.movFromMem(Rdi, R9, kMapEntryKeyOffset);
-  cg.movReg(Rsi, Rbx);
-  cg.callLabel(printStrEsc);
-  cg.leaRipLabel(Rdi, textColon.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textColon.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.imulImm32(R8, R8, static_cast<std::int32_t>(kMapEntrySize));
-  cg.movFromMem(R9, R12, kTableBlockOffset);
-  cg.addReg(R9, R8);
-  cg.movFromMem(Rdi, R9, kMapEntryValueOffset);
-  cg.movFromMem(Rsi, R9, kMapEntryValueOffset + 8);
-  cg.movFromMem(Rdx, Rbp, -24);
-  cg.addImm32(Rdx, 1);
-  cg.movReg(Rcx, Rbx);
-  cg.callLabel(label);
-  cg.movFromMem(R8, Rbp, -48);
-  cg.addImm32(R8, 1);
-  cg.movToMem(Rbp, -48, R8);
-  cg.jmp(mapLoop);
-  cg.bind(mapEnd);
-  cg.leaRipLabel(Rdi, textCloseBrace.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textCloseBrace.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(done);
-
-  // A range prints as `<start>..<end>` (exclusive) or `<start>..=<end>`
-  // (inclusive), matching the hosted `Value::toString`.
-  cg.bind(asRange);
-  cg.movFromMem(Rdi, Rbp, -40);
-  cg.movFromMem(Rdi, Rdi, kRangeStartOffset);
-  cg.movReg(R10, Rbx);
-  cg.callLabel(writeInt);
-  cg.movFromMem(R8, Rbp, -40);
-  cg.movFromMem(R8, R8, kRangeInclusiveOffset);
-  cg.testReg(R8);
-  cg.jcc(Jcc::Eq, rangeDotDot);
-  cg.leaRipLabel(Rdi, textRangeIncl.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textRangeIncl.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.jmp(rangePrintEnd);
-  cg.bind(rangeDotDot);
-  cg.leaRipLabel(Rdi, textRangeExcl.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textRangeExcl.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-  cg.bind(rangePrintEnd);
-  cg.movFromMem(Rdi, Rbp, -40);
-  cg.movFromMem(Rdi, Rdi, kRangeEndOffset);
-  cg.movReg(R10, Rbx);
-  cg.callLabel(writeInt);
-  cg.jmp(done);
-
-  cg.bind(tooDeep);
-  cg.leaRipLabel(Rdi, textEllipsis.label);
-  cg.movImm(Rsi, static_cast<std::int64_t>(textEllipsis.text.size()));
-  inlineWriteFd(cg, writeLabel, Rbx);
-
-  cg.bind(done);
-  cg.addImm32(Rsp, 32);
+  cg.addImm32(Rsp, 640);
   cg.pop(R12);
   cg.pop(Rbx);
   epilogue(cg);
@@ -3456,8 +3890,6 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob textOpenBrace = addText("{");
   DataBlob textCloseBrace = addText("}");
   DataBlob textEllipsis = addText("...");
-  DataBlob textRangeIncl = addText("..=");
-  DataBlob textRangeExcl = addText("..");
   DataBlob msgRangeBounds = addText("jolt: range bounds must be integers\n");
   DataBlob textQuote = addText("\"");
   DataBlob textEscQuote = addText("\\\"");
@@ -3471,6 +3903,13 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   CodeGen::Label writeInt = cg.newLabel();
   CodeGen::Label printRepr = cg.newLabel();
   CodeGen::Label printStrEsc = cg.newLabel();
+  CodeGen::Label sbInit = cg.newLabel();
+  CodeGen::Label sbAppend = cg.newLabel();
+  CodeGen::Label sbAppendByte = cg.newLabel();
+  CodeGen::Label sbNew = cg.newLabel();
+  CodeGen::Label sbAppendEscaped = cg.newLabel();
+  CodeGen::Label reprInto = cg.newLabel();
+  CodeGen::Label reprToString = cg.newLabel();
 
   // The float/double formatter is part of the embedded runtime: bind its
   // handles and emit the whole dtoa routine so `jolt_print_value` can call it.
@@ -3537,10 +3976,22 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitArityError(cg, handles.arityError, fail, msgArity);
   emitPrintStrEsc(cg, printStrEsc, entry.write, textQuote, textEscQuote,
                   textEscBackslash, textEscNL, textEscTab, textEscCR, textHexPrefix);
-  emitPrintRepr(cg, printRepr, entry.write, writeInt, dtoaHandles.formatDouble,
-                printStrEsc, textTrue, textFalse, textNil, textFunc, textComma,
-                textColon, textOpenBracket, textCloseBracket, textOpenBrace,
-                textCloseBrace, textEllipsis, textRangeIncl, textRangeExcl);
+  // The string builder and the recursive repr are shared by `print` and `$str`:
+  // `jolt_repr_into` traverses, `jolt_print_repr` renders into a stack builder
+  // and writes, `jolt_repr_to_string` renders into an arena string.
+  emitSbInit(cg, sbInit);
+  emitSbAppend(cg, sbAppend, handles.alloc, fail, msgOom);
+  emitSbAppendByte(cg, sbAppendByte, sbAppend);
+  emitSbNew(cg, sbNew, handles.alloc, fail, msgOom);
+  emitSbAppendEscaped(cg, sbAppendEscaped, sbAppend, sbAppendByte, textQuote,
+                      textEscQuote, textEscBackslash, textEscNL, textEscTab,
+                      textEscCR);
+  emitReprInto(cg, reprInto, sbAppend, sbAppendEscaped, dtoaHandles.formatDouble,
+               textTrue, textFalse, textNil, textFunc, textComma, textColon,
+               textOpenBracket, textCloseBracket, textOpenBrace, textCloseBrace,
+               textEllipsis);
+  emitReprToString(cg, reprToString, sbNew, reprInto, handles.alloc, fail, msgOom);
+  emitPrintRepr(cg, printRepr, entry.write, sbInit, reprInto);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
                  dtoaHandles.formatDouble, printRepr, msgPrint, textTrue, textFalse,
                  textNil, textNewline);
@@ -3581,8 +4032,8 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitIsErrorBuiltin(cg, handles.isErrorBuiltin);
   emitNonNullBuiltin(cg, handles.nonNullBuiltin, fail, msgNonNull);
   emitStrBuiltin(cg, handles.strBuiltin, handles.alloc, fail,
-                 dtoaHandles.formatDouble, msgOom, textTrue, textFalse, textNil,
-                 msgStrBad);
+                 dtoaHandles.formatDouble, reprToString, msgOom, textTrue, textFalse,
+                 textNil, msgStrBad);
   emitRangeBuiltin(cg, handles.rangeBuiltin, handles.alloc, fail, msgOom,
                    msgRangeBounds);
   dtoa::emitDtoa(cg, dtoaHandles);
