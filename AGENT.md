@@ -12,7 +12,7 @@ programming language with a Lua-style internal architecture.
 | **Name** | Jolt |
 | **Extension** | `.jolt` |
 | **Philosophy** | Simple like Python, structured like Java, fast like Lua, safe like Kotlin |
-| **Implementation** | C++17 (standard library only, optional AsmJIT for JIT) |
+| **Implementation** | C++17 (standard library only; optional libffi, development engine only) |
 | **Initial platform** | Linux x86-64 (musl static), then Windows/macOS |
 | **Architecture** | Register-based bytecode + VM (dev engine) + AOT backend (production) |
 | **Niche** | Desktop apps, CLI, UI (not systems, not backend, not data science) |
@@ -58,8 +58,8 @@ bytecode that later turns out to be impossible to compile efficiently).
 | `gc.cpp` | tracked `GcNode`s | cycle reclamation | ✅ |
 | `platform_posix.cpp` | `Platform` ops (dev engine) | libc-backed I/O | ✅ |
 | `native/codegen.cpp` | x86-64 instructions | machine-code bytes | ✅ PHASE 7a/7b |
-| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | 🔶 PHASE 7c.3 |
-| `native/runtime.cpp` | boxed values | runtime helpers as machine code | 🔶 PHASE 7c.3 |
+| `native/lower.cpp` | bytecode | x86-64 (boxed `Value`) | ✅ PHASE 7c.3 (all opcodes) |
+| `native/runtime.cpp` | boxed values | runtime helpers as machine code | ✅ PHASE 7c.3 |
 | `native/dtoa.cpp` | float/double | shortest round-trip text | ✅ PHASE 7c.1b |
 | `native/elf.cpp` | text + rodata | static ELF64 bytes | ✅ |
 | `native/pe.cpp` | text + rdata | static PE32+ bytes | ✅ |
@@ -71,10 +71,11 @@ bytecode that later turns out to be impossible to compile efficiently).
 
 `jolt` ships as a single binary until PHASE 7d. After the split:
 
-- `jolt` development engine (run, REPL, -c). Includes the VM and the JIT
-(AsmJIT).
+- `jolt` development engine (run, REPL, -c). Includes the VM and the JIT (the
+  JIT uses the project's own `native/codegen.h` emitter, not AsmJIT).
 - `joltc` host compiler (joltc file.jolt -o app). Reads sources and
-writes the ELF. Uses AsmJIT Assembler (no JIT). Links against musl static.
+  writes the ELF with the project's own `native/codegen.cpp` and
+  `native/elf.cpp` (no AsmJIT, no ELFIO). Links against musl static.
 - `jolt build` thin alias over `joltc`
 
 Boundary rule: src/compiler.* and src/native/* must not include
@@ -914,7 +915,7 @@ inline caching or specialization, it is out of scope (§8).
 
 - **Cosmopolitan (APE)** for CLI multi-platform (optional).
 - **Interfaces/traits** (for generic code without full generics).
-- **Dynamic FFI** (`dlopen`, `dlsym`, runtime stubs with AsmJIT JIT).
+- **Dynamic FFI** (`dlopen`, `dlsym`, runtime stubs with the project's own JIT).
 - **Hot reload** (1.1+).
 - **Extended stdlib**: JSON, dates, bytes, regex, networking.
 - **Package manager** (`jolt install foo`) and registry.
@@ -957,11 +958,12 @@ and is no longer in the tree.
 
 ## 5. Code rules
 
-1. **Pure C++17**, no external dependencies **except optional AsmJIT** (for
-   JIT), **optional ELFIO** (for ELF emitter) and **optional libffi** (for FFI
-   callbacks, **development engine only**). The AOT product (`joltc`) uses
-   AsmJIT Assembler (no JIT) and ELFIO, both header-only or lightweight. libffi
-   is never linked into an AOT product: the freestanding backend lowers
+1. **Pure C++17**, standard library only. The single optional dependency is
+   **libffi** (for FFI callbacks, **development engine only**). The machine
+   code, the static ELF/PE emitters and the JIT are the project's own
+   (`native/codegen.*`, `native/elf.*`, `native/pe.*`): **no AsmJIT and no
+   ELFIO** (LIEF, AsmJIT and LLVM were evaluated and rejected, see PHASE 7).
+   libffi is never linked into an AOT product: the freestanding backend lowers
    callbacks to compile-time stubs, so the end-user binary stays dependency
    free.
 2. **Names**: `camelCase` for functions, variables and members (private data
@@ -1042,16 +1044,18 @@ Without this checklist complete and approved, **do not proceed to code**.
 | Migrating the core to pure C | The core stays in C++17 |
 | Adding features without testing the previous one | Breaks incremental development |
 | Skipping the 7-point checklist | Creates architectural debt |
-| **External libraries beyond AsmJIT/ELFIO/libffi** | AsmJIT, ELFIO and libffi are the only allowed dependencies (libffi is development-engine only) |
+| **External libraries beyond libffi** | libffi (development engine only) is the only allowed dependency; the emitter and the JIT are the project's own |
 | Superinstructions | Violate the 40-opcode ceiling |
 | Inline caching | Changes the bytecode contract |
 | Runtime specialization | Changes the bytecode contract |
 | `async`/`await`, generics, full pattern matching, generators, transactions | Out of scope |
 
-**Note**: AsmJIT, ELFIO and libffi are **optional** dependencies. The AOT
-product (`joltc`) uses AsmJIT Assembler (no JIT, `ASMJIT_NO_JIT`) and ELFIO. The
-development VM (`jolt`) may use AsmJIT JIT and libffi (callbacks). **The
-end-user binary (`hello.exe`) contains none of them.**
+**Note**: libffi is the only **optional** dependency, and it is
+**development-engine only** (FFI callbacks). The machine-code emitter, the
+static ELF/PE writers and the JIT are the project's own C++ (no AsmJIT, no
+ELFIO): the AOT product (`joltc`) emits the binary itself and the development
+VM (`jolt`) may use libffi for callbacks. **The end-user binary (`hello.exe`)
+contains none of them.**
 
 ---
 
@@ -1142,8 +1146,6 @@ myapp.jpkg
 - *The Implementation of Lua 5.0* — register VM design
 - LuaJIT source code (Mike Pall) — performance reference
 - System V ABI AMD64 — calling convention (PHASE 7)
-- AsmJIT documentation — JIT and Assembler
-- ELFIO documentation — ELF emitter
 - AXL documentation — arena allocator and low-level utilities
 - Cosmopolitan Libc — multi-platform CLI (optional)
 
