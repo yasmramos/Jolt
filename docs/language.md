@@ -2181,6 +2181,13 @@ The backend targets x86_64-linux-sysv today; on any other target `jolt build`
 reports the unsupported target instead of emitting bytes for an ABI it cannot
 produce.
 
+A compiled binary carries the standard-library builtins that need no libm:
+`print`/`write`/`eprint`, `len`, `type`, `str`, `repr`, `bool`, `ord`, `chr`,
+`assert`, `panic` and `isError`. The math builtins (`sqrt`, `pow`, ...) and the
+numeric conversions `int`/`float`/`double` are not lowered yet: the math block
+needs an embedded libm (the freestanding binary cannot call the host's), and the
+conversions need a freestanding string parser. They land in a later slice.
+
 **Planned (PHASE 7)**:
 
 ```sh

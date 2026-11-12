@@ -759,6 +759,21 @@ LoweredChunk lowerToX64(const Target& target, const Bytecode& proto,
       {"$str", rt.strBuiltin},
       {"$range", rt.rangeBuiltin},
       {"$slice", rt.sliceBuiltin},
+      // The public standard-library builtins (PHASE 7c.5a). Seeded the same way,
+      // so `len(x)` and `print(x)` are both ordinary calls. `str` and `isError`
+      // reuse the `$str` and `$isError` code; a user binding of any of these
+      // names shadows the builtin, exactly like the hosted engine's
+      // "install builtins, then run the chunk" order.
+      {"len", rt.lenBuiltin},
+      {"type", rt.typeBuiltin},
+      {"str", rt.strBuiltin},
+      {"repr", rt.reprBuiltin},
+      {"bool", rt.boolBuiltin},
+      {"ord", rt.ordBuiltin},
+      {"chr", rt.chrBuiltin},
+      {"assert", rt.assertBuiltin},
+      {"panic", rt.panicBuiltin},
+      {"isError", rt.isErrorBuiltin},
   };
 
   const GlobalSlots globals = collectGlobals(protos, builtins);
