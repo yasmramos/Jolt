@@ -46,3 +46,15 @@ var ratio = 1.0 / 3.0;
 print("ratio = ${ratio}");
 print("sure = ${sure}, label = ${"x"}");
 
+// Ranges lower to the hidden `$range` helper (PHASE 7c.4c): printing,
+// iteration, `.length`, membership and interpolation.
+print("range =", 0..=5);
+var count = 0;
+for i in 0..4 {
+  count = count + i;
+}
+print("range sum =", count);
+print("range length =", (0..=5).length);
+print("3 in range =", 3 in 0..5);
+print("range text = ${2..=7}");
+

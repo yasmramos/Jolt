@@ -35,6 +35,7 @@ constexpr std::int64_t kTagStr = static_cast<std::int64_t>(AotTag::Str);
 constexpr std::int64_t kTagFunc = static_cast<std::int64_t>(AotTag::Func);
 constexpr std::int64_t kTagArray = static_cast<std::int64_t>(AotTag::Array);
 constexpr std::int64_t kTagMap = static_cast<std::int64_t>(AotTag::Map);
+constexpr std::int64_t kTagRange = static_cast<std::int64_t>(AotTag::Range);
 
 // Field offsets of the collection headers (see `native/value.h`). Arrays and
 // maps share the same three-word header (length, capacity, block), so one set
@@ -46,6 +47,11 @@ constexpr std::int64_t kArrayItemSize = static_cast<std::int64_t>(sizeof(AotValu
 constexpr std::int64_t kMapEntrySize = static_cast<std::int64_t>(kAotMapEntrySize);
 constexpr std::int64_t kMapEntryKeyOffset = 0;
 constexpr std::int64_t kMapEntryValueOffset = 8;
+
+// Field offsets of a range header (see `native/value.h`).
+constexpr std::int64_t kRangeStartOffset = 0;
+constexpr std::int64_t kRangeEndOffset = 8;
+constexpr std::int64_t kRangeInclusiveOffset = 16;
 
 // Byte offset of a string's first byte from its `AotString` header (see
 // `native/value.h`): the length is an 8-byte word, the bytes follow.
@@ -304,6 +310,8 @@ void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeL
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagArray));
   cg.jcc(Jcc::Eq, asRepr);
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagMap));
+  cg.jcc(Jcc::Eq, asRepr);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagRange));
   cg.jcc(Jcc::Eq, asRepr);
   emitFailCall(cg, fail, badValue);
 
@@ -1913,6 +1921,12 @@ void emitMemberGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) 
   CodeGen::Label map = cg.newLabel();
   CodeGen::Label arr = cg.newLabel();
   CodeGen::Label str = cg.newLabel();
+  CodeGen::Label range = cg.newLabel();
+  CodeGen::Label rangeAsc = cg.newLabel();
+  CodeGen::Label rangeSat = cg.newLabel();
+  CodeGen::Label rangeUse = cg.newLabel();
+  CodeGen::Label rangeMax = cg.newLabel();
+  CodeGen::Label rangeHave = cg.newLabel();
   CodeGen::Label mapMiss = cg.newLabel();
   CodeGen::Label isLength = cg.newLabel();
   CodeGen::Label done = cg.newLabel();
@@ -1933,6 +1947,8 @@ void emitMemberGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) 
   cg.jcc(Jcc::Eq, arr);
   cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagStr));
   cg.jcc(Jcc::Eq, str);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Eq, range);
   cg.jmp(failMember);
 
   cg.bind(map);
@@ -1981,6 +1997,43 @@ void emitMemberGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) 
 
   cg.bind(isLength);
   cg.movFromMem(Rdx, R12, kTableLengthOffset);
+  cg.movImm(Rax, kTagInt);
+  cg.jmp(done);
+
+  // A range's `.length`: the distance between the bounds, plus one when
+  // inclusive, saturated at INT64_MAX so an overflowing span stays defined.
+  cg.bind(range);
+  cg.movFromMem(Rdi, Rbp, -24);
+  cg.leaRipLabel(Rsi, env.lengthConst);
+  cg.callLabel(env.strEq);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, failMember);
+  cg.movFromMem(R8, R12, kRangeStartOffset);
+  cg.movFromMem(R9, R12, kRangeEndOffset);
+  cg.cmpReg(R9, R8);
+  cg.jcc(Jcc::Ge, rangeAsc);
+  cg.movReg(R10, R8);
+  cg.subReg(R10, R9);              // descending: start - end
+  cg.jmp(rangeSat);
+  cg.bind(rangeAsc);
+  cg.movReg(R10, R9);
+  cg.subReg(R10, R8);              // ascending: end - start
+  cg.bind(rangeSat);
+  cg.movFromMem(R8, R12, kRangeInclusiveOffset);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, rangeUse);
+  cg.movImm(R11, -1);
+  cg.cmpReg(R10, R11);
+  cg.jcc(Jcc::Eq, rangeMax);       // distance == UINT64_MAX: saturate
+  cg.addImm32(R10, 1);
+  cg.bind(rangeMax);
+  cg.movImm(R11, -1);
+  cg.shrImm8(R11, 1);              // INT64_MAX
+  cg.cmpReg(R10, R11);
+  cg.jcc(Jcc::Le, rangeUse);
+  cg.movReg(R10, R11);             // saturate
+  cg.bind(rangeUse);
+  cg.movReg(Rdx, R10);
   cg.movImm(Rax, kTagInt);
 
   cg.bind(done);
@@ -2221,6 +2274,10 @@ void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   CodeGen::Label strNext = cg.newLabel();
   CodeGen::Label strFound = cg.newLabel();
   CodeGen::Label strMiss = cg.newLabel();
+  CodeGen::Label range = cg.newLabel();
+  CodeGen::Label rangeAsc = cg.newLabel();
+  CodeGen::Label rangeAscIncl = cg.newLabel();
+  CodeGen::Label rangeDescIncl = cg.newLabel();
   CodeGen::Label trueDone = cg.newLabel();
   CodeGen::Label falseDone = cg.newLabel();
   CodeGen::Label done = cg.newLabel();
@@ -2241,6 +2298,8 @@ void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   cg.jcc(Jcc::Eq, map);
   cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagStr));
   cg.jcc(Jcc::Eq, str);
+  cg.cmpImm32(Rdx, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Eq, range);
   cg.jmp(failType);
 
   cg.bind(arr);
@@ -2342,6 +2401,48 @@ void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   cg.bind(strMiss);
   cg.jmp(falseDone);
 
+  // A range contains an integer when it falls inside the bounds. An ascending
+  // range (start <= end) checks `start <= value < end` (or `<= end` inclusive);
+  // a descending one checks the mirror, and a descending exclusive range
+  // matches neither bound (`5 in 5..0` is false), matching `ops::inRange`.
+  cg.bind(range);
+  cg.cmpImm32(Rbx, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, failType);
+  cg.movFromMem(R11, Rbp, -32);        // range header
+  cg.movFromMem(R10, R11, kRangeStartOffset);
+  cg.movFromMem(R9, R11, kRangeEndOffset);
+  cg.cmpReg(R10, R9);
+  cg.jcc(Jcc::Le, rangeAsc);
+  cg.movFromMem(R8, R11, kRangeInclusiveOffset);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Ne, rangeDescIncl);
+  cg.cmpReg(R12, R9);
+  cg.jcc(Jcc::Le, falseDone);          // value <= end: outside
+  cg.cmpReg(R12, R10);
+  cg.jcc(Jcc::Ge, falseDone);          // value >= start: outside
+  cg.jmp(trueDone);
+  cg.bind(rangeDescIncl);
+  cg.cmpReg(R12, R9);
+  cg.jcc(Jcc::Lt, falseDone);          // value < end: outside
+  cg.cmpReg(R12, R10);
+  cg.jcc(Jcc::Gt, falseDone);          // value > start: outside
+  cg.jmp(trueDone);
+  cg.bind(rangeAsc);
+  cg.movFromMem(R8, R11, kRangeInclusiveOffset);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Ne, rangeAscIncl);
+  cg.cmpReg(R12, R10);
+  cg.jcc(Jcc::Lt, falseDone);          // value < start: outside
+  cg.cmpReg(R12, R9);
+  cg.jcc(Jcc::Ge, falseDone);          // value >= end: outside
+  cg.jmp(trueDone);
+  cg.bind(rangeAscIncl);
+  cg.cmpReg(R12, R10);
+  cg.jcc(Jcc::Lt, falseDone);          // value < start: outside
+  cg.cmpReg(R12, R9);
+  cg.jcc(Jcc::Gt, falseDone);          // value > end: outside
+  cg.jmp(trueDone);
+
   cg.bind(trueDone);
   cg.movImm(Rax, kTagBool);
   cg.movImm(Rdx, 1);
@@ -2362,11 +2463,26 @@ void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
 // `for-in` cursor and return the item (rax:rdx) with the done flag in r8. The
 // cursor starts nil; it holds an int index afterwards. Arrays yield items, maps
 // yield keys and strings yield one code point, mirroring the VM's `ITER`.
+void emitIterNextRange(CodeGen& cg, CodeGen::Label range, CodeGen::Label rangeAsc,
+                       CodeGen::Label rangeAscIncl, CodeGen::Label rangeDescIncl,
+                       CodeGen::Label rangeEmit, CodeGen::Label rangeDescNext,
+                       CodeGen::Label rangeStoreCursor, CodeGen::Label doneTrue,
+                       CodeGen::Label done);
+
+// `AotValue jolt_iter_next(AotValue* cursor, long tag, long payload)`: advance
+// the `for-in` cursor and return the item (rax:rdx) with the done flag in r8.
 void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   CodeGen::Label zero = cg.newLabel();
   CodeGen::Label arr = cg.newLabel();
   CodeGen::Label map = cg.newLabel();
   CodeGen::Label str = cg.newLabel();
+  CodeGen::Label range = cg.newLabel();
+  CodeGen::Label rangeAsc = cg.newLabel();
+  CodeGen::Label rangeAscIncl = cg.newLabel();
+  CodeGen::Label rangeDescIncl = cg.newLabel();
+  CodeGen::Label rangeEmit = cg.newLabel();
+  CodeGen::Label rangeDescNext = cg.newLabel();
+  CodeGen::Label rangeStoreCursor = cg.newLabel();
   CodeGen::Label dispatch = cg.newLabel();
   CodeGen::Label storeCursor = cg.newLabel();
   CodeGen::Label oom = cg.newLabel();
@@ -2391,9 +2507,14 @@ void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   cg.jcc(Jcc::Ne, failState);
   cg.jmp(dispatch);
   cg.bind(zero);
-  cg.xorReg(R9, R9);
+  // A range's cursor is the current value, which starts at `start`; every
+  // other iterable uses a 0-based index.
+  cg.movFromMem(R8, Rbp, -24);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Ne, dispatch);
+  cg.movFromMem(R9, R12, kRangeStartOffset);
   cg.bind(dispatch);
-  cg.movToMem(Rbp, -32, R9);        // index
+  cg.movToMem(Rbp, -32, R9);        // index / range value
   cg.movFromMem(R8, Rbp, -24);
   cg.cmpImm32(R8, static_cast<std::int32_t>(kTagArray));
   cg.jcc(Jcc::Eq, arr);
@@ -2401,6 +2522,8 @@ void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   cg.jcc(Jcc::Eq, map);
   cg.cmpImm32(R8, static_cast<std::int32_t>(kTagStr));
   cg.jcc(Jcc::Eq, str);
+  cg.cmpImm32(R8, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Eq, range);
   cg.jmp(failType);
 
   cg.bind(arr);
@@ -2451,6 +2574,9 @@ void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   cg.movReg(Rdx, Rax);
   cg.movImm(Rax, kTagStr);
 
+  emitIterNextRange(cg, range, rangeAsc, rangeAscIncl, rangeDescIncl, rangeEmit,
+                    rangeDescNext, rangeStoreCursor, doneTrue, done);
+
   cg.bind(storeCursor);
   cg.movFromMem(R9, Rbp, -32);
   cg.addImm32(R9, 1);
@@ -2475,6 +2601,65 @@ void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   emitFailCall(cg, env.fail, *env.msgBadIn);
   cg.bind(oom);
   emitFailCall(cg, env.fail, *env.msgOom);
+}
+
+// The `for-in` body for a range: `R9` holds the current value, `R12` the range
+// header. Ascending ranges step +1, descending ones step -1 (unsigned, so
+// INT64_MIN/MAX bounds stay defined). The next value goes to `rangeStoreCursor`.
+void emitIterNextRange(CodeGen& cg, CodeGen::Label range, CodeGen::Label rangeAsc,
+                       CodeGen::Label rangeAscIncl, CodeGen::Label rangeDescIncl,
+                       CodeGen::Label rangeEmit, CodeGen::Label rangeDescNext,
+                       CodeGen::Label rangeStoreCursor, CodeGen::Label doneTrue,
+                       CodeGen::Label done) {
+  cg.bind(range);
+  cg.movFromMem(R9, Rbp, -32);          // current value
+  cg.movFromMem(R10, R12, kRangeStartOffset);
+  cg.movFromMem(R11, R12, kRangeEndOffset);
+  cg.cmpReg(R10, R11);
+  cg.jcc(Jcc::Le, rangeAsc);
+
+  // Descending: start > end. Stop when the current value passes `end`.
+  cg.movFromMem(R8, R12, kRangeInclusiveOffset);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Ne, rangeDescIncl);
+  cg.cmpReg(R9, R11);
+  cg.jcc(Jcc::Le, doneTrue);            // exclusive: value > end required
+  cg.jmp(rangeEmit);
+  cg.bind(rangeDescIncl);
+  cg.cmpReg(R9, R11);
+  cg.jcc(Jcc::Lt, doneTrue);            // inclusive: value >= end required
+  cg.jmp(rangeEmit);
+
+  // Ascending: start <= end. Stop when the current value passes `end`.
+  cg.bind(rangeAsc);
+  cg.movFromMem(R8, R12, kRangeInclusiveOffset);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Ne, rangeAscIncl);
+  cg.cmpReg(R9, R11);
+  cg.jcc(Jcc::Ge, doneTrue);            // exclusive: value < end required
+  cg.jmp(rangeEmit);
+  cg.bind(rangeAscIncl);
+  cg.cmpReg(R9, R11);
+  cg.jcc(Jcc::Gt, doneTrue);            // inclusive: value <= end required
+
+  cg.bind(rangeEmit);
+  cg.movImm(Rax, kTagInt);
+  cg.movReg(Rdx, R9);
+  // Decide the direction once more to step the cursor the right way.
+  cg.movFromMem(R10, R12, kRangeStartOffset);
+  cg.movFromMem(R11, R12, kRangeEndOffset);
+  cg.cmpReg(R10, R11);
+  cg.jcc(Jcc::Gt, rangeDescNext);
+  cg.addImm32(R9, 1);                   // ascending: next = current + 1
+  cg.jmp(rangeStoreCursor);
+  cg.bind(rangeDescNext);
+  cg.subRegImm32(R9, 1);                // descending: next = current - 1
+
+  cg.bind(rangeStoreCursor);
+  cg.movImmToMem(Rbx, 0, kTagInt);
+  cg.movToMem(Rbx, 8, R9);
+  cg.xorReg(R8, R8);                    // done = false
+  cg.jmp(done);
 }
 
 // `AotValue jolt_builtin_map_value(AotValue* args, long argc, AotClosure* self)`:
@@ -2559,6 +2744,36 @@ void emitNonNullBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   epilogue(cg);
 }
 
+// Renders the integer in `rax` as decimal digits, written *backwards* from the
+// cursor in `cursor` (r8), which the helper advances downward. A leading '-'
+// is written for a negative value, matching `std::to_string`. Clobbers rax,
+// rcx, rdx and r9.
+void emitIntDigitsBackwards(CodeGen& cg, X64Reg cursor, CodeGen::Label positive,
+                            CodeGen::Label convert, CodeGen::Label loop,
+                            CodeGen::Label emit) {
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ge, positive);
+  cg.movImm(R9, 1);          // negative
+  cg.negReg(Rax);
+  cg.jmp(convert);
+  cg.bind(positive);
+  cg.xorReg(R9, R9);
+  cg.bind(convert);
+  cg.movImm(Rcx, 10);
+  cg.bind(loop);
+  cg.divUnsigned(Rcx);       // rax /= 10, rdx = rax % 10
+  cg.addImm32(Rdx, static_cast<std::int32_t>('0'));
+  cg.subRegImm32(cursor, 1);
+  cg.movByteToMem(cursor, 0, Rdx);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Ne, loop);
+  cg.testReg(R9);
+  cg.jcc(Jcc::Eq, emit);
+  cg.subRegImm32(cursor, 1);
+  cg.movImmByteToMem(cursor, 0, static_cast<std::uint8_t>('-'));
+  cg.bind(emit);
+}
+
 // `AotValue jolt_builtin_str(AotValue* args, long argc, AotClosure* self)`: the
 // hidden `$str` helper the compiler emits for string interpolation (`"${x}"`)
 // and computed map keys. It renders the operand to an `AotString` in the arena,
@@ -2578,10 +2793,21 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   CodeGen::Label asNil = cg.newLabel();
   CodeGen::Label asStr = cg.newLabel();
   CodeGen::Label asNum = cg.newLabel();
+  CodeGen::Label asRange = cg.newLabel();
+  CodeGen::Label rangeIncl = cg.newLabel();
+  CodeGen::Label rangeAfterSep = cg.newLabel();
   CodeGen::Label intPos = cg.newLabel();
   CodeGen::Label intConv = cg.newLabel();
   CodeGen::Label intLoop = cg.newLabel();
   CodeGen::Label intEmit = cg.newLabel();
+  CodeGen::Label rangeEndPos = cg.newLabel();
+  CodeGen::Label rangeEndConv = cg.newLabel();
+  CodeGen::Label rangeEndLoop = cg.newLabel();
+  CodeGen::Label rangeEndEmit = cg.newLabel();
+  CodeGen::Label rangeStartPos = cg.newLabel();
+  CodeGen::Label rangeStartConv = cg.newLabel();
+  CodeGen::Label rangeStartLoop = cg.newLabel();
+  CodeGen::Label rangeStartEmit = cg.newLabel();
   CodeGen::Label buildConst = cg.newLabel();
   CodeGen::Label numOom = cg.newLabel();
   CodeGen::Label oom = cg.newLabel();
@@ -2591,7 +2817,7 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   prologue(cg);
   cg.push(Rbx);
   cg.push(R12);
-  cg.subRegImm32(Rsp, 32);   // int digit buffer; keeps rsp 16-byte aligned
+  cg.subRegImm32(Rsp, 64);   // digit buffer (int, or range bounds + separator)
   cg.movReg(Rbx, Rdi);       // rbx = args
 
   // args[0] is the operand: tag at [rbx + 0], payload at [rbx + 8].
@@ -2608,6 +2834,8 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   cg.jcc(Jcc::Eq, asNum);
   cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagDouble));
   cg.jcc(Jcc::Eq, asNum);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Eq, asRange);
   emitFailCall(cg, fail, msgStrBad);
 
   // A string renders as itself.
@@ -2636,34 +2864,42 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   // An integer: decimal digits built backwards into the stack buffer, then a
   // leading '-' when negative, matching `std::to_string`.
   cg.bind(asInt);
-  cg.movFromMem(R12, Rbx, 8);
+  cg.movFromMem(Rax, Rbx, 8);
   cg.movReg(R8, Rsp);
-  cg.addImm32(R8, 32);       // cursor = end of buffer
-  cg.movReg(Rax, R12);
-  cg.testReg(Rax);
-  cg.jcc(Jcc::Ge, intPos);
-  cg.movImm(R9, 1);          // negative
-  cg.negReg(Rax);
-  cg.jmp(intConv);
-  cg.bind(intPos);
-  cg.xorReg(R9, R9);
-  cg.bind(intConv);
-  cg.movImm(Rcx, 10);
-  cg.bind(intLoop);
-  cg.divUnsigned(Rcx);       // rax /= 10, rdx = rax % 10
-  cg.addImm32(Rdx, static_cast<std::int32_t>('0'));
-  cg.subRegImm32(R8, 1);
-  cg.movByteToMem(R8, 0, Rdx);
-  cg.testReg(Rax);
-  cg.jcc(Jcc::Ne, intLoop);
-  cg.testReg(R9);
-  cg.jcc(Jcc::Eq, intEmit);
-  cg.subRegImm32(R8, 1);
-  cg.movImmByteToMem(R8, 0, static_cast<std::uint8_t>('-'));
-  cg.bind(intEmit);
+  cg.addImm32(R8, 64);       // cursor = end of buffer
+  emitIntDigitsBackwards(cg, R8, intPos, intConv, intLoop, intEmit);
   cg.movReg(R12, Rsp);
-  cg.addImm32(R12, 32);
+  cg.addImm32(R12, 64);
   cg.subReg(R12, R8);        // length = end - start
+  cg.jmp(buildConst);
+
+  // A range: `<start>..<end>` (exclusive) or `<start>..=<end>` (inclusive),
+  // built backwards into the buffer (end, separator, then start).
+  cg.bind(asRange);
+  cg.movFromMem(R12, Rbx, 8);            // range header
+  cg.movReg(R8, Rsp);
+  cg.addImm32(R8, 64);                   // cursor = end of buffer
+  cg.movFromMem(Rax, R12, kRangeEndOffset);
+  emitIntDigitsBackwards(cg, R8, rangeEndPos, rangeEndConv, rangeEndLoop, rangeEndEmit);
+  cg.movFromMem(R9, R12, kRangeInclusiveOffset);
+  cg.testReg(R9);
+  cg.jcc(Jcc::Eq, rangeIncl);
+  cg.subRegImm32(R8, 3);
+  cg.movImmByteToMem(R8, 0, static_cast<std::uint8_t>('.'));
+  cg.movImmByteToMem(R8, 1, static_cast<std::uint8_t>('.'));
+  cg.movImmByteToMem(R8, 2, static_cast<std::uint8_t>('='));
+  cg.jmp(rangeAfterSep);
+  cg.bind(rangeIncl);
+  cg.subRegImm32(R8, 2);
+  cg.movImmByteToMem(R8, 0, static_cast<std::uint8_t>('.'));
+  cg.movImmByteToMem(R8, 1, static_cast<std::uint8_t>('.'));
+  cg.bind(rangeAfterSep);
+  cg.movFromMem(Rax, R12, kRangeStartOffset);
+  emitIntDigitsBackwards(cg, R8, rangeStartPos, rangeStartConv, rangeStartLoop,
+                         rangeStartEmit);
+  cg.movReg(R12, Rsp);
+  cg.addImm32(R12, 64);
+  cg.subReg(R12, R8);                    // length = end - start
   cg.jmp(buildConst);
 
   // A Float/Double: format with the embedded dtoa into a stack frame, then copy
@@ -2718,17 +2954,64 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   cg.jmp(done);
 
   cg.bind(oom);
-  cg.addImm32(Rsp, 32);
+  cg.addImm32(Rsp, 64);
   cg.leaRipLabel(Rdi, msgOom.label);
   cg.movImm(Rsi, static_cast<std::int64_t>(msgOom.text.size()));
   cg.callLabel(fail);
   cg.ud2();
 
   cg.bind(done);
-  cg.addImm32(Rsp, 32);
+  cg.addImm32(Rsp, 64);
   cg.pop(R12);
   cg.pop(Rbx);
   epilogue(cg);
+}
+
+// `AotValue jolt_builtin_range(AotValue* args, long argc, AotClosure* self)`:
+// the hidden `$range` helper for the range literals `a..b` (inclusive = false)
+// and `a..=b` (inclusive = true). Both bounds must be integers, matching the
+// hosted helper. The range header lives in the arena.
+void emitRangeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
+                      CodeGen::Label fail, const DataBlob& msgOom,
+                      const DataBlob& msgRangeBounds) {
+  CodeGen::Label oom = cg.newLabel();
+  CodeGen::Label badBounds = cg.newLabel();
+
+  cg.bind(label);
+  prologue(cg);
+  cg.push(Rbx);
+  cg.push(R12);
+  cg.movReg(Rbx, Rdi);  // args
+  // args[0] and args[1] are the bounds (16 bytes apart, growing down); args[2]
+  // is the inclusive flag. Both bounds must be Int.
+  cg.movFromMem(Rax, Rbx, 0);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, badBounds);
+  cg.movFromMem(Rax, Rbx, -16);
+  cg.cmpImm32(Rax, static_cast<std::int32_t>(kTagInt));
+  cg.jcc(Jcc::Ne, badBounds);
+
+  cg.movImm(Rdi, static_cast<std::int64_t>(kAotRangeHeaderSize));
+  cg.callLabel(allocLabel);
+  cg.testReg(Rax);
+  cg.jcc(Jcc::Eq, oom);
+  cg.movReg(R12, Rax);
+  cg.movFromMem(R8, Rbx, 8);        // start
+  cg.movToMem(R12, kRangeStartOffset, R8);
+  cg.movFromMem(R8, Rbx, -8);       // end
+  cg.movToMem(R12, kRangeEndOffset, R8);
+  cg.movFromMem(R8, Rbx, -24);      // inclusive flag (bool payload)
+  cg.movToMem(R12, kRangeInclusiveOffset, R8);
+  cg.movReg(Rdx, R12);
+  cg.movImm(Rax, kTagRange);
+  cg.pop(R12);
+  cg.pop(Rbx);
+  epilogue(cg);
+
+  cg.bind(badBounds);
+  emitFailCall(cg, fail, msgRangeBounds);
+  cg.bind(oom);
+  emitFailCall(cg, fail, msgOom);
 }
 
 // `void jolt_print_str_escaped(AotString* s, long fd)`: writes `s` between
@@ -2887,7 +3170,8 @@ void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                    const DataBlob& textFunc, const DataBlob& textComma,
                    const DataBlob& textColon, const DataBlob& textOpenBracket,
                    const DataBlob& textCloseBracket, const DataBlob& textOpenBrace,
-                   const DataBlob& textCloseBrace, const DataBlob& textEllipsis) {
+                   const DataBlob& textCloseBrace, const DataBlob& textEllipsis,
+                   const DataBlob& textRangeIncl, const DataBlob& textRangeExcl) {
   CodeGen::Label asInt = cg.newLabel();
   CodeGen::Label asBool = cg.newLabel();
   CodeGen::Label boolFalse = cg.newLabel();
@@ -2897,6 +3181,9 @@ void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
   CodeGen::Label asFunc = cg.newLabel();
   CodeGen::Label asArray = cg.newLabel();
   CodeGen::Label asMap = cg.newLabel();
+  CodeGen::Label asRange = cg.newLabel();
+  CodeGen::Label rangeDotDot = cg.newLabel();
+  CodeGen::Label rangePrintEnd = cg.newLabel();
   CodeGen::Label arrayLoop = cg.newLabel();
   CodeGen::Label arrayBody = cg.newLabel();
   CodeGen::Label arraySep = cg.newLabel();
@@ -2939,6 +3226,8 @@ void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
   cg.jcc(Jcc::Eq, asArray);
   cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagMap));
   cg.jcc(Jcc::Eq, asMap);
+  cg.cmpImm32(Rdi, static_cast<std::int32_t>(kTagRange));
+  cg.jcc(Jcc::Eq, asRange);
   cg.jmp(done);
 
   cg.bind(asInt);
@@ -3079,6 +3368,32 @@ void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
   inlineWriteFd(cg, writeLabel, Rbx);
   cg.jmp(done);
 
+  // A range prints as `<start>..<end>` (exclusive) or `<start>..=<end>`
+  // (inclusive), matching the hosted `Value::toString`.
+  cg.bind(asRange);
+  cg.movFromMem(Rdi, Rbp, -40);
+  cg.movFromMem(Rdi, Rdi, kRangeStartOffset);
+  cg.movReg(R10, Rbx);
+  cg.callLabel(writeInt);
+  cg.movFromMem(R8, Rbp, -40);
+  cg.movFromMem(R8, R8, kRangeInclusiveOffset);
+  cg.testReg(R8);
+  cg.jcc(Jcc::Eq, rangeDotDot);
+  cg.leaRipLabel(Rdi, textRangeIncl.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textRangeIncl.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.jmp(rangePrintEnd);
+  cg.bind(rangeDotDot);
+  cg.leaRipLabel(Rdi, textRangeExcl.label);
+  cg.movImm(Rsi, static_cast<std::int64_t>(textRangeExcl.text.size()));
+  inlineWriteFd(cg, writeLabel, Rbx);
+  cg.bind(rangePrintEnd);
+  cg.movFromMem(Rdi, Rbp, -40);
+  cg.movFromMem(Rdi, Rdi, kRangeEndOffset);
+  cg.movReg(R10, Rbx);
+  cg.callLabel(writeInt);
+  cg.jmp(done);
+
   cg.bind(tooDeep);
   cg.leaRipLabel(Rdi, textEllipsis.label);
   cg.movImm(Rsi, static_cast<std::int64_t>(textEllipsis.text.size()));
@@ -3141,6 +3456,9 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   DataBlob textOpenBrace = addText("{");
   DataBlob textCloseBrace = addText("}");
   DataBlob textEllipsis = addText("...");
+  DataBlob textRangeIncl = addText("..=");
+  DataBlob textRangeExcl = addText("..");
+  DataBlob msgRangeBounds = addText("jolt: range bounds must be integers\n");
   DataBlob textQuote = addText("\"");
   DataBlob textEscQuote = addText("\\\"");
   DataBlob textEscBackslash = addText("\\\\");
@@ -3222,7 +3540,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitPrintRepr(cg, printRepr, entry.write, writeInt, dtoaHandles.formatDouble,
                 printStrEsc, textTrue, textFalse, textNil, textFunc, textComma,
                 textColon, textOpenBracket, textCloseBracket, textOpenBrace,
-                textCloseBrace, textEllipsis);
+                textCloseBrace, textEllipsis, textRangeIncl, textRangeExcl);
   emitPrintValue(cg, handles.printValue, entry.write, fail, writeInt,
                  dtoaHandles.formatDouble, printRepr, msgPrint, textTrue, textFalse,
                  textNil, textNewline);
@@ -3265,6 +3583,8 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitStrBuiltin(cg, handles.strBuiltin, handles.alloc, fail,
                  dtoaHandles.formatDouble, msgOom, textTrue, textFalse, textNil,
                  msgStrBad);
+  emitRangeBuiltin(cg, handles.rangeBuiltin, handles.alloc, fail, msgOom,
+                   msgRangeBounds);
   dtoa::emitDtoa(cg, dtoaHandles);
 
   // The "length" member name is a raw `AotString` (8-byte length + bytes), laid

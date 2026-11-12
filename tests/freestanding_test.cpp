@@ -415,6 +415,69 @@ static void test_str_helper() {
   check(result.exitCode == 0, "a program using interpolation exits 0");
 }
 
+// The `$range` helper (PHASE 7c.4c) builds a range value from two integer
+// bounds. A compiled program must print, iterate (ascending and descending,
+// inclusive and exclusive), take `.length`, test membership with `in` and
+// interpolate a range exactly like the VM.
+static void test_range_helper() {
+  Bytecode proto = compileSource(
+      "print(0..5);\n"
+      "print(0..=5);\n"
+      "print(5..0);\n"
+      "print(5..=0);\n"
+      "print((0..=5).length);\n"
+      "var r = 0..3;\n"
+      "print(r.length);\n"
+      "for i in 0..3 { print(i); }\n"
+      "for i in 3..0 { print(i); }\n"
+      "for i in 0..=2 { print(i); }\n"
+      "print(2 in 0..5);\n"
+      "print(5 in 0..5);\n"
+      "print(5 in 0..=5);\n"
+      "print(1 in 5..0);\n"
+      "print(5 in 5..0);\n"
+      "print(\"${0..=3}\");\n");
+  RunResult result = buildAndRun("/tmp/jolt_range_helper", proto);
+  std::string expected =
+      "0..5\n"
+      "0..=5\n"
+      "5..0\n"
+      "5..=0\n"
+      "6\n"
+      "3\n"
+      "0\n"
+      "1\n"
+      "2\n"
+      "3\n"
+      "2\n"
+      "1\n"
+      "0\n"
+      "1\n"
+      "2\n"
+      "true\n"
+      "false\n"
+      "true\n"
+      "true\n"
+      "false\n"
+      "0..=3\n";
+  check(result.output == expected,
+        "a compiled program handles ranges like the VM");
+  check(result.exitCode == 0, "a program using ranges exits 0");
+}
+
+// A range with a non-integer bound must fail with the hosted helper's message
+// and exit 70.
+static void test_range_helper_bad_bounds() {
+  Bytecode proto = compileSource(
+      "var s = \"x\";\n"
+      "var r = s..3;\n"
+      "print(r);\n");
+  RunResult result = buildAndRun("/tmp/jolt_range_bad", proto);
+  check(result.exitCode == 70, "a non-integer range bound exits 70");
+  check(result.output.find("range bounds must be integers") != std::string::npos,
+        "the failed range names the integer-bounds rule");
+}
+
 // A nested container prints with the recursive repr, and a self-referential one
 // stops at the depth cap instead of recursing forever.
 static void test_collection_repr() {
@@ -820,6 +883,8 @@ int main() {
   test_hidden_helpers();
   test_hidden_helpers_non_null_failure();
   test_str_helper();
+  test_range_helper();
+  test_range_helper_bad_bounds();
   test_collection_repr();
 #else
   std::printf("skipped: platform and execution tests require Linux x86-64\n");
