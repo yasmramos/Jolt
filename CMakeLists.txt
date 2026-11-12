@@ -171,6 +171,18 @@ if(BUILD_TESTING)
       "-DJOLT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/21_std_math.jolt"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_stdlib.cmake")
 
+  # --- `jolt build`: compile to a native binary and run it (PHASE 7d) ---
+  # The AOT backend targets x86_64-linux-sysv, so this runs on Linux x86-64
+  # only; elsewhere the generated image would not execute.
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+     CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    add_test(NAME jolt.build_binary
+      COMMAND ${CMAKE_COMMAND}
+        "-DJOLT_EXE=$<TARGET_FILE:jolt>"
+        "-DJOLT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/native_build_hello.jolt"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/build_binary.cmake")
+  endif()
+
   # --- .jolt script tests (auto-detected) ---
   file(GLOB jolt_tests CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.jolt"

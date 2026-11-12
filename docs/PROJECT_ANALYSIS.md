@@ -24,12 +24,13 @@ tests and no CI).
 | AST interpreter | **Retired** | no `src/interpreter.cpp`; the VM is the only engine |
 | Shared runtime | Working | `src/value.cpp`, `src/ops.cpp` (operators), `src/builtins.cpp` (1,524 L), `src/env.cpp`, `src/gc.cpp` |
 | AOT backend | PHASE 7 in progress (7a, 7b, 7c.0–7c.2) | `src/native/*` (codegen, lower, runtime, dtoa, elf, pe, arena, freestanding platform, entry) |
-| Tests | 50 `.jolt` + 100 error `.jolt` + 12 C++ suites | `tests/`, `tests/errors/`, wired into CTest |
+| Tests | 50 `.jolt` + 100 error `.jolt` + 4 check `.jolt` + 9 examples + 12 C++ suites | `tests/`, `tests/errors/`, `tests/check/`, `examples/`, wired into CTest |
 | CI | Two workflows | `.github/workflows/{cmake-multi-platform,artifacts}.yml` (Linux, Windows, macOS) |
 
-Build (`sh build.sh`) and the full CTest suite run clean on Linux x86-64; the
-only local failure is `32_ffi_callback.jolt`, skipped by CMake when `libffi`
-is not installed (see §3.1).
+Build (`sh build.sh`) and the full CTest suite run clean on Linux x86-64, and
+`tests/run.sh` now mirrors CTest: it runs the same `.jolt` scripts (including
+`examples/` and the `-c` check tests) and skips `32_ffi_callback.jolt` when
+`libffi` is absent (see §3.1).
 
 ---
 
@@ -78,12 +79,14 @@ the asymmetry. Low priority.
 
 ## 3. Medium-priority improvements
 
-### 3.1 `libffi`-gated test noise outside CI
-`tests/run.sh` runs every `.jolt` file and fails `32_ffi_callback.jolt` when
-`libffi` is not installed, while CMake/CTest *skips* that test in the same
-situation. The result is a green CI and a red local run for the same tree.
-Teaching `run.sh` the same gate (skip when `libffi` is absent) removes the
-papercut. This is the most actionable item in this document.
+### 3.1 Local/CI test parity — **resolved**
+`tests/run.sh` used to run only `tests/*.jolt` and `tests/errors/*.jolt`, so it
+skipped `examples/*.jolt` and the `tests/check/*.jolt` compile-only tests that
+CMake/CTest does run, and it failed `32_ffi_callback.jolt` when `libffi` was
+absent while CTest skipped it. The runner now mirrors CTest: it executes the
+same four groups (run `tests/` and `examples/`, error tests under
+`tests/errors/`, and `-c` check tests under `tests/check/`, requiring an empty
+stdout there), and skips a test whose `// requires:` capability is missing.
 
 ### 3.2 Benchmarks
 The old report quoted `fib(24)` timings with no harness in the tree. There is no
@@ -128,11 +131,10 @@ priority.
 
 ## 5. Suggested order (each independently shippable)
 
-1. `fix(tests)`: gate `32_ffi_callback.jolt` on `libffi` in `tests/run.sh`. *(§3.1)*
-2. `chore(bench)`: add a benchmark harness and record a baseline. *(§3.2)*
-3. `ci`: add an ASan/UBSan job. *(§3.5)*
-4. `refactor(build)`: derive `kVersion` from the CMake project version. *(§4.1)*
-5. Collection-API consistency (`len` method) and header consolidation are
+1. `chore(bench)`: add a benchmark harness and record a baseline. *(§3.2)*
+2. `ci`: add an ASan/UBSan job. *(§3.5)*
+3. `refactor(build)`: derive `kVersion` from the CMake project version. *(§4.1)*
+4. Collection-API consistency (`len` method) and header consolidation are
    optional cleanups that touch the language surface or many includes; schedule
    them deliberately. *(§2.5, §3.4)*
 

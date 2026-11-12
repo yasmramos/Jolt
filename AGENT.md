@@ -817,13 +817,16 @@ Slices, each independently shippable:
       `tests/freestanding_test.cpp` (arrays, maps, indexing, `.length`, `in`,
       `for-in` and container printing under the real `_start`) and
       `tests/lower_test.cpp` (the collection opcodes now lower instead of
-      raising). Still missing: `jolt build` (7d).
+      raising).
     - **7c.1+** — boxed `Value` over the arena, `print`/`toString` (own dtoa),
       collections and functions. The AOT runtime has its own boxed value and
       its own arena-backed objects, sharing *semantics* with `ops.h` but not
       code, because the hosted `Value` is reference counted and cycle
       collected (`gc.cpp`), which cannot live in a no-libc binary.
-  - **7d** — `jolt build` wired into the CLI.
+  - **7d** (done) — `jolt build` wired into the CLI. `jolt build <file.jolt>
+    [-o <out>]` (default output: the script's base name without extension)
+    runs the whole AOT pipeline and writes the static executable. See the
+    `jolt build` paragraph above for the details.
 - Deferred: per-instruction type annotations for fast paths without dynamic
   dispatch (bridge toward the speculative work in
   `docs/ARCHITECTURE_ANALYSIS.md`); other targets (macOS/Windows via libc or
@@ -858,7 +861,14 @@ Slices, each independently shippable:
   7c.2d seeds the `print`/`write`/`eprint` builtins as globals, so a compiled
   program can print. 7c.3 lowers collections: arrays and maps over arena
   headers, indexing/membership/`for-in` through the collection helpers and a
-  recursive container printer. Still missing: `jolt build` (7d).
+  recursive container printer. 7d wires the backend into the CLI: `jolt build
+  <file.jolt> [-o <out>]` runs the whole pipeline (lex, parse, compile,
+  `lowerToX64`, `buildStaticElf`) and writes a static executable, defaulting
+  the output to the script's base name. The chunk's `processEntry` (`_start`)
+  is handed to the emitter, so the binary runs and exits without libc. The
+  command reports an unsupported target rather than emitting bytes for an ABI
+  the backend cannot produce, and the emitted binary embeds only the runtime,
+  never the compiler (AGENT.md §3, the GraalVM pitfall).
 
 ### Post-1.0 — UI library
 
@@ -895,7 +905,7 @@ Phase 6: ✅ completed (6a, 6b, 6c, 6d, 6f done)
 Phase 6.5: ✅ completed (Java-style `import`, `switch`, `defer`, type annotations/inference/nullable `T?` and nullability expressions `?.`/`??`/`!!`, `struct`, `native fn`, variadic `rest...` parameters and the `std.math` module). Post-6.5 additions: slicing syntax `obj[start:end:step]` for strings and arrays with an optional step (still one `$slice` helper call, no new opcode), the short-circuiting compound assignments `&&=`, `||=` and `??=` (existing `EQ`/`NEQ`/`JMP_IF_*`/`MOVE` opcodes, no new opcode), the post-test loop `do { ... } while (cond);` (existing `JMP`/`JMP_IF_TRUE` opcodes, no new opcode), optional parentheses in `for ... in` (`for (x in xs)`, told apart from the classic header by a `( name in` lookahead), the key/value form `for k, v in map` (a second loop variable after a comma binds the value of each pair through the hidden `$mapValue` helper, no new opcode) and brace-less single-statement bodies for `if`/`else`/`while`/`for`/`for-in` (a single statement wrapped in a block, so the bytecode is unchanged)
 Phase 6.6: ✅ completed (type vocabulary, `extern "C"` declarations + marshalling, pointers, structs by value and callbacks)
 Phase 6.7: ✅ completed (6.7.1 `pcall`, 6.7.2 `error` type, 6.7.3 `try`/`catch`, 6.7.4 unions `T | E` and 6.7.5 `@MustUse` done)
-Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3 done; 7d pending)
+Phase 7: 🔶 in progress (7a, 7b, 7c.0, 7c.1a-d, 7c.2a-d, 7c.3, 7d done)
 Post-1.0: ⬜ pending (UI, Cosmopolitan, package manager, VM embedded)
 2.0: ⬜ future (static with `@Dynamic`)
 
