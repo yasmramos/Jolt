@@ -8,6 +8,7 @@
 
 #include "bytecode.h"
 #include "builtins.h"
+#include "jit/jit.h"
 #include "runtime.h"
 #include "value.h"
 
@@ -51,6 +52,16 @@ class VM : public Runtime {
 
   // Number of local cells reserved by the last execution.
   int localCount() const { return static_cast<int>(locals_.size()); }
+
+  // Enables or disables the JIT. Off by default: the development engine turns
+  // it on (`jolt`, `-e`, the REPL) and `joltc` never does, because the AOT
+  // product must not carry a JIT (AGENT.md §8). While enabled, a call to a
+  // proto the JIT accepts runs the compiled code; every other call is
+  // interpreted exactly as before, so results never change.
+  void setJitEnabled(bool enabled) { jitEnabled_ = enabled; }
+  bool jitEnabled() const { return jitEnabled_; }
+  // Number of protos compiled so far (0 when the JIT is disabled).
+  std::size_t jitCompiledCount() const { return jit_.compiledCount(); }
 
   Value call(const Value& callee, std::vector<Value> args, int line, int col) override;
   void defineGlobal(const std::string& name, Value value, bool isImmutable = false) override;
@@ -98,6 +109,16 @@ class VM : public Runtime {
   // of the shared local windows.
   std::vector<CellPtr> scratchCells_;
   std::unordered_map<std::string, Value> globals_;
+
+  // Development-engine JIT (slice 1). Disabled unless the CLI turns it on, so
+  // the interpreter path is unchanged when it is off.
+  Jit jit_;
+  bool jitEnabled_ = false;
+
+  // Returns the compiled function for `proto` when the JIT is enabled and
+  // accepts it, or nullptr to interpret. The arguments must all be integers
+  // and the arity must match, because the native code reads integer slots only.
+  JitFunction* jitFor(const std::shared_ptr<const Bytecode>& proto, const std::vector<Value>& args);
 
   // Returns the dotted path to `name` when it exists as a member of a visible
   // global table, or "" when it does not. A forgotten namespace root is a
