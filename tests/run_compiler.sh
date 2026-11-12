@@ -21,8 +21,8 @@ if [ -z "${CXX:-}" ]; then
     fi
 fi
 
-# Link the whole runtime like CMake's `jolt_lib`: every src/**/*.cpp except the
-# `jolt` entry point. The list is detected, never written by hand, so it cannot
+# Link the whole runtime like CMake's `oskel_lib`: every src/**/*.cpp except the
+# `oskel` entry point. The list is detected, never written by hand, so it cannot
 # drift when a source is added or removed.
 sources=""
 for src in src/*.cpp src/native/*.cpp; do

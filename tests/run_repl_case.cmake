@@ -1,14 +1,14 @@
 # Feeds a session to the REPL under CTest and checks that it behaves.
 # Registered by CMakeLists.txt; expects:
-#   -DJOLT_EXE=<path to the jolt executable>
+#   -DOSKEL_EXE=<path to the oskel executable>
 #   -DREPL_INPUT=<path to the file piped to the REPL>
 
-if(NOT DEFINED JOLT_EXE OR NOT DEFINED REPL_INPUT)
-  message(FATAL_ERROR "run_repl_case.cmake requires JOLT_EXE and REPL_INPUT")
+if(NOT DEFINED OSKEL_EXE OR NOT DEFINED REPL_INPUT)
+  message(FATAL_ERROR "run_repl_case.cmake requires OSKEL_EXE and REPL_INPUT")
 endif()
 
 execute_process(
-  COMMAND "${JOLT_EXE}"
+  COMMAND "${OSKEL_EXE}"
   INPUT_FILE "${REPL_INPUT}"
   RESULT_VARIABLE actual_exit
   OUTPUT_VARIABLE repl_stdout

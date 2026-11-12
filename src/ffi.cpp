@@ -7,7 +7,7 @@
 
 #include "ffi_types.h"
 
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
 // libffi builds the trampoline a C function calls back into. It is only used
 // for callbacks, and only in the development engine (AGENT.md §5.1/§6.6).
 // `ffi.h` is the system header: the project's own header is `ffi_marshal.h`
@@ -285,7 +285,7 @@ Value dispatch(void* address, ReturnClass rc, StructShape shape, const StructLay
   }
 }
 
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
 // ------------------------------------------------------------------ callbacks
 
 // Maps an FFI scalar type name to the libffi type the trampoline marshals it
@@ -469,7 +469,7 @@ Ref<CallbackObj> makeCallback(Runtime& rt, const std::string& name, const TypeSp
   callback->code = code;
   return callback;
 }
-#endif  // JOLT_HAVE_LIBFFI
+#endif  // OSKEL_HAVE_LIBFFI
 
 }  // namespace
 
@@ -512,7 +512,7 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
     std::vector<ParamClass> classes;
     std::vector<std::string> types;
     std::vector<Value> values;
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
     // Callbacks built for this call, kept alive until C returns so the
     // trampoline address stays valid while the callee runs.
     std::vector<Ref<CallbackObj>> callbacks;
@@ -520,7 +520,7 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
     for (std::size_t i = 0; i < paramTypes.size(); ++i) {
       const TypeSpec& spec = paramTypes[i];
       if (spec.isCallback) {
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
         // A callback is one GPR: the trampoline address (or NULL for `nil`).
         std::int64_t code = 0;
         if (!args[i].isNil()) {
@@ -589,7 +589,7 @@ Value makeExternNative(Runtime& rt, const std::string& name, void* address,
       }
     }
     Value result = dispatch<0>(address, rc, shape, layout, returnScalar, classes, types, values, in);
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
     // A Jolt error raised inside a callback could not unwind through the C
     // frame; re-raise it now that C has returned.
     for (const Ref<CallbackObj>& callback : callbacks) {

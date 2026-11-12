@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Runs every .jolt test.
+# Runs every .oskl test.
 # Positive tests live in tests/ and examples/ and must exit with code 0.
 # Error tests live in tests/errors/ and declare their expected exit code with
 # a first-line comment such as: // expect-exit: 70
@@ -19,12 +19,12 @@ set -u
 test_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$test_dir")
 
-if [ -x "$root/build/jolt" ]; then
-    exe="$root/build/jolt"
-elif [ -x "$root/build/jolt.exe" ]; then
-    exe="$root/build/jolt.exe"
+if [ -x "$root/build/oskel" ]; then
+    exe="$root/build/oskel"
+elif [ -x "$root/build/oskel.exe" ]; then
+    exe="$root/build/oskel.exe"
 else
-    echo "error: build/jolt was not found. Run ./build.sh first." >&2
+    echo "error: build/oskel was not found. Run ./build.sh first." >&2
     exit 1
 fi
 
@@ -111,32 +111,32 @@ failed=0
 total=0
 skipped=0
 
-# tests/*.jolt and examples/*.jolt: run the script, expected exit 0 unless the
+# tests/*.oskl and examples/*.oskl: run the script, expected exit 0 unless the
 # first line declares otherwise.
-for test in "$test_dir"/*.jolt; do
+for test in "$test_dir"/*.oskl; do
     [ -e "$test" ] || continue
     expected=$(declared_exit "$test")
     [ -n "$expected" ] || expected=0
     run_one "$(basename "$test")" "$test" run "$expected"
 done
 
-for test in "$root/examples"/*.jolt; do
+for test in "$root/examples"/*.oskl; do
     [ -e "$test" ] || continue
     expected=$(declared_exit "$test")
     [ -n "$expected" ] || expected=0
     run_one "examples/$(basename "$test")" "$test" run "$expected"
 done
 
-# tests/errors/*.jolt: run the script, expected exit 70 unless declared.
-for test in "$test_dir/errors"/*.jolt; do
+# tests/errors/*.oskl: run the script, expected exit 70 unless declared.
+for test in "$test_dir/errors"/*.oskl; do
     [ -e "$test" ] || continue
     expected=$(declared_exit "$test")
     [ -n "$expected" ] || expected=70
     run_one "errors/$(basename "$test")" "$test" run "$expected"
 done
 
-# tests/check/*.jolt: compile only with `-c`, expected exit 0 unless declared.
-for test in "$test_dir/check"/*.jolt; do
+# tests/check/*.oskl: compile only with `-c`, expected exit 0 unless declared.
+for test in "$test_dir/check"/*.oskl; do
     [ -e "$test" ] || continue
     expected=$(declared_exit "$test")
     [ -n "$expected" ] || expected=0

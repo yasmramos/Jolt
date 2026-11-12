@@ -18,9 +18,9 @@
 // Labels the caller creates up front, so a program emitted *before* the
 // prelude can already reference them; `emitFreestandingRuntime` binds them.
 struct RuntimeHandles {
-  CodeGen::Label write;      // long jolt_write(long fd, const char* buf, long len)
-  CodeGen::Label exit;       // void jolt_exit(long code)   (never returns)
-  CodeGen::Label initArena;  // void jolt_init_arena(void)  (maps the bump region)
+  CodeGen::Label write;      // long oskel_write(long fd, const char* buf, long len)
+  CodeGen::Label exit;       // void oskel_exit(long code)   (never returns)
+  CodeGen::Label initArena;  // void oskel_init_arena(void)  (maps the bump region)
 };
 
 inline RuntimeHandles newRuntimeHandles(CodeGen& code) {
@@ -37,7 +37,7 @@ inline RuntimeHandles newRuntimeHandles(CodeGen& code) {
 // `_start` down through `main` and the chunk to the allocator without a global
 // memory word (the generated image has no writable data segment). A helper
 // that allocates updates the cursor in place: `r13`/`r14` are the allocator's
-// state, not a preserved register, and only `jolt_alloc` and its callers read
+// state, not a preserved register, and only `oskel_alloc` and its callers read
 // them. The runtime helpers use none of r12-r15, so the arena and the register
 // file on the stack never collide.
 constexpr X64Reg kAotArenaCursor = X64Reg::R13;
@@ -56,9 +56,9 @@ constexpr X64Reg kAotGlobalBase = X64Reg::R15;
 constexpr std::int64_t kAotArenaSize = 1 << 20;  // 1 MiB
 constexpr std::int64_t kAotArenaFirstOffset = 16;
 
-// Appends `jolt_write`, `jolt_exit` and `_start` to `code`, binding the
+// Appends `oskel_write`, `oskel_exit` and `_start` to `code`, binding the
 // handles. `programEntry` must be bound at the program's entry; `_start` calls
-// it with (argc, argv) and hands its return value to `jolt_exit`. Returns the
+// it with (argc, argv) and hands its return value to `oskel_exit`. Returns the
 // offset of `_start`, which the caller passes to `buildStaticElf` as the entry
 // point.
 std::uint64_t emitFreestandingRuntime(CodeGen& code, const RuntimeHandles& handles,

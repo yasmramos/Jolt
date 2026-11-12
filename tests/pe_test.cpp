@@ -150,11 +150,11 @@ int main() {
 
 #if defined(_WIN32)
   // Write the PE to disk and execute it.
-  const char* path = "jolt_pe_test.exe";
+  const char* path = "oskel_pe_test.exe";
   {
     std::ofstream f(path, std::ios::binary);
     if (!f) {
-      check(false, "cannot open jolt_pe_test.exe for writing");
+      check(false, "cannot open oskel_pe_test.exe for writing");
       return g_failures != 0 ? 1 : 0;
     }
     f.write(reinterpret_cast<const char*>(pe.data()),

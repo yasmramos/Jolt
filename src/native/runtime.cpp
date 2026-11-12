@@ -87,7 +87,7 @@ constexpr int Xmm2 = kXmmBase + 2;
 // (`main.cpp` returns 70 after a `RuntimeError`).
 constexpr std::int64_t kRuntimeErrorExit = 70;
 
-// Stack frame `jolt_print_value` builds for a Float/Double: the dtoa `Scratch`
+// Stack frame `oskel_print_value` builds for a Float/Double: the dtoa `Scratch`
 // block followed by a text buffer. Both sizes are rounded so the frame is a
 // multiple of 16, keeping rsp 16-byte aligned at the `call` to the formatter
 // (the ABI requires it, and the formatter's own `call`s rely on it).
@@ -130,15 +130,15 @@ struct CollectionEnv {
   CodeGen::Label write;
   CodeGen::Label writeInt;
   CodeGen::Label formatDouble;
-  CodeGen::Label strEq;        // long jolt_str_eq(AotString* a, AotString* b)
-  CodeGen::Label mapFind;      // long jolt_map_find(AotMap* m, AotString* k)
-  CodeGen::Label blockEnsure;  // long jolt_block_ensure(void* h, long n, long itemSize)
-  CodeGen::Label utf8Len;      // long jolt_utf8_len(AotString* s)
+  CodeGen::Label strEq;        // long oskel_str_eq(AotString* a, AotString* b)
+  CodeGen::Label mapFind;      // long oskel_map_find(AotMap* m, AotString* k)
+  CodeGen::Label blockEnsure;  // long oskel_block_ensure(void* h, long n, long itemSize)
+  CodeGen::Label utf8Len;      // long oskel_utf8_len(AotString* s)
   CodeGen::Label utf8CharAt;   // (AotString*, long) -> char* in rax, length in rdx
-  CodeGen::Label compare;      // AotValue jolt_compare(AotValue, AotValue, long)
-  CodeGen::Label rawPrint;     // void jolt_print_value_raw(AotValue)
-  CodeGen::Label printRepr;    // void jolt_print_repr(AotValue, long depth)
-  CodeGen::Label printStrEsc;  // void jolt_print_str_escaped(AotString*)
+  CodeGen::Label compare;      // AotValue oskel_compare(AotValue, AotValue, long)
+  CodeGen::Label rawPrint;     // void oskel_print_value_raw(AotValue)
+  CodeGen::Label printRepr;    // void oskel_print_repr(AotValue, long depth)
+  CodeGen::Label printStrEsc;  // void oskel_print_str_escaped(AotString*)
   CodeGen::Label lengthConst;  // data: the string "length"
   const DataBlob* msgOom;
   const DataBlob* msgArrayIndexType;
@@ -171,7 +171,7 @@ struct CollectionEnv {
   const DataBlob* textHexPrefix;
 };
 
-// Emits `jolt_write(1, rdi, rsi)`: writes `rsi` bytes from `rdi` to stdout.
+// Emits `oskel_write(1, rdi, rsi)`: writes `rsi` bytes from `rdi` to stdout.
 // Clobbers rdi, rsi, rdx and rax (the syscall's return).
 void inlineWriteStdout(CodeGen& cg, CodeGen::Label writeLabel) {
   cg.movReg(Rdx, Rsi);
@@ -180,7 +180,7 @@ void inlineWriteStdout(CodeGen& cg, CodeGen::Label writeLabel) {
   cg.callLabel(writeLabel);
 }
 
-// Emits `jolt_write(fdReg, rdi, rsi)`: writes `rsi` bytes from `rdi` to `fdReg`.
+// Emits `oskel_write(fdReg, rdi, rsi)`: writes `rsi` bytes from `rdi` to `fdReg`.
 // `fdReg` must not be rdi, rsi or rdx (they are the syscall's other arguments).
 // Clobbers rdi, rsi, rdx and rax.
 void inlineWriteFd(CodeGen& cg, CodeGen::Label writeLabel, X64Reg fdReg) {
@@ -258,7 +258,7 @@ void emitToDouble(CodeGen& cg, X64Reg tag, X64Reg payload, int xmm) {
   cg.bind(done);
 }
 
-// `long jolt_truthy(AotValue a)`: 1 when the value is truthy, else 0. Mirrors
+// `long oskel_truthy(AotValue a)`: 1 when the value is truthy, else 0. Mirrors
 // `Value::truthy`: a bool is itself, nil is false, everything else is true.
 void emitTruthy(CodeGen& cg, CodeGen::Label label) {
   CodeGen::Label isBool = cg.newLabel();
@@ -281,9 +281,9 @@ void emitTruthy(CodeGen& cg, CodeGen::Label label) {
 
 // The shared body of the printers: renders one value to file descriptor `fd`.
 // `newline` appends a trailing '\n' (the `print` builtin and the standalone
-// `jolt_print_value`), which the raw variants omit so they can join arguments.
+// `oskel_print_value`), which the raw variants omit so they can join arguments.
 // int, bool, nil and str render directly; a Float/Double is formatted with the
-// embedded dtoa (`jolt_format_double`) into an arena buffer, then written.
+// embedded dtoa (`oskel_format_double`) into an arena buffer, then written.
 void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                         CodeGen::Label fail, CodeGen::Label writeInt,
                         CodeGen::Label formatDouble, CodeGen::Label printRepr,
@@ -337,7 +337,7 @@ void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeL
 
   cg.bind(asInt);
   cg.movReg(Rdi, Rsi);
-  cg.movImm(R10, fd);  // `jolt_write_int` writes to the fd in r10
+  cg.movImm(R10, fd);  // `oskel_write_int` writes to the fd in r10
   cg.callLabel(writeInt);
   cg.jmp(done);
 
@@ -396,7 +396,7 @@ void emitPrintValueCore(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeL
   epilogue(cg);
 }
 
-// `void jolt_print_value(AotValue v)`: prints the value followed by a newline.
+// `void oskel_print_value(AotValue v)`: prints the value followed by a newline.
 void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                     CodeGen::Label fail, CodeGen::Label writeInt,
                     CodeGen::Label formatDouble, CodeGen::Label printRepr,
@@ -408,7 +408,7 @@ void emitPrintValue(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel
                      /*newline=*/true);
 }
 
-// `void jolt_print_value_raw(AotValue v)`: prints the value with no trailing
+// `void oskel_print_value_raw(AotValue v)`: prints the value with no trailing
 // newline, to stdout, for the `print`/`write` builtins.
 void emitPrintValueRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                        CodeGen::Label fail, CodeGen::Label writeInt,
@@ -421,7 +421,7 @@ void emitPrintValueRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLa
                      /*newline=*/false);
 }
 
-// `void jolt_print_value_err_raw(AotValue v)`: prints the value with no trailing
+// `void oskel_print_value_err_raw(AotValue v)`: prints the value with no trailing
 // newline, to stderr, for the `eprint` builtin.
 void emitPrintValueErrRaw(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                           CodeGen::Label fail, CodeGen::Label writeInt,
@@ -552,7 +552,7 @@ void emitWriteInt(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel) 
   epilogue(cg);
 }
 
-// `AotValue jolt_arith(AotValue a, AotValue b, long op)`: `+`, `-`, `*`, `/`
+// `AotValue oskel_arith(AotValue a, AotValue b, long op)`: `+`, `-`, `*`, `/`
 // and `%` with the int/float/double promotion of `ops::binary`. int/int uses
 // 64-bit wrapping arithmetic; anything with a float promotes to double, and a
 // float/float result rounds back to binary32 so `0.1f + 0.2f == 0.3f` holds,
@@ -775,7 +775,7 @@ void emitArith(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, msgTypes);
 }
 
-// `AotValue jolt_pow(AotValue a, AotValue b)`: integer `**` for int/int with a
+// `AotValue oskel_pow(AotValue a, AotValue b)`: integer `**` for int/int with a
 // non-negative exponent, replicating `intPow` (wrapping multiply, square and
 // multiply). Every other case needs `pow` from libm and is deferred.
 void emitPow(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
@@ -815,7 +815,7 @@ void emitPow(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, msgPow);
 }
 
-// `AotValue jolt_shift(AotValue a, AotValue b, long op)`: integer `<<`/`>>`.
+// `AotValue oskel_shift(AotValue a, AotValue b, long op)`: integer `<<`/`>>`.
 // The count must be an int in 0..63 (the hosted range check); `>>` is
 // arithmetic, so it preserves the sign.
 void emitShift(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
@@ -850,7 +850,7 @@ void emitShift(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, msgShift);
 }
 
-// `AotValue jolt_bitwise(AotValue a, AotValue b, long op)`: int-only `&`, `|`
+// `AotValue oskel_bitwise(AotValue a, AotValue b, long op)`: int-only `&`, `|`
 // and `^`, selected by `op` in r8.
 void emitBitwise(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
                  const DataBlob& message) {
@@ -883,7 +883,7 @@ void emitBitwise(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, message);
 }
 
-// `AotValue jolt_negate(AotValue a)`: arithmetic negation of an int (wrapping)
+// `AotValue oskel_negate(AotValue a)`: arithmetic negation of an int (wrapping)
 // or a float/double (sign-bit flip, exact for every value including NaN).
 void emitNegate(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
                 const DataBlob& message) {
@@ -918,7 +918,7 @@ void emitNegate(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, message);
 }
 
-// `AotValue jolt_bit_not(AotValue a)`: int-only `~`.
+// `AotValue oskel_bit_not(AotValue a)`: int-only `~`.
 void emitBitNot(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
                 const DataBlob& message) {
   CodeGen::Label bad = cg.newLabel();
@@ -934,7 +934,7 @@ void emitBitNot(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, message);
 }
 
-// `AotValue jolt_not(AotValue a)`: logical not of the value's truthiness,
+// `AotValue oskel_not(AotValue a)`: logical not of the value's truthiness,
 // always a bool.
 void emitNot(CodeGen& cg, CodeGen::Label label) {
   CodeGen::Label isBool = cg.newLabel();
@@ -961,7 +961,7 @@ void emitNot(CodeGen& cg, CodeGen::Label label) {
   epilogue(cg);
 }
 
-// `AotValue jolt_compare(AotValue a, AotValue b, long op)`: equality for any
+// `AotValue oskel_compare(AotValue a, AotValue b, long op)`: equality for any
 // pair and ordering for int/int, float/double and bool/bool. Equality of two
 // numbers is numeric (`1 == 1.0` is true), matching `Value::equals`. The result
 // is always a bool. The op selector is the low nibble of the x86-64 condition
@@ -1255,8 +1255,8 @@ void emitCompare(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   cg.retInsn();
 }
 
-// `void* jolt_alloc(long size)`: bump allocation from the arena seeded by
-// `jolt_init_arena`. The cursor and end live in r13/r14 (see `native/entry.h`);
+// `void* oskel_alloc(long size)`: bump allocation from the arena seeded by
+// `oskel_init_arena`. The cursor and end live in r13/r14 (see `native/entry.h`);
 // this helper reads and advances the cursor only. Returns an 8-byte-aligned
 // pointer, or null when the region is exhausted (mirroring `Arena::allocate`).
 void emitAlloc(CodeGen& cg, CodeGen::Label label) {
@@ -1279,7 +1279,7 @@ void emitAlloc(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `AotValue jolt_concat(AotValue a, AotValue b)`: allocate lenA+lenB+8 bytes,
+// `AotValue oskel_concat(AotValue a, AotValue b)`: allocate lenA+lenB+8 bytes,
 // write the combined length and the two byte runs, and return a Str value
 // (payload = the new `AotString`). `a` is rdi:rsi, `b` is rdx:rcx. rbx and r12
 // are callee-saved, so they are preserved across the helper.
@@ -1327,7 +1327,7 @@ void emitConcat(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   emitFailCall(cg, fail, msgOom);
 }
 
-// `void jolt_init_globals(long count)`: allocate `count` `AotValue` slots
+// `void oskel_init_globals(long count)`: allocate `count` `AotValue` slots
 // (16 bytes each) from the arena, clear them to nil, and keep the base in r15
 // (`kAotGlobalBase`). Called once by the chunk entry, before the program runs,
 // so every global reads as nil until it is assigned -- the same "unset" state
@@ -1376,7 +1376,7 @@ void emitInitGlobals(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabe
   emitFailCall(cg, fail, msgOom);
 }
 
-// `void jolt_global_set(long slot, AotValue v)`: store `v` (rsi:rdx) into
+// `void oskel_global_set(long slot, AotValue v)`: store `v` (rsi:rdx) into
 // slot `rdi` of the global table at r15. One multiply and two stores; no
 // hashing, no strings.
 void emitGlobalSet(CodeGen& cg, CodeGen::Label label) {
@@ -1388,7 +1388,7 @@ void emitGlobalSet(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `AotValue jolt_global_get(long slot)`: load slot `rdi` of the global table
+// `AotValue oskel_global_get(long slot)`: load slot `rdi` of the global table
 // into rax:rdx. The slot is nil until assigned, matching the hosted engine's
 // "unset" state; the lowerer rejects a read of a global that is never assigned
 // in the chunk, so a program never observes that nil by accident.
@@ -1401,7 +1401,7 @@ void emitGlobalGet(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `AotValue jolt_closure(void* code, long arity, long upvalueCount)`: allocate
+// `AotValue oskel_closure(void* code, long arity, long upvalueCount)`: allocate
 // an `AotClosure` (code, arity, upvalueCount) followed by `upvalueCount` cell
 // pointers in the arena and return it as a `Func` value (rax:rdx). The slot
 // area is left for the lowering to fill: it knows which cells the child
@@ -1443,7 +1443,7 @@ void emitClosure(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   emitFailCall(cg, fail, msgOom);
 }
 
-// `AotValue* jolt_cell_new(AotValue v)`: allocate a 16-byte cell in the arena
+// `AotValue* oskel_cell_new(AotValue v)`: allocate a 16-byte cell in the arena
 // holding `v` (rdi:rsi) and return its address (rax). A captured local lives in
 // such a cell, shared with every closure that captures it, so a write through
 // the closure and a read in the defining frame observe the same value -- the
@@ -1474,7 +1474,7 @@ void emitCellNew(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   emitFailCall(cg, fail, msgOom);
 }
 
-// `AotValue jolt_call(AotValue callee, long argc, AotValue* args)`: the callee
+// `AotValue oskel_call(AotValue callee, long argc, AotValue* args)`: the callee
 // arrives in rdi:rsi, the argument count in rdx and the argument window in rcx.
 // If the callee is a function, call its code with the lowering's function
 // convention -- rdi = args, rsi = argc, rdx = the `AotClosure*` -- and return
@@ -1506,7 +1506,7 @@ void emitCall(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, msgNonFunc);
 }
 
-// `void jolt_arity_error(void)`: report the wrong-number-of-arguments error and
+// `void oskel_arity_error(void)`: report the wrong-number-of-arguments error and
 // exit. A function's prologue calls it when `argc` does not match its arity. It
 // pushes rbp only to keep the stack 16-byte aligned at the `fail` call, exactly
 // like every other helper; it never returns, so it has no epilogue.
@@ -1517,7 +1517,7 @@ void emitArityError(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, message);
 }
 
-// `long jolt_str_eq(AotString* a, AotString* b)`: 1 when the two strings have
+// `long oskel_str_eq(AotString* a, AotString* b)`: 1 when the two strings have
 // equal length and equal bytes. Map keys are compared by content, so this is
 // the primitive the map helpers build on. A leaf: it calls nothing and uses no
 // callee-saved register.
@@ -1552,7 +1552,7 @@ void emitStrEq(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `long jolt_map_find(AotMap* m, AotString* key)`: the index of `key` in the
+// `long oskel_map_find(AotMap* m, AotString* key)`: the index of `key` in the
 // map's entry array, or -1. A linear scan keeps the layout simple; a hash index
 // can be added later without changing the contract. The loop state survives the
 // `strEq` call on the stack, since that call clobbers r8-r11.
@@ -1603,7 +1603,7 @@ void emitMapFind(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   epilogue(cg);
 }
 
-// `long jolt_block_ensure(void* header, long needed, long itemSize)`: returns a
+// `long oskel_block_ensure(void* header, long needed, long itemSize)`: returns a
 // block with room for `needed` items of `itemSize` bytes. The existing block is
 // returned when its capacity already suffices; otherwise a fresh block of the
 // next power-of-two capacity is allocated from the arena, the live items are
@@ -1678,7 +1678,7 @@ void emitBlockEnsure(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env
   epilogue(cg);
 }
 
-// `long jolt_utf8_len(AotString* s)`: the number of UTF-8 code points, i.e. the
+// `long oskel_utf8_len(AotString* s)`: the number of UTF-8 code points, i.e. the
 // count of bytes that are not continuation bytes (0b10xxxxxx). A leaf.
 void emitUtf8Len(CodeGen& cg, CodeGen::Label label) {
   CodeGen::Label loop = cg.newLabel();
@@ -1772,9 +1772,9 @@ void emitUtf8CharAt(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `AotValue jolt_table_new(long kind)`: allocate a zeroed array (kind 0) or map
+// `AotValue oskel_table_new(long kind)`: allocate a zeroed array (kind 0) or map
 // (kind 1) header in the arena. The items/entries block is allocated lazily by
-// `jolt_block_ensure` on the first store, so an empty collection costs one
+// `oskel_block_ensure` on the first store, so an empty collection costs one
 // allocation.
 void emitTableNew(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   CodeGen::Label oom = cg.newLabel();
@@ -1805,7 +1805,7 @@ void emitTableNew(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   emitFailCall(cg, env.fail, *env.msgOom);
 }
 
-// `AotValue jolt_table_get(AotValue obj, AotValue index)`: `obj[index]` for an
+// `AotValue oskel_table_get(AotValue obj, AotValue index)`: `obj[index]` for an
 // array (int index, negative from the end), a string (int code-point index) or
 // a map (string key, missing key yields nil), mirroring `ops::indexGet`.
 void emitTableGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
@@ -1927,7 +1927,7 @@ void emitTableGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   emitFailCall(cg, env.fail, *env.msgOom);
 }
 
-// `AotValue jolt_member_get(AotValue obj, AotValue name)`: `obj.name` for a map
+// `AotValue oskel_member_get(AotValue obj, AotValue name)`: `obj.name` for a map
 // (the entry, else `length`, else nil), an array (`.length`) or a string
 // (`.length`). Methods are not bound yet, so a miss on an array/string is the
 // "no member" error, exactly as `ops::memberGet` reports it.
@@ -2061,7 +2061,7 @@ void emitMemberGet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) 
   emitFailCall(cg, env.fail, *env.msgBadIndex);
 }
 
-// `void jolt_table_set(AotValue obj, AotValue index, AotValue value)`:
+// `void oskel_table_set(AotValue obj, AotValue index, AotValue value)`:
 // `obj[index] = value`. An array index equal to the length appends; a map key
 // that exists is overwritten, otherwise appended. A string is immutable,
 // mirroring `ops::indexSet`.
@@ -2203,7 +2203,7 @@ void emitTableSet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   emitFailCall(cg, env.fail, *env.msgOom);
 }
 
-// `void jolt_member_set(AotValue obj, AotValue name, AotValue value)`:
+// `void oskel_member_set(AotValue obj, AotValue name, AotValue value)`:
 // `obj.name = value`, valid only on a map (mirrors `ops::memberSet`).
 void emitMemberSet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   CodeGen::Label map = cg.newLabel();
@@ -2272,8 +2272,8 @@ void emitMemberSet(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) 
   emitFailCall(cg, env.fail, *env.msgOom);
 }
 
-// `AotValue jolt_contains(AotValue needle, AotValue haystack)`: the `in`
-// operator for arrays (value equality via `jolt_compare`), maps (string key)
+// `AotValue oskel_contains(AotValue needle, AotValue haystack)`: the `in`
+// operator for arrays (value equality via `oskel_compare`), maps (string key)
 // and strings (substring). Ranges are not lowered yet.
 void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   CodeGen::Label arr = cg.newLabel();
@@ -2473,7 +2473,7 @@ void emitContains(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   emitFailCall(cg, env.fail, *env.msgBadIn);
 }
 
-// `AotValue jolt_iter_next(AotValue* cursor, AotValue iterable)`: advance a
+// `AotValue oskel_iter_next(AotValue* cursor, AotValue iterable)`: advance a
 // `for-in` cursor and return the item (rax:rdx) with the done flag in r8. The
 // cursor starts nil; it holds an int index afterwards. Arrays yield items, maps
 // yield keys and strings yield one code point, mirroring the VM's `ITER`.
@@ -2483,7 +2483,7 @@ void emitIterNextRange(CodeGen& cg, CodeGen::Label range, CodeGen::Label rangeAs
                        CodeGen::Label rangeStoreCursor, CodeGen::Label doneTrue,
                        CodeGen::Label done);
 
-// `AotValue jolt_iter_next(AotValue* cursor, long tag, long payload)`: advance
+// `AotValue oskel_iter_next(AotValue* cursor, long tag, long payload)`: advance
 // the `for-in` cursor and return the item (rax:rdx) with the done flag in r8.
 void emitIterNext(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env) {
   CodeGen::Label zero = cg.newLabel();
@@ -2676,7 +2676,7 @@ void emitIterNextRange(CodeGen& cg, CodeGen::Label range, CodeGen::Label rangeAs
   cg.jmp(done);
 }
 
-// `AotValue jolt_builtin_map_value(AotValue* args, long argc, AotClosure* self)`:
+// `AotValue oskel_builtin_map_value(AotValue* args, long argc, AotClosure* self)`:
 // the hidden `$mapValue` helper the compiler calls for `for k, v in map`. It
 // returns the value paired with the key `args[0]`, so the key/value loop form
 // is an ordinary call. A non-map iterable is rejected, matching the hosted
@@ -2723,7 +2723,7 @@ void emitMapValueBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label mapFi
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_is_error(AotValue* args, long argc, AotClosure* self)`:
+// `AotValue oskel_builtin_is_error(AotValue* args, long argc, AotClosure* self)`:
 // the hidden `$isError` helper that `try` and `x catch y` compile to. The AOT
 // runtime has no error values yet, so a value is never an error: the helper
 // returns `false` and the success path of the construct runs. A real runtime
@@ -2736,7 +2736,7 @@ void emitIsErrorBuiltin(CodeGen& cg, CodeGen::Label label) {
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_non_null(AotValue* args, long argc, AotClosure* self)`:
+// `AotValue oskel_builtin_non_null(AotValue* args, long argc, AotClosure* self)`:
 // the hidden `$nonNull` helper for `a!!`. It returns the operand unchanged, or
 // fails when it is nil, matching the hosted helper.
 void emitNonNullBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
@@ -2788,13 +2788,13 @@ void emitIntDigitsBackwards(CodeGen& cg, X64Reg cursor, CodeGen::Label positive,
   cg.bind(emit);
 }
 
-// `AotValue jolt_builtin_str(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_str(AotValue* args, long argc, AotClosure* self)`: the
 // hidden `$str` helper the compiler emits for string interpolation (`"${x}"`)
 // and computed map keys. It renders the operand to an `AotString` in the arena,
 // byte-identical to the hosted `Value::toString` for nil, booleans, integers,
 // floats, doubles and strings (a string is returned unchanged, so a string
 // interpolates without quotes). A collection or function operand renders with
-// the recursive repr (`jolt_repr_to_string`), so `"${[1, 2]}"` reads exactly
+// the recursive repr (`oskel_repr_to_string`), so `"${[1, 2]}"` reads exactly
 // like `print([1, 2])` (7c.4b.2).
 void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
                     CodeGen::Label fail, CodeGen::Label formatDouble,
@@ -2996,7 +2996,7 @@ void emitStrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_range(AotValue* args, long argc, AotClosure* self)`:
+// `AotValue oskel_builtin_range(AotValue* args, long argc, AotClosure* self)`:
 // the hidden `$range` helper for the range literals `a..b` (inclusive = false)
 // and `a..=b` (inclusive = true). Both bounds must be integers, matching the
 // hosted helper. The range header lives in the arena.
@@ -3043,7 +3043,7 @@ void emitRangeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLab
   emitFailCall(cg, fail, msgOom);
 }
 
-// `AotValue jolt_builtin_slice(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_slice(AotValue* args, long argc, AotClosure* self)`: the
 // hidden `$slice` helper the compiler emits for `obj[start:end:step]` (PHASE
 // 7c.4d). It follows the hosted `$slice`: a bound is nil ("not given") or an
 // integer (negative counts from the end), and the selected indices follow
@@ -3390,12 +3390,12 @@ void emitSliceBuiltin(CodeGen& cg, CodeGen::Label label, const CollectionEnv& en
 // Each is a machine-code function with the proto convention
 // (`AotValue entry(AotValue* args, long argc, AotClosure* self)`), seeded into
 // its global slot as an `AotClosure` by the chunk, so a `CALL` reaches it
-// through the ordinary `jolt_call` path. The argument window grows *down* from
+// through the ordinary `oskel_call` path. The argument window grows *down* from
 // `args`, so args[0] is at [rdi + 0] (tag) and [rdi + 8] (payload) and args[1]
 // at [rdi - 16] / [rdi - 8]. Every one is a pure value transformation -- no
 // libm, no libc -- so it links into the freestanding binary.
 
-// `AotValue jolt_builtin_len(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_len(AotValue* args, long argc, AotClosure* self)`: the
 // public `len`. Strings count UTF-8 code points, arrays and maps their entries,
 // ranges the distance between the bounds (inclusive-aware, saturated at
 // INT64_MAX), matching the hosted `len`. Any other type is a runtime error.
@@ -3479,7 +3479,7 @@ void emitLenBuiltin(CodeGen& cg, CodeGen::Label label, const CollectionEnv& env,
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_type(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_type(AotValue* args, long argc, AotClosure* self)`: the
 // public `type`. The tag selects a constant type-name string, allocated into the
 // arena, matching the hosted `Value::typeName` names.
 void emitTypeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
@@ -3528,22 +3528,22 @@ void emitTypeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabe
   cg.jcc(Jcc::Eq, asRange);
   cg.jmp(asNil);  // every AotTag is covered; default is defensive only
 
-#define JOLT_TYPE_CASE(name, blob)          \
+#define OSKEL_TYPE_CASE(name, blob)          \
   cg.bind(name);                            \
   cg.leaRipLabel(R8, (blob).label);         \
   cg.movImm(R12, static_cast<std::int64_t>((blob).text.size())); \
   cg.jmp(buildConst);
-  JOLT_TYPE_CASE(asNil, tNil)
-  JOLT_TYPE_CASE(asBool, tBool)
-  JOLT_TYPE_CASE(asInt, tInt)
-  JOLT_TYPE_CASE(asFloat, tFloat)
-  JOLT_TYPE_CASE(asDouble, tDouble)
-  JOLT_TYPE_CASE(asStr, tStr)
-  JOLT_TYPE_CASE(asArray, tArray)
-  JOLT_TYPE_CASE(asMap, tMap)
-  JOLT_TYPE_CASE(asFunc, tFunc)
-  JOLT_TYPE_CASE(asRange, tRange)
-#undef JOLT_TYPE_CASE
+  OSKEL_TYPE_CASE(asNil, tNil)
+  OSKEL_TYPE_CASE(asBool, tBool)
+  OSKEL_TYPE_CASE(asInt, tInt)
+  OSKEL_TYPE_CASE(asFloat, tFloat)
+  OSKEL_TYPE_CASE(asDouble, tDouble)
+  OSKEL_TYPE_CASE(asStr, tStr)
+  OSKEL_TYPE_CASE(asArray, tArray)
+  OSKEL_TYPE_CASE(asMap, tMap)
+  OSKEL_TYPE_CASE(asFunc, tFunc)
+  OSKEL_TYPE_CASE(asRange, tRange)
+#undef OSKEL_TYPE_CASE
 
   cg.bind(buildConst);
   cg.movReg(Rdi, R12);
@@ -3570,7 +3570,7 @@ void emitTypeBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabe
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_repr(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_repr(AotValue* args, long argc, AotClosure* self)`: the
 // public `repr`. It renders through the same recursive repr `$str` uses for a
 // collection, which is exactly `Value::repr()` for every type (a top-level
 // string is quoted).
@@ -3583,7 +3583,7 @@ void emitReprBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label reprToStr
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_bool(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_bool(AotValue* args, long argc, AotClosure* self)`: the
 // public `bool`, i.e. the operand's truthiness (`0` and `nil` are false, every
 // other value true).
 void emitBoolBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label truthy) {
@@ -3597,7 +3597,7 @@ void emitBoolBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label truthy) {
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_ord(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_ord(AotValue* args, long argc, AotClosure* self)`: the
 // public `ord`. The operand must be a string holding exactly one UTF-8 code
 // point; the code point is returned as an int.
 void emitOrdBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label utf8Len,
@@ -3695,7 +3695,7 @@ void emitOrdBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label utf8Len,
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_chr(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_chr(AotValue* args, long argc, AotClosure* self)`: the
 // public `chr`. The operand must be an int in `0..0x10FFFF`; the code point is
 // UTF-8 encoded into a fresh arena string.
 void emitChrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
@@ -3841,9 +3841,9 @@ void emitChrBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel
   emitFailCall(cg, fail, msgOom);
 }
 
-// `void jolt_fail_dynamic(char* text, long length)`: writes "jolt: " + the
+// `void oskel_fail_dynamic(char* text, long length)`: writes "jolt: " + the
 // message + a newline to stderr and exits with the runtime-error code, never
-// returning. It is the dynamic counterpart of `jolt_fail`, which takes a
+// returning. It is the dynamic counterpart of `oskel_fail`, which takes a
 // constant blob, and lets `assert`/`panic` report the caller's own message.
 void emitFailDynamic(CodeGen& cg, CodeGen::Label label, CodeGen::Label write,
                      CodeGen::Label exit, const DataBlob& prefix, const DataBlob& newline) {
@@ -3867,7 +3867,7 @@ void emitFailDynamic(CodeGen& cg, CodeGen::Label label, CodeGen::Label write,
   cg.ud2();
 }
 
-// `AotValue jolt_builtin_assert(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_assert(AotValue* args, long argc, AotClosure* self)`: the
 // public `assert`. `args[0]` must be truthy; a second string argument is the
 // failure message. On success it returns nil.
 void emitAssertBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label truthy,
@@ -3909,7 +3909,7 @@ void emitAssertBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label truthy,
   epilogue(cg);
 }
 
-// `AotValue jolt_builtin_panic(AotValue* args, long argc, AotClosure* self)`: the
+// `AotValue oskel_builtin_panic(AotValue* args, long argc, AotClosure* self)`: the
 // public `panic`. It always fails; a string first argument is the message.
 void emitPanicBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
                       CodeGen::Label failDynamic, const DataBlob& msgPanic) {
@@ -3936,10 +3936,10 @@ void emitPanicBuiltin(CodeGen& cg, CodeGen::Label label, CodeGen::Label fail,
   emitFailCall(cg, fail, msgPanic);
 }
 
-// `void jolt_sb_init(AotStringBuilder* sb, char* data, long capacity)`: start a
+// `void oskel_sb_init(AotStringBuilder* sb, char* data, long capacity)`: start a
 // builder over a caller-owned buffer (`data`/`capacity`) with `length` zero. A
 // caller that renders a `print` value passes a stack buffer, so a small render
-// never touches the arena; `jolt_sb_new` passes an arena block. Growth copies
+// never touches the arena; `oskel_sb_new` passes an arena block. Growth copies
 // the bytes to a fresh arena block, so the initial buffer may be on the stack.
 void emitSbInit(CodeGen& cg, CodeGen::Label label) {
   cg.bind(label);
@@ -3949,7 +3949,7 @@ void emitSbInit(CodeGen& cg, CodeGen::Label label) {
   cg.retInsn();
 }
 
-// `void jolt_sb_append(AotStringBuilder* sb, const char* ptr, long len)`:
+// `void oskel_sb_append(AotStringBuilder* sb, const char* ptr, long len)`:
 // append `len` bytes from `ptr`, growing the block when the capacity is short.
 // Growth doubles the capacity until it fits, allocates a fresh arena block and
 // copies the bytes already written. Preserves rbx/r12 (the builder and the
@@ -4025,8 +4025,8 @@ void emitSbAppend(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   emitFailCall(cg, fail, msgOom);
 }
 
-// `void jolt_sb_append_byte(AotStringBuilder* sb, long byte)`: append one byte.
-// A thin wrapper over `jolt_sb_append` through a one-byte stack slot.
+// `void oskel_sb_append_byte(AotStringBuilder* sb, long byte)`: append one byte.
+// A thin wrapper over `oskel_sb_append` through a one-byte stack slot.
 void emitSbAppendByte(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend) {
   cg.bind(label);
   prologue(cg);
@@ -4039,7 +4039,7 @@ void emitSbAppendByte(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend
   epilogue(cg);
 }
 
-// `AotStringBuilder* jolt_sb_new(void)`: allocate a builder header and its
+// `AotStringBuilder* oskel_sb_new(void)`: allocate a builder header and its
 // initial block from the arena, and return the header address. Reports "out of
 // memory" on a null allocation.
 void emitSbNew(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
@@ -4071,10 +4071,10 @@ void emitSbNew(CodeGen& cg, CodeGen::Label label, CodeGen::Label allocLabel,
   emitFailCall(cg, fail, msgOom);
 }
 
-// `void jolt_sb_append_escaped(AotStringBuilder* sb, AotString* s)`: append `s`
+// `void oskel_sb_append_escaped(AotStringBuilder* sb, AotString* s)`: append `s`
 // between double quotes with the same escapes as `quoteString`: `\"`, `\\`,
 // `\n`, `\t`, `\r`, and `\xHH` for any other control byte. This is the
-// builder-sink counterpart of `jolt_print_str_escaped`, so a quoted string in a
+// builder-sink counterpart of `oskel_print_str_escaped`, so a quoted string in a
 // rendered collection reads identically on `print` and `$str`.
 void emitSbAppendEscaped(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend,
                          CodeGen::Label sbAppendByte, const DataBlob& textQuote,
@@ -4221,7 +4221,7 @@ void emitSbAppendEscaped(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbApp
   epilogue(cg);
 }
 
-// `void jolt_repr_into(AotValue v, long depth, AotStringBuilder* sb)`: append
+// `void oskel_repr_into(AotValue v, long depth, AotStringBuilder* sb)`: append
 // the representation of `v` to `sb`, the builder-sink counterpart of the hosted
 // `Value::repr` (`[1, 2]`, `{"k": 1}`, quoted strings, `<fn>`). `depth` caps the
 // recursion at 8, where `...` is appended instead, so a self-referential
@@ -4502,8 +4502,8 @@ void emitReprInto(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbAppend,
   epilogue(cg);
 }
 
-// `AotValue jolt_repr_to_string(AotValue v)`: render `v` with the recursive repr
-// (`jolt_repr_into`) into a fresh arena `AotString` and return it as a `Str`
+// `AotValue oskel_repr_to_string(AotValue v)`: render `v` with the recursive repr
+// (`oskel_repr_into`) into a fresh arena `AotString` and return it as a `Str`
 // value. The `$str` helper uses it for a collection, function or range operand,
 // so `"${[1, 2]}"` reads exactly like `print([1, 2])`.
 void emitReprToString(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbNew,
@@ -4552,7 +4552,7 @@ void emitReprToString(CodeGen& cg, CodeGen::Label label, CodeGen::Label sbNew,
   epilogue(cg);
 }
 
-// `void jolt_print_str_escaped(AotString* s, long fd)`: writes `s` between
+// `void oskel_print_str_escaped(AotString* s, long fd)`: writes `s` between
 // double quotes with the same escapes as `quoteString`: `\"`, `\\`, `\n`,
 // `\t`, `\r`, and `\xHH` for any other control byte.
 void emitPrintStrEsc(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
@@ -4696,10 +4696,10 @@ void emitPrintStrEsc(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabe
   epilogue(cg);
 }
 
-// `void jolt_print_repr(AotValue v, long depth, long fd)`: the recursive
+// `void oskel_print_repr(AotValue v, long depth, long fd)`: the recursive
 // container renderer, matching `Value::repr` (`[1, 2]`, `{"k": 1}`, quoted
 // strings, `<fn>`). It renders into a stack string builder and writes the bytes
-// in one syscall; `jolt_repr_into` does the traversal, so `print` and `$str`
+// in one syscall; `oskel_repr_into` does the traversal, so `print` and `$str`
 // share one renderer.
 void emitPrintRepr(CodeGen& cg, CodeGen::Label label, CodeGen::Label writeLabel,
                    CodeGen::Label sbInit, CodeGen::Label reprInto) {
@@ -4830,7 +4830,7 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   CodeGen::Label reprToString = cg.newLabel();
 
   // The float/double formatter is part of the embedded runtime: bind its
-  // handles and emit the whole dtoa routine so `jolt_print_value` can call it.
+  // handles and emit the whole dtoa routine so `oskel_print_value` can call it.
   dtoa::DtoaHandles dtoaHandles = dtoa::newDtoaHandles(cg);
 
   // Collection helpers reference one another and the printers, so the env is
@@ -4895,8 +4895,8 @@ void emitAotRuntime(CodeGen& cg, const AotRuntimeHandles& handles,
   emitPrintStrEsc(cg, printStrEsc, entry.write, textQuote, textEscQuote,
                   textEscBackslash, textEscNL, textEscTab, textEscCR, textHexPrefix);
   // The string builder and the recursive repr are shared by `print` and `$str`:
-  // `jolt_repr_into` traverses, `jolt_print_repr` renders into a stack builder
-  // and writes, `jolt_repr_to_string` renders into an arena string.
+  // `oskel_repr_into` traverses, `oskel_print_repr` renders into a stack builder
+  // and writes, `oskel_repr_to_string` renders into an arena string.
   emitSbInit(cg, sbInit);
   emitSbAppend(cg, sbAppend, handles.alloc, fail, msgOom);
   emitSbAppendByte(cg, sbAppendByte, sbAppend);

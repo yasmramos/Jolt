@@ -1,4 +1,4 @@
-// Fixture for `jolt build` (tests/build_binary.cmake).
+// Fixture for `oskel build` (tests/build_binary.cmake).
 //
 // Only constructs the AOT backend lowers are used (functions, recursion,
 // arithmetic, `while`, collections and `print`), so the same program runs on

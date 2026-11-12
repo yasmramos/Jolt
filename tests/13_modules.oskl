@@ -1,7 +1,7 @@
 // PHASE 6.5 §18: Java-style imports, module resolution and conflict detection.
 //
 // Fixtures live in tests/modules/ and resolve relative to this file's
-// directory: `import modules.util;` -> tests/modules/util.jolt.
+// directory: `import modules.util;` -> tests/modules/util.oskl.
 
 // --- qualified import: `import path;` -> access is path.name ---------------
 import modules.util;

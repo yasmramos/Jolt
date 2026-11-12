@@ -80,7 +80,7 @@ struct DtoaHandles {
   CodeGen::Label bnMulPow10;  // void bn_mul_pow10(Bignum* bn, long k)
   CodeGen::Label bnDivMod;    // long bn_divmod_small(Bignum* bn, long divisor)
   CodeGen::Label generate;    // void generate(Scratch* s): fills digits/nd/k
-  CodeGen::Label formatDouble;  // long jolt_format_double(long tag, long payload, char* out)
+  CodeGen::Label formatDouble;  // long oskel_format_double(long tag, long payload, char* out)
 };
 
 inline DtoaHandles newDtoaHandles(CodeGen& code) {
@@ -103,12 +103,12 @@ inline DtoaHandles newDtoaHandles(CodeGen& code) {
 // Emits every bignum helper plus the Dragon4 generator and the formatter, and
 // binds `handles`. `formatDouble` has the signature
 //
-//   long jolt_format_double(long tag, long payload, char* out)
+//   long oskel_format_double(long tag, long payload, char* out)
 //
 // `tag`/`payload` are an `AotValue` (a Float or Double tag with the IEEE-754
 // bit pattern as payload). The text is written to `out` without a NUL
 // terminator and the byte length is returned, so the caller writes it with one
-// `jolt_write`. The function makes calls, so it preserves rbx, rbp and r12-r15.
+// `oskel_write`. The function makes calls, so it preserves rbx, rbp and r12-r15.
 void emitDtoa(CodeGen& code, const DtoaHandles& handles);
 
 }  // namespace dtoa

@@ -15,7 +15,7 @@ constexpr long kMapPrivateAnonymous = 0x22;
 
 std::uint64_t emitFreestandingRuntime(CodeGen& code, const RuntimeHandles& handles,
                                       CodeGen::Label programEntry) {
-  // --- long jolt_write(long fd, const char* buf, long len) ---
+  // --- long oskel_write(long fd, const char* buf, long len) ---
   // Retries until `len` bytes are out (the Platform contract forbids short
   // writes) or gives up on the first error / zero progress. Returns the number
   // of bytes written.
@@ -42,13 +42,13 @@ std::uint64_t emitFreestandingRuntime(CodeGen& code, const RuntimeHandles& handl
     code.retInsn();
   }
 
-  // --- void jolt_exit(long code) ---
+  // --- void oskel_exit(long code) ---
   code.bind(handles.exit);
   code.movImm(X64Reg::Rax, kSysExitGroup);
   code.syscallInsn();
   code.ud2();  // unreachable: exit_group never returns
 
-  // --- void jolt_init_arena(void) ---
+  // --- void oskel_init_arena(void) ---
   // mmap(NULL, kAotArenaSize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS,
   //      -1, 0) and seed the allocator state. The kernel returns the region
   // base in rax (or a negative error, which the allocator later turns into a
@@ -82,7 +82,7 @@ std::uint64_t emitFreestandingRuntime(CodeGen& code, const RuntimeHandles& handl
   code.callLabel(programEntry);
   code.movReg(X64Reg::Rdi, X64Reg::Rax);          // exit code = main's result
   code.callLabel(handles.exit);
-  code.ud2();  // jolt_exit never returns
+  code.ud2();  // oskel_exit never returns
 
   return startOffset;
 }

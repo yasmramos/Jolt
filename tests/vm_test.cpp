@@ -1204,7 +1204,7 @@ void testTableCyclesAreCollectedWithoutClosures() {
   VM vm;
   gcCollect();
   const std::size_t before = gcTrackedCount();
-  Bytecode bytecode = compileSource(R"JOLT(
+  Bytecode bytecode = compileSource(R"OSKEL(
 fn make(i) {
   let m = {};
   m.me = m;
@@ -1215,7 +1215,7 @@ fn make(i) {
 var total = 0;
 var k = 0;
 while (k < 30000) { total += make(k); k += 1; }
-)JOLT");
+)OSKEL");
   runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "total").asInt() == 449985000);
@@ -1232,7 +1232,7 @@ void testClosureStoredInTheTableItCapturesIsCollected() {
   VM vm;
   gcCollect();
   const std::size_t before = gcTrackedCount();
-  Bytecode bytecode = compileSource(R"JOLT(
+  Bytecode bytecode = compileSource(R"OSKEL(
 fn make(i) {
   let m = {};
   m.cb = () => m;
@@ -1243,7 +1243,7 @@ fn make(i) {
 var total = 0;
 var k = 0;
 while (k < 10000) { total += make(k); k += 1; }
-)JOLT");
+)OSKEL");
   runOrFail(vm, bytecode);
 
   assert(requireGlobal(vm, "total").asInt() == 49995000);
@@ -1579,7 +1579,7 @@ void testExternMarshalsPointerArgument() {
   assert(out == "7\n8\n");
 }
 
-#if JOLT_FFI_STRUCT_BY_VALUE
+#if OSKEL_FFI_STRUCT_BY_VALUE
 void testExternMarshalsStructReturnTwoIntegers() {
   TEST_SCOPE();
   // A two-`int` struct is 8 bytes, class INTEGER: it comes back wholly in `rax`.
@@ -1670,9 +1670,9 @@ void testExternMarshalsSubEightbyteStruct() {
       "print(t.b);\n");
   assert(out == "65\n66\n");
 }
-#endif  // JOLT_FFI_STRUCT_BY_VALUE
+#endif  // OSKEL_FFI_STRUCT_BY_VALUE
 
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
 void testExternCallbackGprShape() {
   TEST_SCOPE();
   // The callback is a Jolt function; C calls it through a libffi trampoline that
@@ -1731,7 +1731,7 @@ void testExternCallbackErrorIsReraisedAfterCReturns() {
       "print(r.error.message);\n");
   assert(out == "false\ncallback failed\n");
 }
-#endif  // JOLT_HAVE_LIBFFI
+#endif  // OSKEL_HAVE_LIBFFI
 
 void testExternRejectsLargeStructAtCompileTime() {
   TEST_SCOPE();
@@ -1902,7 +1902,7 @@ int main() {
   testExternMarshalsDoubleReturnAndArgument();
   testExternMarshalsStringReturnAsCString();
   testExternMarshalsPointerArgument();
-#if JOLT_FFI_STRUCT_BY_VALUE
+#if OSKEL_FFI_STRUCT_BY_VALUE
   testExternMarshalsStructReturnTwoIntegers();
   testExternMarshalsStructReturnTwoDoubles();
   testExternMarshalsStructReturnMixedClasses();
@@ -1911,7 +1911,7 @@ int main() {
   testExternMarshalsStructArgumentAndReturnTogether();
   testExternMarshalsSubEightbyteStruct();
 #endif
-#ifdef JOLT_HAVE_LIBFFI
+#ifdef OSKEL_HAVE_LIBFFI
   testExternCallbackGprShape();
   testExternCallbackSseShape();
   testExternCallbackVoidReturnAndClosure();

@@ -8,12 +8,12 @@
 // so a module is named by a dotted path, not by a file path. The resolver maps
 // that path to a file:
 //
-//   - `std.*`  -> the standard library: `<stdlibDir>/<rest>.jolt`. `std` is
+//   - `std.*`  -> the standard library: `<stdlibDir>/<rest>.oskl`. `std` is
 //                reserved, so the caller rejects a user module named `std.*`.
 //   - anything -> the project directory (the directory of the file being
 //                compiled), then the installed-packages directory:
-//                `<projectDir>/<dotted/rest>.jolt` and
-//                `<packagesDir>/<dotted/rest>.jolt`.
+//                `<projectDir>/<dotted/rest>.oskl` and
+//                `<packagesDir>/<dotted/rest>.oskl`.
 //
 // A path not found anywhere is a compile error: "module 'X' not found".
 //
@@ -23,7 +23,7 @@ class ModuleResolver {
  public:
   // `projectDir` is the directory of the file that declares the import;
   // `stdlibDir` holds the standard library; `packagesDir` is the install root
-  // for user packages (usually `<home>/.jolt/packages`). Empty roots disable
+  // for user packages (usually `<home>/.oskel/packages`). Empty roots disable
   // that lookup step.
   ModuleResolver(std::string projectDir, std::string stdlibDir, std::string packagesDir)
       : projectDir_(std::move(projectDir)),
@@ -46,6 +46,6 @@ class ModuleResolver {
 };
 
 // Turns a dotted module path into a relative file path: "myapp.utils" ->
-// "myapp/utils.jolt". The first segment is kept as-is; later segments become
+// "myapp/utils.oskl". The first segment is kept as-is; later segments become
 // directory separators.
 std::string modulePathToFile(const std::string& path);

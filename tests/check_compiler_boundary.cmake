@@ -2,8 +2,8 @@
 # interpreter or the VM.
 #
 # AGENT.md requires this boundary: `src/compiler.*` and `src/native/*` are
-# libraries any entry point may link (today the single `jolt` binary, later a
-# separate `joltc`), and the AOT runtime must never be able to reach the
+# libraries any entry point may link (today the single `oskel` binary, later a
+# separate `oskelc`), and the AOT runtime must never be able to reach the
 # compiler or the interpreter. Keeping the include graph clean is what makes
 # that split a second `main` instead of a refactor.
 #

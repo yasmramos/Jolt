@@ -3,7 +3,7 @@
 // ============================================================
 // Uses every feature that works today (PHASE 6f + PHASE 4 done).
 //
-// Run with: jolt examples/full.jolt [args...]
+// Run with: oskel examples/full.oskl [args...]
 // ============================================================
 
 // `abs`, `min`, `max` and `clamp` live in the standard library.

@@ -95,7 +95,7 @@ static void test_arena() {
 
 static void test_platform_roundtrip() {
   PlatformFreestanding platform;
-  const char* path = "/tmp/jolt_freestanding_roundtrip.txt";
+  const char* path = "/tmp/oskel_freestanding_roundtrip.txt";
   const char* payload = "hello freestanding\n";
 
   int fd = platform.open(path, Platform::OpenMode::Write);
@@ -120,7 +120,7 @@ static void test_platform_roundtrip() {
   platform.close(fd);
 
   // Missing file: Read does not create.
-  check(platform.open("/tmp/jolt_does_not_exist_12345", Platform::OpenMode::Read) ==
+  check(platform.open("/tmp/oskel_does_not_exist_12345", Platform::OpenMode::Read) ==
             Platform::kInvalidFd,
         "open(Read) on a missing file fails");
 
@@ -141,7 +141,7 @@ struct BuiltProgram {
   std::uint64_t entry = 0;
 };
 
-// `main(argc, argv)`: jolt_write(1, messageAddress, messageLength); return N.
+// `main(argc, argv)`: oskel_write(1, messageAddress, messageLength); return N.
 static BuiltProgram buildHello(std::int64_t messageAddress, std::int64_t messageLength,
                                std::int64_t exitCode) {
   CodeGen code;
@@ -150,7 +150,7 @@ static BuiltProgram buildHello(std::int64_t messageAddress, std::int64_t message
   CodeGen::Label mainLabel = code.newLabel();
   code.bind(mainLabel);
 
-  // jolt_write(1, message, length)
+  // oskel_write(1, message, length)
   code.movImm(X64Reg::Rdi, 1);
   code.movImm(X64Reg::Rsi, messageAddress);
   code.movImm(X64Reg::Rdx, messageLength);
@@ -175,11 +175,11 @@ struct RunResult {
 };
 
 static RunResult runProgram(const std::string& path) {
-  std::string command = path + " > /tmp/jolt_freestanding_out.txt 2>&1";
+  std::string command = path + " > /tmp/oskel_freestanding_out.txt 2>&1";
   int status = std::system(command.c_str());
   RunResult result;
   result.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-  std::FILE* file = std::fopen("/tmp/jolt_freestanding_out.txt", "rb");
+  std::FILE* file = std::fopen("/tmp/oskel_freestanding_out.txt", "rb");
   if (file) {
     char buffer[256];
     std::size_t n;
@@ -211,7 +211,7 @@ static void test_end_to_end() {
 
   std::vector<std::uint8_t> elf =
       buildStaticElf(Target::linuxX64(), built.text, built.rodata, built.entry);
-  const std::string path = "/tmp/jolt_freestanding_hello";
+  const std::string path = "/tmp/oskel_freestanding_hello";
   writeFile(path, elf);
 
   RunResult result = runProgram(path);
@@ -223,8 +223,8 @@ static void test_end_to_end() {
   failing.rodata = rodata;
   std::vector<std::uint8_t> elfFail =
       buildStaticElf(Target::linuxX64(), failing.text, failing.rodata, failing.entry);
-  writeFile("/tmp/jolt_freestanding_exit7", elfFail);
-  RunResult failed = runProgram("/tmp/jolt_freestanding_exit7");
+  writeFile("/tmp/oskel_freestanding_exit7", elfFail);
+  RunResult failed = runProgram("/tmp/oskel_freestanding_exit7");
   check(failed.exitCode == 7, "the program's return value becomes the exit code");
 
   // No dynamic dependencies: this is a static, freestanding binary.
@@ -292,7 +292,7 @@ static void test_builtin_print() {
       "print(\"hello\", 42, 3.5, true);"
       "write(\"no\", \"newline\");"
       "print();");
-  RunResult result = buildAndRun("/tmp/jolt_builtin_print", proto);
+  RunResult result = buildAndRun("/tmp/oskel_builtin_print", proto);
   check(result.output == "hello 42 3.5 true\nno newline\n",
         "a compiled program prints through the print/write builtins");
   check(result.exitCode == 0, "a program using print exits 0 through _start");
@@ -332,7 +332,7 @@ static void test_collections() {
       "var pairTotal = 0;\n"
       "for k, v in m { pairKeys = pairKeys + k; pairTotal = pairTotal + v; }\n"
       "print(pairKeys, pairTotal);\n");
-  RunResult result = buildAndRun("/tmp/jolt_collections", proto);
+  RunResult result = buildAndRun("/tmp/oskel_collections", proto);
   std::string expected =
       "[1, 20, 3, 4]\n"
       "4\n"
@@ -363,7 +363,7 @@ static void test_hidden_helpers() {
       "print(c);\n"
       "fn f() { var x = 9; return try x; }\n"
       "print(f());\n");
-  RunResult result = buildAndRun("/tmp/jolt_hidden_helpers", proto);
+  RunResult result = buildAndRun("/tmp/oskel_hidden_helpers", proto);
   check(result.output == "7\n7\n9\n",
         "a compiled program runs the non-null and catch helpers");
   check(result.exitCode == 0, "a program using the hidden helpers exits 0");
@@ -376,7 +376,7 @@ static void test_hidden_helpers_non_null_failure() {
       "var a = nil;\n"
       "var b = a!!;\n"
       "print(b);\n");
-  RunResult result = buildAndRun("/tmp/jolt_hidden_helpers_nil", proto);
+  RunResult result = buildAndRun("/tmp/oskel_hidden_helpers_nil", proto);
   check(result.exitCode == 70, "a failed '!!' exits 70");
   check(result.output.find("non-null assertion") != std::string::npos,
         "the failed '!!' names the non-null assertion");
@@ -401,7 +401,7 @@ static void test_str_helper() {
       "print(\"z=${z}\");\n"
       "var neg = -42;\n"
       "print(\"neg=${neg}\");\n");
-  RunResult result = buildAndRun("/tmp/jolt_str_helper", proto);
+  RunResult result = buildAndRun("/tmp/oskel_str_helper", proto);
   std::string expected =
       "n=3\n"
       "f=0.3333333333333333\n"
@@ -437,7 +437,7 @@ static void test_range_helper() {
       "print(1 in 5..0);\n"
       "print(5 in 5..0);\n"
       "print(\"${0..=3}\");\n");
-  RunResult result = buildAndRun("/tmp/jolt_range_helper", proto);
+  RunResult result = buildAndRun("/tmp/oskel_range_helper", proto);
   std::string expected =
       "0..5\n"
       "0..=5\n"
@@ -472,7 +472,7 @@ static void test_range_helper_bad_bounds() {
       "var s = \"x\";\n"
       "var r = s..3;\n"
       "print(r);\n");
-  RunResult result = buildAndRun("/tmp/jolt_range_bad", proto);
+  RunResult result = buildAndRun("/tmp/oskel_range_bad", proto);
   check(result.exitCode == 70, "a non-integer range bound exits 70");
   check(result.output.find("range bounds must be integers") != std::string::npos,
         "the failed range names the integer-bounds rule");
@@ -487,7 +487,7 @@ static void test_collection_repr() {
       "let m = {};\n"
       "m[\"self\"] = m;\n"
       "print(m);\n");
-  RunResult result = buildAndRun("/tmp/jolt_collection_repr", proto);
+  RunResult result = buildAndRun("/tmp/oskel_collection_repr", proto);
   check(result.output.find("[[1, 2], {\"a\": [3]}]\n") == 0,
         "a nested array/map prints with the recursive repr");
   check(result.output.find("[\"a\", \"b\\\"c\", \"d\\ne\", \"tab\\tx\", \"\\x01\"]\n") !=
@@ -516,7 +516,7 @@ static void test_str_helper_collections() {
       "self[\"me\"] = self;\n"
       "print(\"${self}\");\n"
       "print(\"sum=${[1, 2, 3].length}\");\n");
-  RunResult result = buildAndRun("/tmp/jolt_str_collections", proto);
+  RunResult result = buildAndRun("/tmp/oskel_str_collections", proto);
   check(result.output.find(
             "[1, 2, 3]\n"
             "[\"a\", \"b\"]\n"
@@ -566,7 +566,7 @@ static void test_slice_helper() {
       "print(u[1:3]);\n"
       "print(u[::-1]);\n"
       "print(u[::2]);\n");
-  RunResult result = buildAndRun("/tmp/jolt_slice_helper", proto);
+  RunResult result = buildAndRun("/tmp/oskel_slice_helper", proto);
   std::string expected =
       "[1, 2, 3]\n"
       "[0, 1, 2]\n"
@@ -603,7 +603,7 @@ static void test_slice_helper_errors() {
   Bytecode badStart = compileSource(
       "let a = [1, 2, 3];\n"
       "print(a[1.5:]);\n");
-  RunResult start = buildAndRun("/tmp/jolt_slice_bad_start", badStart);
+  RunResult start = buildAndRun("/tmp/oskel_slice_bad_start", badStart);
   check(start.exitCode == 70, "a non-integer slice start exits 70");
   check(start.output.find("slice start must be an integer") != std::string::npos,
         "the failed slice names the integer-start rule");
@@ -611,14 +611,14 @@ static void test_slice_helper_errors() {
   Bytecode zeroStep = compileSource(
       "let a = [1, 2, 3];\n"
       "print(a[::0]);\n");
-  RunResult step = buildAndRun("/tmp/jolt_slice_zero_step", zeroStep);
+  RunResult step = buildAndRun("/tmp/oskel_slice_zero_step", zeroStep);
   check(step.exitCode == 70, "a zero slice step exits 70");
   check(step.output.find("slice step must not be zero") != std::string::npos,
         "the failed slice names the non-zero-step rule");
 
   Bytecode notSliceable = compileSource(
       "print(5[1:2]);\n");
-  RunResult value = buildAndRun("/tmp/jolt_slice_not_sliceable", notSliceable);
+  RunResult value = buildAndRun("/tmp/oskel_slice_not_sliceable", notSliceable);
   check(value.exitCode == 70, "slicing a non-collection exits 70");
   check(value.output.find("not sliceable") != std::string::npos,
         "the failed slice names the non-sliceable operand");
@@ -651,7 +651,7 @@ static void test_public_builtins() {
       "assert(1 == 1, \"should pass\");\n"
       "print(\"after asserts\");\n"
       "print(isError(5), isError(\"x\"));\n");
-  RunResult result = buildAndRun("/tmp/jolt_public_builtins", proto);
+  RunResult result = buildAndRun("/tmp/oskel_public_builtins", proto);
   std::string expected =
       "5\n"
       "3\n"
@@ -681,55 +681,55 @@ static void test_public_builtins() {
 // matching the hosted engine's runtime-error code.
 static void test_public_builtin_errors() {
   Bytecode badLen = compileSource("print(len(42));\n");
-  RunResult len = buildAndRun("/tmp/jolt_builtin_bad_len", badLen);
+  RunResult len = buildAndRun("/tmp/oskel_builtin_bad_len", badLen);
   check(len.exitCode == 70, "len of a non-collection exits 70");
   check(len.output.find("len() is not defined") != std::string::npos,
         "the failed len names the unsupported type");
 
   Bytecode badOrd = compileSource("print(ord(5));\n");
-  RunResult ord = buildAndRun("/tmp/jolt_builtin_bad_ord", badOrd);
+  RunResult ord = buildAndRun("/tmp/oskel_builtin_bad_ord", badOrd);
   check(ord.exitCode == 70, "ord of a non-string exits 70");
   check(ord.output.find("ord() expects a string") != std::string::npos,
         "the failed ord names the string argument");
 
   Bytecode longOrd = compileSource("print(ord(\"ab\"));\n");
-  RunResult multi = buildAndRun("/tmp/jolt_builtin_long_ord", longOrd);
+  RunResult multi = buildAndRun("/tmp/oskel_builtin_long_ord", longOrd);
   check(multi.exitCode == 70, "ord of a multi-character string exits 70");
   check(multi.output.find("ord() expects a single character") != std::string::npos,
         "the failed ord names the single-character rule");
 
   Bytecode badChr = compileSource("print(chr(2000000));\n");
-  RunResult chr = buildAndRun("/tmp/jolt_builtin_bad_chr", badChr);
+  RunResult chr = buildAndRun("/tmp/oskel_builtin_bad_chr", badChr);
   check(chr.exitCode == 70, "chr of an out-of-range code point exits 70");
   check(chr.output.find("chr() code point out of range") != std::string::npos,
         "the failed chr names the code-point range");
 
   Bytecode failedAssert = compileSource("assert(false);\n");
-  RunResult assertion = buildAndRun("/tmp/jolt_builtin_assert", failedAssert);
+  RunResult assertion = buildAndRun("/tmp/oskel_builtin_assert", failedAssert);
   check(assertion.exitCode == 70, "a failed assert exits 70");
   check(assertion.output.find("jolt: assertion failed") != std::string::npos,
         "a failed assert reports the default message");
 
   Bytecode customAssert = compileSource("assert(false, \"custom message\");\n");
-  RunResult custom = buildAndRun("/tmp/jolt_builtin_assert_msg", customAssert);
+  RunResult custom = buildAndRun("/tmp/oskel_builtin_assert_msg", customAssert);
   check(custom.exitCode == 70, "a failed assert with a message exits 70");
   check(custom.output.find("jolt: custom message") != std::string::npos,
         "a failed assert reports the caller's message");
 
   Bytecode panicked = compileSource("panic(\"boom\");\n");
-  RunResult panic = buildAndRun("/tmp/jolt_builtin_panic", panicked);
+  RunResult panic = buildAndRun("/tmp/oskel_builtin_panic", panicked);
   check(panic.exitCode == 70, "panic exits 70");
   check(panic.output.find("jolt: boom") != std::string::npos,
         "panic reports the caller's message");
 
   Bytecode barePanic = compileSource("panic();\n");
-  RunResult bare = buildAndRun("/tmp/jolt_builtin_panic_bare", barePanic);
+  RunResult bare = buildAndRun("/tmp/oskel_builtin_panic_bare", barePanic);
   check(bare.exitCode == 70, "a bare panic exits 70");
   check(bare.output.find("jolt: panic") != std::string::npos,
         "a bare panic reports the default message");
 }
 
-// Drives the boxed printer directly: the runtime's `jolt_print_value` is what
+// Drives the boxed printer directly: the runtime's `oskel_print_value` is what
 // the `print` builtin will call once `CALL` lands (7c.2), so this checks the
 // integer-to-text routine (including the negative case) and the boolean/nil
 // rendering today.
@@ -771,7 +771,7 @@ static void test_boxed_runtime_print() {
 
   std::vector<std::uint8_t> elf =
       buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
-  const std::string path = "/tmp/jolt_boxed_print";
+  const std::string path = "/tmp/oskel_boxed_print";
   writeFile(path, elf);
   RunResult result = runProgram(path);
   check(result.output == "42\n-7\ntrue\nfalse\nnil\n"
@@ -826,7 +826,7 @@ static void test_boxed_runtime_globals() {
 
   std::vector<std::uint8_t> elf =
       buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
-  const std::string path = "/tmp/jolt_boxed_globals";
+  const std::string path = "/tmp/oskel_boxed_globals";
   writeFile(path, elf);
   RunResult result = runProgram(path);
   check(result.output == "7\n-9\nnil\n",
@@ -842,7 +842,7 @@ static void test_boxed_runtime_error() {
   Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
                               instr(OpCode::SUB, 0, 0, 1), instr(OpCode::HALT)},
                              {Value(true), Value(false)}, 2);
-  RunResult result = buildAndRun("/tmp/jolt_boxed_error", proto);
+  RunResult result = buildAndRun("/tmp/oskel_boxed_error", proto);
   check(result.exitCode == 70, "a runtime type error exits 70");
   check(result.output.find("unsupported operand types") != std::string::npos,
         "the runtime error names the unsupported operand types");
@@ -854,7 +854,7 @@ static void test_boxed_runtime_div_zero() {
   Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
                               instr(OpCode::DIV, 0, 0, 1), instr(OpCode::HALT)},
                              {Value(static_cast<int64_t>(1)), Value(static_cast<int64_t>(0))}, 2);
-  RunResult result = buildAndRun("/tmp/jolt_boxed_divzero", proto);
+  RunResult result = buildAndRun("/tmp/oskel_boxed_divzero", proto);
   check(result.exitCode == 70, "a division by zero exits 70");
   check(result.output.find("division by zero") != std::string::npos,
         "the runtime error names the division by zero");
@@ -903,7 +903,7 @@ static void test_boxed_runtime_call() {
         "a lowered CALL returns the callee's result (20 + 22 == 42)");
 
   // The same chunk through `_start` must exit 0 (R0 is discarded by `main`).
-  RunResult result = buildAndRun("/tmp/jolt_boxed_call", root);
+  RunResult result = buildAndRun("/tmp/oskel_boxed_call", root);
   check(result.exitCode == 0, "a chunk with a call exits 0 through _start");
 }
 
@@ -914,7 +914,7 @@ static void test_boxed_runtime_call_non_function() {
   Bytecode proto = makeProto({instr(OpCode::LOADK, 0, 0), instr(OpCode::LOADK, 1, 1),
                               instr(OpCode::CALL, 0, 1), instr(OpCode::HALT)},
                              {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))}, 2);
-  RunResult result = buildAndRun("/tmp/jolt_boxed_call_nonfunc", proto);
+  RunResult result = buildAndRun("/tmp/oskel_boxed_call_nonfunc", proto);
   check(result.exitCode == 70, "calling a non-function exits 70");
   check(result.output.find("non-function") != std::string::npos,
         "the runtime error names the non-function call");
@@ -960,7 +960,7 @@ static void test_boxed_runtime_closure_capture() {
             static_cast<std::int64_t>(value.payload) == 80,
         "a lowered closure reads a captured local (40 + 40 == 80)");
 
-  RunResult result = buildAndRun("/tmp/jolt_boxed_capture", root);
+  RunResult result = buildAndRun("/tmp/oskel_boxed_capture", root);
   check(result.exitCode == 0, "a chunk with a captured local exits 0 through _start");
 }
 
@@ -975,13 +975,13 @@ static void test_boxed_runtime_locals() {
                               instr(OpCode::GETLOCAL, 0, 0), instr(OpCode::HALT)},
                              {Value(static_cast<int64_t>(5)), Value(static_cast<int64_t>(7))},
                              2, 1);
-  RunResult result = buildAndRun("/tmp/jolt_boxed_locals", proto);
+  RunResult result = buildAndRun("/tmp/oskel_boxed_locals", proto);
   check(result.output.empty(), "a locals-only chunk prints nothing");
   check(result.exitCode == 0, "a chunk with a local region exits 0 through _start");
 }
 
 // Strings over the arena, end to end: lay out two `AotString`s in the image,
-// concatenate them with the runtime's `jolt_concat` (which bumps the mmap'd
+// concatenate them with the runtime's `oskel_concat` (which bumps the mmap'd
 // arena) and print the result. Exercises the arena mapping in `_start`, the
 // allocator, the byte copy and the string print path in one static binary.
 static void test_boxed_runtime_string() {
@@ -1030,7 +1030,7 @@ static void test_boxed_runtime_string() {
 
   std::vector<std::uint8_t> elf =
       buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
-  const std::string path = "/tmp/jolt_boxed_string";
+  const std::string path = "/tmp/oskel_boxed_string";
   writeFile(path, elf);
   RunResult result = runProgram(path);
   check(result.output == "hello, world!\n",
@@ -1084,7 +1084,7 @@ static void test_boxed_runtime_float_mod() {
 
   std::vector<std::uint8_t> elf =
       buildStaticElf(Target::linuxX64(), cg.code(), {}, start);
-  const std::string path = "/tmp/jolt_boxed_float_mod";
+  const std::string path = "/tmp/oskel_boxed_float_mod";
   writeFile(path, elf);
   RunResult result = runProgram(path);
   check(result.output == "true\ntrue\ntrue\n",

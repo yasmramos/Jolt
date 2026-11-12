@@ -727,7 +727,7 @@ static void testExecCompiledLocals() {
 
 // Compiled functions: the compiler emits CLOSURE (to bind the `fn` global),
 // CALL and RETURN; the lowerer emits each proto as its own machine function and
-// dispatches through `jolt_call`. `var r = ...;` reads the result back into R0.
+// dispatches through `oskel_call`. `var r = ...;` reads the result back into R0.
 static void testExecCompiledCalls() {
   checkIntValue(compileAndRun("fn add(a, b) { return a + b; } var r = add(2, 3);"), 5,
                 "compiled: add(2, 3) == 5 through a real call");

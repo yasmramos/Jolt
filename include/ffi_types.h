@@ -60,15 +60,15 @@ constexpr std::size_t kMaxExternArgs = 6;
 //
 // A macro, not only a `constexpr`, because the tests select which cases to
 // compile with `#if` (the preprocessor does not evaluate `constexpr`).
-#ifndef JOLT_FFI_STRUCT_BY_VALUE
+#ifndef OSKEL_FFI_STRUCT_BY_VALUE
 #if defined(__x86_64__) && !defined(_WIN32)
-#define JOLT_FFI_STRUCT_BY_VALUE 1
+#define OSKEL_FFI_STRUCT_BY_VALUE 1
 #else
-#define JOLT_FFI_STRUCT_BY_VALUE 0
+#define OSKEL_FFI_STRUCT_BY_VALUE 0
 #endif
 #endif
 
-constexpr bool kStructByValueSupported = JOLT_FFI_STRUCT_BY_VALUE != 0;
+constexpr bool kStructByValueSupported = OSKEL_FFI_STRUCT_BY_VALUE != 0;
 
 // One field of a struct crossing the C boundary. `type` is an FFI scalar type
 // name (the same vocabulary as a parameter annotation); a nested struct is not

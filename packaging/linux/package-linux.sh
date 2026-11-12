@@ -4,16 +4,16 @@
 # Usage: package-linux.sh <version> <stage-dir> <out-dir>
 #
 #   stage-dir  the tree produced by `cmake --install --prefix <dir>`, i.e.
-#              <dir>/bin/jolt and <dir>/share/jolt/std/*.jolt
+#              <dir>/bin/oskel and <dir>/share/oskel/std/*.oskl
 #   out-dir    where the .deb and .rpm are written
 #
 # The package layout mirrors the staged tree under the filesystem root:
 #
-#   /usr/bin/jolt
-#   /usr/share/jolt/std/*.jolt
+#   /usr/bin/oskel
+#   /usr/share/oskel/std/*.oskl
 #
-# `standardLibraryDir` looks for `../share/jolt/std` relative to the
-# executable, so `/usr/bin/jolt` resolves `/usr/share/jolt/std` with no
+# `standardLibraryDir` looks for `../share/oskel/std` relative to the
+# executable, so `/usr/bin/oskel` resolves `/usr/share/oskel/std` with no
 # environment variable.
 #
 # `dpkg-deb` ships on every Debian/Ubuntu image. `rpmbuild` does not ship on
@@ -33,12 +33,12 @@ out="$3"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
-if [ ! -x "$stage/bin/jolt" ]; then
-  echo "package-linux: $stage/bin/jolt not found; did the install step run?" >&2
+if [ ! -x "$stage/bin/oskel" ]; then
+  echo "package-linux: $stage/bin/oskel not found; did the install step run?" >&2
   exit 1
 fi
-if [ ! -f "$stage/share/jolt/std/math.jolt" ]; then
-  echo "package-linux: $stage/share/jolt/std/math.jolt not found" >&2
+if [ ! -f "$stage/share/oskel/std/math.oskl" ]; then
+  echo "package-linux: $stage/share/oskel/std/math.oskl not found" >&2
   exit 1
 fi
 
@@ -67,13 +67,13 @@ trap 'rm -rf "$work"' EXIT
 
 # ---------------------------------------------------------------------- .deb
 root="$work/deb"
-mkdir -p "$root/DEBIAN" "$root/usr/bin" "$root/usr/share/jolt"
-install -m 0755 "$stage/bin/jolt" "$root/usr/bin/jolt"
-cp -a "$stage/share/jolt/std" "$root/usr/share/jolt/std"
+mkdir -p "$root/DEBIAN" "$root/usr/bin" "$root/usr/share/oskel"
+install -m 0755 "$stage/bin/oskel" "$root/usr/bin/oskel"
+cp -a "$stage/share/oskel/std" "$root/usr/share/oskel/std"
 
 installed_size="$(du -sk "$root" | cut -f1)"
 cat > "$root/DEBIAN/control" <<EOF
-Package: jolt
+Package: oskel
 Version: $deb_version
 Section: devel
 Priority: optional
@@ -86,8 +86,8 @@ Description: Jolt programming language engine
  general-purpose language with a Lua-style bytecode architecture.
 EOF
 
-dpkg-deb --build --root-owner-group "$root" "$out/jolt_${deb_file_version}_amd64.deb"
-echo "wrote $out/jolt_${deb_file_version}_amd64.deb"
+dpkg-deb --build --root-owner-group "$root" "$out/oskel_${deb_file_version}_amd64.deb"
+echo "wrote $out/oskel_${deb_file_version}_amd64.deb"
 
 # ---------------------------------------------------------------------- .rpm
 if ! command -v rpmbuild >/dev/null 2>&1; then
@@ -105,8 +105,8 @@ fi
 
 rpm_top="$work/rpm"
 mkdir -p "$rpm_top"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-cat > "$rpm_top/SPECS/jolt.spec" <<EOF
-Name:           jolt
+cat > "$rpm_top/SPECS/oskel.spec" <<EOF
+Name:           oskel
 Version:        $rpm_version
 Release:        $rpm_release
 Summary:        Jolt programming language engine
@@ -119,20 +119,20 @@ The Jolt development engine and its standard library. Jolt is a dynamic,
 general-purpose language with a Lua-style bytecode architecture.
 
 %install
-mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/jolt
-install -m 0755 "$stage/bin/jolt" %{buildroot}/usr/bin/jolt
-cp -a "$stage/share/jolt/std" %{buildroot}/usr/share/jolt/std
+mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/oskel
+install -m 0755 "$stage/bin/oskel" %{buildroot}/usr/bin/oskel
+cp -a "$stage/share/oskel/std" %{buildroot}/usr/share/oskel/std
 
 %files
-/usr/bin/jolt
-/usr/share/jolt/std
+/usr/bin/oskel
+/usr/share/oskel/std
 
 %changelog
 * Thu Jan 01 2026 Jolt contributors <noreply@example.com> - $rpm_version-$rpm_release
 - Automated release build.
 EOF
 
-rpmbuild --define "_topdir $rpm_top" -bb "$rpm_top/SPECS/jolt.spec"
+rpmbuild --define "_topdir $rpm_top" -bb "$rpm_top/SPECS/oskel.spec"
 rpm_file="$(find "$rpm_top/RPMS" -name '*.rpm' | head -n1)"
-cp "$rpm_file" "$out/jolt-${rpm_version}-${rpm_release}.x86_64.rpm"
-echo "wrote $out/jolt-${rpm_version}-${rpm_release}.x86_64.rpm"
+cp "$rpm_file" "$out/oskel-${rpm_version}-${rpm_release}.x86_64.rpm"
+echo "wrote $out/oskel-${rpm_version}-${rpm_release}.x86_64.rpm"

@@ -16,7 +16,7 @@ assertEq(-9223372036854775807, -9223372036854775807);
 assertEq(9223372036854775807, 9223372036854775807);
 
 // `**` binds tighter than unary minus, so `-2^63 ** 2` is `-(2^63 ** 2)` and
-// the bare magnitude is out of range (see errors/int64_min_bare_pow.jolt).
+// the bare magnitude is out of range (see errors/int64_min_bare_pow.oskl).
 // Parenthesized, the literal is an ordinary operand again.
 assertEq((-9223372036854775808) ** 2, 0);
 

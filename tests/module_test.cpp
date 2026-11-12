@@ -67,9 +67,9 @@ long globalInt(VM& vm, const std::string& name) {
 ModuleResolver fixtureResolver() { return ModuleResolver("tests", "std", ""); }
 
 void testPathToFile() {
-  check(modulePathToFile("math") == "math.jolt", "single segment -> math.jolt");
-  check(modulePathToFile("std.math") == "std/math.jolt", "std.math -> std/math.jolt");
-  check(modulePathToFile("myapp.utils.helpers") == "myapp/utils/helpers.jolt",
+  check(modulePathToFile("math") == "math.oskl", "single segment -> math.oskl");
+  check(modulePathToFile("std.math") == "std/math.oskl", "std.math -> std/math.oskl");
+  check(modulePathToFile("myapp.utils.helpers") == "myapp/utils/helpers.oskl",
         "dotted path -> nested directories");
 }
 
@@ -92,10 +92,10 @@ void testStdResolution() {
   ModuleResolver resolver(".", "std", "");
   std::string file;
   std::string message;
-  // The repository ships std/math.jolt.
+  // The repository ships std/math.oskl.
   bool found = resolver.resolve("std.math", file, message);
   check(found, "std.math resolves against the stdlib directory");
-  check(file == "std/math.jolt", "std.math resolves to std/math.jolt");
+  check(file == "std/math.oskl", "std.math resolves to std/math.oskl");
 }
 
 void testPackageResolution() {
@@ -105,7 +105,7 @@ void testPackageResolution() {
   std::string file;
   std::string message;
   check(resolver.resolve("pkglib.tool", file, message), "a package-only module resolves");
-  check(file == "tests/packages/pkglib/tool.jolt",
+  check(file == "tests/packages/pkglib/tool.oskl",
         "a package-only module resolves to the packages root");
 
   // When the same path exists in both roots, the project directory wins.
@@ -114,7 +114,7 @@ void testPackageResolution() {
   std::string shadowMessage;
   check(shadowed.resolve("myapp.utils", shadowFile, shadowMessage),
         "the shadowed module still resolves");
-  check(shadowFile == "tests/myapp/utils.jolt",
+  check(shadowFile == "tests/myapp/utils.oskl",
         "the project directory shadows the packages root");
 }
 
@@ -190,7 +190,7 @@ void testAmbiguityIsCompileError() {
 }
 
 void testModuleRunsOnce() {
-  // `modules/counter.jolt` increments the caller's `runs` global at load time.
+  // `modules/counter.oskl` increments the caller's `runs` global at load time.
   // Three imports must run it once, so `runs` ends at 1.
   VM vm;
   compileAndRun(

@@ -1,7 +1,7 @@
 // The public standard-library builtins.
 //
 // Each is a plain function call, so the program runs identically on the
-// development VM and in a binary produced by `jolt build`.
+// development VM and in a binary produced by `oskel build`.
 
 // `len` counts UTF-8 code points in a string, entries in an array or map, and
 // the span of a range.

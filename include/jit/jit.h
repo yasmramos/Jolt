@@ -11,7 +11,7 @@
 
 // Just-in-time compiler for the development engine.
 //
-// The JIT belongs to `jolt` (run, REPL, `-e`) only. `joltc` and the AOT runtime
+// The JIT belongs to `oskel` (run, REPL, `-e`) only. `oskelc` and the AOT runtime
 // never link it: the product is compiled ahead of time, so a JIT there would
 // violate the "no VM-only features" rule (AGENT.md §8). It is also the reason
 // the AOT backend must stay able to reject this header (the compiler boundary
