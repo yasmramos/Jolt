@@ -26,6 +26,7 @@ Makefile
 sanitizer*
 LSan.*
 build_asan/
+build-asan/
 build-cmake/
 *.o
 *.obj
